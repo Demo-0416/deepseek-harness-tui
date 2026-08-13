@@ -42,6 +42,19 @@ export interface UserMessageNode extends NodeBase {
   text: string
   /** `user` is a typed prompt; `steering` is mid-run input from a steering source. */
   source: 'user' | 'steering'
+  /**
+   * Set while this node is the terminal's own echo of a submission no event has
+   * recorded yet. The `user/message` event that lands replaces the node without
+   * it. Absent on every folded log.
+   */
+  optimistic?: boolean
+  /**
+   * Set when the agent's inbox discarded the echoed submission: the model will
+   * never see it, so the node renders nothing. It keeps its place rather than
+   * leaving the list, because node positions anchor the `/clear` cut and the
+   * entry's process-local rows.
+   */
+  withdrawn?: boolean
 }
 
 /** Producer-injected context (a plugin/goal message), rendered as a dim card. */

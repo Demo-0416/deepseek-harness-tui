@@ -267,6 +267,110 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
     }
   })
 
+  it('shows a mid-answer submission where it was sent, and lands the logged message there', async () => {
+    const harness = await mount()
+    try {
+      const position = { turn: 1, step: 2 }
+      setAgentStatus(harness.agent, 'running')
+      harness.session.append('step/start', position)
+      harness.session.append('assistant/chunk', {
+        ...position,
+        chunk: { type: 'text-delta', index: 0, text: 'ANSWER-SO-FAR' },
+      })
+      await delay(SETTLE_MS)
+
+      harness.terminal.send('STEER-PROMPT')
+      harness.terminal.send('\r')
+      await delay(SETTLE_MS)
+
+      const rows = harness.terminal.text().split('\n').map(row => row.trimEnd())
+      const answer = rows.findIndex(row => row.includes('ANSWER-SO-FAR'))
+      const prompt = rows.findIndex(row => row.includes('STEER-PROMPT'))
+      const badge = rows.findIndex(row => row.trim() === 'Steering')
+      assert.ok(answer >= 0 && prompt > answer, `the submission is on screen at once:\n${rows.join('\n')}`)
+      assert.ok(badge >= 0 && badge < prompt, `a mid-run prompt is badged:\n${rows.join('\n')}`)
+
+      // The driver claims it at its next step boundary and the log records it —
+      // long after the answer above it started rendering.
+      const steered = harness.agent.steered[0]
+      assert.ok(steered !== undefined, 'a running agent is steered, not queued')
+      harness.session.append('user/message', steered, { surfaceOp: 'append' })
+      await delay(SETTLE_MS)
+
+      const after = harness.terminal.text()
+      assert.equal(
+        after.split('STEER-PROMPT').length - 1,
+        1,
+        `the logged message lands on the echo instead of repeating it:\n${after}`,
+      )
+      const settled = after.split('\n').map(row => row.trimEnd())
+      assert.ok(
+        settled.findIndex(row => row.includes('STEER-PROMPT'))
+          > settled.findIndex(row => row.includes('ANSWER-SO-FAR')),
+        `and keeps the position it was submitted at:\n${after}`,
+      )
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('withdraws a submission the inbox discarded', async () => {
+    const harness = await mount()
+    try {
+      setAgentStatus(harness.agent, 'running')
+      await delay(SETTLE_MS)
+      harness.terminal.send('DISCARDED-PROMPT')
+      harness.terminal.send('\r')
+      await delay(SETTLE_MS)
+      assert.match(harness.terminal.text(), /DISCARDED-PROMPT/)
+
+      // Cancelling a turn clears the inbox, so this message is never recorded.
+      harness.agent.inbox.clear()
+      await delay(SETTLE_MS)
+      const frame = harness.terminal.text()
+      assert.ok(
+        !frame.includes('DISCARDED-PROMPT'),
+        `a prompt the model never saw must not stay on screen:\n${frame}`,
+      )
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('cycles the card phase once per physical Ctrl+O and keeps its confirmation off the transcript', async () => {
+    const harness = await mount()
+    try {
+      appendUser(harness.session, 'list the files')
+      appendToolStep(harness.session, 'call-kitty', 'ls', 'README.md')
+      await delay(SETTLE_MS)
+      const before = harness.terminal.text()
+
+      // Under the Kitty keyboard protocol one physical Ctrl+O arrives as press,
+      // repeat, and release — all three match `ctrl+o`.
+      harness.terminal.send('\x1b[111;5u')
+      harness.terminal.send('\x1b[111;5:2u')
+      harness.terminal.send('\x1b[111;5:3u')
+      await delay(SETTLE_MS)
+
+      const cycled = harness.terminal.text()
+      assert.ok(
+        cycled.includes('Tool and context cards expanded.'),
+        `one press advances exactly one phase:\n${cycled}`,
+      )
+      assert.ok(!cycled.includes('Tool cards hidden.'), `and not three:\n${cycled}`)
+
+      // The confirmation is a transient status row, not a transcript node: it
+      // clears itself and leaves the conversation exactly as it was.
+      await delay(1_700)
+      const settled = harness.terminal.text()
+      assert.ok(!settled.includes('Tool and context cards'), `the confirmation is transient:\n${settled}`)
+      assert.match(settled, /list the files/)
+      assert.equal(settled, before, `and adds no transcript row:\n${settled}`)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
   it('reports a failed turn once', async () => {
     const harness = await mount()
     try {

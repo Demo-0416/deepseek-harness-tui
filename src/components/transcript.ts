@@ -18,7 +18,7 @@ import {
   type MarkdownTheme,
 } from '@earendil-works/pi-tui'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JsonValue, SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
 import type {
   TerminalCallView,
@@ -244,22 +244,20 @@ export class UserMessageComponent extends Container {
  * message needs no role header at all: the bullet IS the marker, and its color
  * says which of the two kinds of assistant text a block is.
  *
- * A folded continuation (a later step of a turn while tool cards are hidden)
- * renders nothing when it has no visible body, so tool-only steps leave no blank
- * segment behind; the bullet still marks every block that does render, because a
- * continuation's paragraphs are the same kind of content as the first step's.
+ * A step with nothing to show renders nothing, not even its leading gap: a step
+ * that only calls tools is common, and its cards already open with a blank row
+ * of their own.
  */
 function assistantMessageChildren(
   content: readonly ContentBlock[],
   showReasoning: boolean,
-  foldedContinuation: boolean,
   palette: Palette,
   mdTheme: MarkdownTheme,
 ): Component[] {
   const reasoning = displayText(textBlocks(content, 'reasoning').trim())
   const text = displayText(textBlocks(content, 'text').trim())
   const showsReasoning = reasoning !== '' && showReasoning
-  if (foldedContinuation && !showsReasoning && text === '') return []
+  if (!showsReasoning && text === '') return []
   const children: Component[] = [new Spacer(1)]
   if (showsReasoning) {
     // The whole thinking block is one recessed tone, marker included, so it
@@ -325,7 +323,6 @@ interface StreamingBlock {
 export class StreamingAssistantComponent extends Container {
   private readonly blocks = new Map<number, StreamingBlock>()
   private settledContent: readonly ContentBlock[] | undefined
-  private foldedContinuation = false
   /** The last folded text applied through {@link setFoldedText}, for idempotence. */
   private foldedText: { text: string; reasoning: string; settled: boolean } | undefined
   /**
@@ -347,18 +344,6 @@ export class StreamingAssistantComponent extends Container {
   ) {
     super()
     this.timing = new StepTimingComponent(position, events, tracker, now, palette)
-    this.rebuild()
-  }
-
-  /**
-   * Replace the streamed blocks with the step's settled content.
-   * @param content - The settled assistant content blocks.
-   */
-  settle(content: readonly ContentBlock[]): void {
-    this.settledContent = content
-    // A direct drive invalidates the folded-text memo, so the two entry points
-    // cannot leave this component showing one and remembering the other.
-    this.foldedText = undefined
     this.rebuild()
   }
 
@@ -395,14 +380,6 @@ export class StreamingAssistantComponent extends Container {
   }
 
   /**
-   * Whether this step's assistant message has settled.
-   * @returns `true` once {@link settle} has run.
-   */
-  isSettled(): boolean {
-    return this.settledContent !== undefined
-  }
-
-  /**
    * Pin the step's timing footer to its completion time.
    * @param time - Step completion time in epoch milliseconds.
    */
@@ -417,54 +394,12 @@ export class StreamingAssistantComponent extends Container {
   }
 
   /**
-   * Fold one streamed chunk into the live block buffer and re-render.
-   * @param chunk - The streamed assistant chunk.
-   */
-  update(chunk: StreamChunk): void {
-    if (chunk.type === 'block-start') {
-      this.blocks.set(chunk.index, { type: chunk.blockType, text: '' })
-    } else if (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') {
-      const type = chunk.type === 'text-delta' ? 'text' : 'reasoning'
-      const block = this.blocks.get(chunk.index) ?? { type, text: '' }
-      block.text += chunk.text
-      this.blocks.set(chunk.index, block)
-    } else if (chunk.type === 'block-end' && (chunk.block.type === 'text' || chunk.block.type === 'reasoning')) {
-      this.blocks.set(chunk.index, { type: chunk.block.type, text: chunk.block.text })
-    }
-    this.foldedText = undefined
-    this.rebuild()
-    this.timing.invalidate()
-  }
-
-  /**
    * Toggle whether reasoning blocks render, then re-render.
    * @param show - Whether to show reasoning blocks.
    */
   setShowReasoning(show: boolean): void {
     this.showReasoning = show
     this.rebuild()
-  }
-
-  /**
-   * Mark this step as a folded continuation of its turn: no `Assistant` header,
-   * and no output at all while the step has no visible body. Used while tool
-   * cards are hidden so a turn reads as one assistant message.
-   * @param folded - Whether to render as a headerless continuation.
-   */
-  setFoldedContinuation(folded: boolean): void {
-    if (this.foldedContinuation === folded) return
-    this.foldedContinuation = folded
-    this.rebuild()
-  }
-
-  /**
-   * Whether the step currently renders visible reasoning or text.
-   * @returns `true` when a header-owning render would show a body.
-   */
-  hasVisibleBody(): boolean {
-    const content = this.presentedContent()
-    return textBlocks(content, 'text').trim() !== ''
-      || (this.showReasoning && textBlocks(content, 'reasoning').trim() !== '')
   }
 
   /** The settled content when available, otherwise the streamed blocks in model order. */
@@ -483,7 +418,6 @@ export class StreamingAssistantComponent extends Container {
     const children = assistantMessageChildren(
       this.presentedContent(),
       this.showReasoning,
-      this.foldedContinuation,
       this.palette,
       this.mdTheme,
     )
@@ -612,19 +546,6 @@ export class ToolCardComponent extends CachedCardComponent {
       }
     }
     return { card: 'generic', title: displayText(this.name), rawInput: this.parsed.value }
-  }
-
-  /**
-   * Record the tool result and derive its result view.
-   * @param event - The `tool/result` event payload.
-   */
-  updateResult(event: Extract<SessionEvent, { type: 'tool/result' }>['data']): void {
-    const result = event.message.content[0]
-    this.setResult({
-      content: [...result.content],
-      isError: result.isError === true,
-      ...event.meta !== undefined ? { meta: event.meta } : {},
-    })
   }
 
   /**

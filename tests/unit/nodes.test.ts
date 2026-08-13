@@ -19,13 +19,19 @@ import {
   createToolResultMessage,
   createUserMessage,
   type ContentBlock,
+  type UserMessage,
 } from '@deepseek-ai/dsh-llm'
 import { compactCheckpointSource, CompactionId } from '@deepseek-ai/dsh-compaction'
 import { RetryId } from '@deepseek-ai/dsh-llm-retry'
 // Type imports load the session-event and message-source declaration merges the
 // fixtures below use (`llm/retry`, `compaction/*`, `session-reference`).
 import type {} from '@deepseek-ai/dsh-session-reference'
-import { foldEvent, foldEvents } from '../../src/core/nodes.ts'
+import {
+  appendOptimisticUserMessage,
+  foldEvent,
+  foldEvents,
+  withdrawOptimisticUserMessage,
+} from '../../src/core/nodes.ts'
 import type { ChatNode } from '../../src/core/types.ts'
 
 let sessionCounter = 0
@@ -75,6 +81,16 @@ function appendUser(session: Session, text: string): SessionEvent {
   )
 }
 
+/** Append an already-built prompt, the way a claimed inbox message is logged. */
+function appendUserMessage(session: Session, message: UserMessage): SessionEvent {
+  return session.append('user/message', message, { surfaceOp: 'append' })
+}
+
+/** One prompt exactly as the terminal hands it to the agent. */
+function submission(text: string): UserMessage {
+  return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+}
+
 /** Append a settled assistant message for one step. */
 function appendAssistant(
   session: Session,
@@ -93,16 +109,35 @@ function appendAssistant(
 }
 
 describe('foldEvent', () => {
-  it('folds a typed prompt into a keyed user node', async () => {
+  it('folds a typed prompt into a node keyed by its message id', async () => {
     await withSession((session) => {
-      const event = appendUser(session, 'hello')
+      const message = submission('hello')
+      appendUserMessage(session, message)
       const nodes = foldEvents(session.events)
       assert.equal(nodes.length, 1)
       const node = nodeOf(nodes, 0, 'user-message')
       assert.equal(node.text, 'hello')
       assert.equal(node.source, 'user')
-      assert.equal(node.key, `user:${event.seq}`)
+      // The MessageId, not the log position: it is the identity the terminal's
+      // optimistic echo shares with the event that records the same message.
+      assert.equal(node.key, `user:${message.id}`)
+      assert.equal(node.optimistic, undefined)
     })
+  })
+
+  it('keys a user message by its log position when it carries no id', () => {
+    // A durable/replay boundary: a foreign or truncated log entry still has to
+    // key stably, so the fold falls back to the event's own position.
+    const nodes: ChatNode[] = []
+    const event = {
+      type: 'user/message',
+      seq: 7,
+      time: 1,
+      surfaceOp: 'append',
+      data: { role: 'user', content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } },
+    } as unknown as SessionEvent
+    assert.equal(foldEvent(nodes, event), true)
+    assert.equal(nodeOf(nodes, 0, 'user-message').key, 'user:7')
   })
 
   it('separates injected context from a human turn', async () => {
@@ -409,6 +444,74 @@ describe('foldEvent', () => {
       const nodes = foldEvents(session.events)
       assert.deepEqual(kinds(nodes), ['user-message'])
       assert.equal(nodeOf(nodes, 0, 'user-message').text, 'first prompt')
+    })
+  })
+})
+
+describe('appendOptimisticUserMessage', () => {
+  it('shows a submission before the log records it, and lands it in place', async () => {
+    await withSession((session) => {
+      // A turn is already answering when the user submits again.
+      session.append('step/start', { turn: 1, step: 1 })
+      session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'answering' } })
+      const nodes = foldEvents(session.events)
+      const message = submission('and also fix the lint')
+
+      assert.equal(appendOptimisticUserMessage(nodes, message, 'steering'), true)
+      assert.deepEqual(kinds(nodes), ['assistant', 'user-message'])
+      const echo = nodeOf(nodes, 1, 'user-message')
+      assert.equal(echo.text, 'and also fix the lint')
+      assert.equal(echo.source, 'steering')
+      assert.equal(echo.optimistic, true)
+
+      // The driver claims it at its next step boundary, well after the answer
+      // above it started streaming.
+      session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: ' more' } })
+      foldEvent(nodes, session.events[session.events.length - 1]!)
+      const claimed = appendUserMessage(session, message)
+      assert.equal(foldEvent(nodes, claimed), true)
+
+      // One node, still where the submission happened — not appended below the
+      // answer it interrupted.
+      assert.deepEqual(kinds(nodes), ['assistant', 'user-message'])
+      const landed = nodeOf(nodes, 1, 'user-message')
+      assert.equal(landed.key, echo.key)
+      assert.equal(landed.text, 'and also fix the lint')
+      assert.equal(landed.time, claimed.time)
+      assert.equal(landed.optimistic, undefined)
+      // rc.6 logs steering as a plain user message, so only the echo knows.
+      assert.equal(landed.source, 'steering')
+    })
+  })
+
+  it('echoes one node per submission', async () => {
+    await withSession(() => {
+      const nodes: ChatNode[] = []
+      const message = submission('hello')
+      assert.equal(appendOptimisticUserMessage(nodes, message, 'user'), true)
+      assert.equal(appendOptimisticUserMessage(nodes, message, 'user'), false)
+      assert.equal(appendOptimisticUserMessage(nodes, submission('   '), 'user'), false)
+      assert.equal(nodes.length, 1)
+    })
+  })
+
+  it('withdraws the echo of a discarded submission and keeps a recorded one', async () => {
+    await withSession((session) => {
+      const nodes: ChatNode[] = []
+      const cancelled = submission('never delivered')
+      const recorded = submission('delivered')
+      appendOptimisticUserMessage(nodes, cancelled, 'steering')
+      appendOptimisticUserMessage(nodes, recorded, 'steering')
+      foldEvent(nodes, appendUserMessage(session, recorded))
+
+      assert.equal(withdrawOptimisticUserMessage(nodes, cancelled.id), true)
+      // A message the log already recorded is history, not an echo.
+      assert.equal(withdrawOptimisticUserMessage(nodes, recorded.id), false)
+      // The withdrawn node keeps its place — positions anchor the /clear cut —
+      // and the renderer skips it.
+      assert.equal(nodes.length, 2)
+      assert.equal(nodeOf(nodes, 0, 'user-message').withdrawn, true)
+      assert.equal(nodeOf(nodes, 1, 'user-message').withdrawn, undefined)
     })
   })
 })

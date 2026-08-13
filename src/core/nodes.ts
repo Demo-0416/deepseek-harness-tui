@@ -13,10 +13,17 @@
  * it per batch) and returns whether anything visible changed. Every mutation
  * bumps the touched node's `version`, which is how the reconciler skips nodes
  * that did not change.
+ *
+ * {@link appendOptimisticUserMessage} is the one entry that does not come from
+ * an event: the terminal echoes a message it just handed to the agent, because
+ * the log records that message only when the agent claims it. It is keyed by
+ * MessageId, so the event that eventually records the message lands on the same
+ * node — the echo is a placeholder for a log entry, never a second source of
+ * truth, and a replay (which never calls it) folds exactly the same list.
  * @module dsh-tui/core/nodes
  */
 
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, MessageId, UserMessage } from '@deepseek-ai/dsh-llm'
 import { isReplacementSurfaceEvent } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { isCompactCheckpointSource } from '@deepseek-ai/dsh-compaction'
@@ -46,7 +53,8 @@ import type {
 const KEY = {
   assistant: (turn: number, step: number): string => `assistant:${turn}:${step}`,
   tool: (callId: string): string => `tool:${callId}`,
-  user: (seq: number): string => `user:${seq}`,
+  /** A user turn is keyed by its durable MessageId, else by its log position. */
+  user: (id: MessageId | number): string => `user:${id}`,
   context: (seq: number): string => `context:${seq}`,
   reference: (seq: number): string => `reference:${seq}`,
   notice: (seq: number): string => `notice:${seq}`,
@@ -84,6 +92,130 @@ function findToolCall(nodes: readonly ChatNode[], callId: string): ToolCallNode 
     if (node?.kind === 'tool-call' && node.key === key) return node
   }
   return undefined
+}
+
+/** The user node carrying one key, with its position, or undefined when absent. */
+function findUserMessage(
+  nodes: readonly ChatNode[],
+  key: string,
+): { index: number; node: UserMessageNode } | undefined {
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index]
+    if (node?.kind === 'user-message' && node.key === key) return { index, node }
+  }
+  return undefined
+}
+
+/**
+ * The transcript key of one logged user message: its durable MessageId when the
+ * message carries one, else the event's own log position.
+ *
+ * The id is what lets the terminal's optimistic echo (see
+ * {@link appendOptimisticUserMessage}) and the event that eventually records the
+ * same message share one node. The log is a replay boundary, so a message
+ * without a usable id still keys stably — by seq, exactly as before.
+ * @param message - the logged message.
+ * @param seq - the event's log position, used when the message has no id.
+ * @returns the node key.
+ */
+function userKey(message: { id?: unknown }, seq: number): string {
+  const id = message.id
+  return KEY.user(typeof id === 'string' && id !== '' ? id as MessageId : seq)
+}
+
+/**
+ * Land the durable form of one user turn.
+ *
+ * When the terminal already echoed this message (same MessageId, so same key),
+ * the node is replaced where it stands rather than appended a second time: the
+ * echo owns the position the submission actually has in the conversation, and
+ * that position is the whole point of echoing it. `time` and `key` are readonly,
+ * so the update is a replacement of the node object, carrying the log's time.
+ *
+ * A `steering` echo stays steering: rc.6 has no steering message source, so the
+ * log records mid-run input as a plain `user` message and only the terminal that
+ * submitted it knows it interrupted a running turn.
+ */
+function landUserMessage(
+  nodes: ChatNode[],
+  key: string,
+  time: number,
+  text: string,
+  source: UserMessageNode['source'],
+): boolean {
+  const existing = findUserMessage(nodes, key)
+  if (existing === undefined) {
+    const node: UserMessageNode = { kind: 'user-message', key, version: 0, time, text, source }
+    return push(nodes, node)
+  }
+  const node: UserMessageNode = {
+    kind: 'user-message',
+    key,
+    version: existing.node.version + 1,
+    time,
+    text,
+    source: existing.node.source === 'steering' ? 'steering' : source,
+  }
+  nodes[existing.index] = node
+  return true
+}
+
+/**
+ * Echo one just-submitted user message, before any event records it.
+ *
+ * The only non-event entry into the node list. A message the terminal hands to
+ * a running agent is claimed at that agent's next step boundary, so its
+ * `user/message` event lands after the answer it interrupts has already
+ * streamed rows onto the screen; without an echo the prompt would appear below
+ * the reply it came before. Keyed by MessageId, so {@link foldEvent} lands the
+ * logged message on this exact node.
+ * @param nodes - the mutable draft node list.
+ * @param message - the message handed to the agent.
+ * @param source - `steering` when a running turn was interrupted, else `user`.
+ * @returns true when a node was appended.
+ */
+export function appendOptimisticUserMessage(
+  nodes: ChatNode[],
+  message: UserMessage,
+  source: UserMessageNode['source'],
+): boolean {
+  const text = contentText(message.content).trim()
+  if (text === '') return false
+  const key = KEY.user(message.id)
+  if (findUserMessage(nodes, key) !== undefined) return false
+  const node: UserMessageNode = {
+    kind: 'user-message',
+    key,
+    version: 0,
+    // No log time: this message has no event yet, and no user row renders one.
+    // The `user/message` event replaces the node with the logged time.
+    time: 0,
+    text,
+    source,
+    optimistic: true,
+  }
+  return push(nodes, node)
+}
+
+/**
+ * Withdraw the echo of a submission the agent's inbox discarded (cancelling a
+ * turn clears every pending message), so a message the model will never see
+ * does not stay on screen. Only an echo is withdrawn: once the log recorded the
+ * message, the node is history.
+ *
+ * The node keeps its place and renders nothing, the way an unlanded compaction
+ * already does, rather than leaving the array: positions in this list are
+ * anchors — the `/clear` cut and the entry's process-local rows are both stored
+ * as node indices — and shifting them would hide or misplace what follows.
+ * @param nodes - the mutable draft node list.
+ * @param id - the discarded message's identity.
+ * @returns true when an echo was withdrawn.
+ */
+export function withdrawOptimisticUserMessage(nodes: ChatNode[], id: MessageId): boolean {
+  const found = findUserMessage(nodes, KEY.user(id))
+  if (found?.node.optimistic !== true || found.node.withdrawn === true) return false
+  found.node.withdrawn = true
+  return touch(found.node)
 }
 
 /** The singleton plan-strip node, or undefined before the first `todo/write`. */
@@ -160,7 +292,15 @@ function pushNotice(
   return push(nodes, node)
 }
 
-/** Mark the compaction whose replacement just landed, or record a bare marker. */
+/**
+ * Mark the compaction whose replacement just landed, or record a bare marker.
+ *
+ * Premise: one session compacts one range at a time, so the nearest unlanded
+ * compaction above is the one this checkpoint closes. The compaction service
+ * brackets each transaction (`compaction/start` … `compaction/end`) and does not
+ * open a second while one is open; if that ever changes, this pairing has to
+ * carry the `compactionId` the events already hold instead of scanning back.
+ */
 function landCompaction(nodes: ChatNode[], seq: number, time: number): boolean {
   for (let index = nodes.length - 1; index >= 0; index -= 1) {
     const node = nodes[index]
@@ -260,15 +400,13 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
       const text = contentText(message.content).trim()
       if (text === '') return false
       if (source.kind === 'user' || source.kind === 'steering') {
-        const node: UserMessageNode = {
-          kind: 'user-message',
-          key: KEY.user(seq),
-          version: 0,
+        return landUserMessage(
+          nodes,
+          userKey(message, seq),
           time,
           text,
-          source: source.kind === 'steering' ? 'steering' : 'user',
-        }
-        return push(nodes, node)
+          source.kind === 'steering' ? 'steering' : 'user',
+        )
       }
       const node: ContextCardNode = {
         kind: 'context',
@@ -424,6 +562,13 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
       const limit = data.mode === 'always' ? '∞' : String(data.maxRetries)
       // The failed attempt's partial output is withdrawn: the retry replays the
       // same step, so its node is reset rather than duplicated.
+      //
+      // Only the assistant node is reset. Tool cards this step already produced
+      // stay: a retry re-runs the model request, not the calls whose results
+      // are already in the log, and their nodes are keyed by provider call id —
+      // a replayed call would land on its own card either way. Clearing
+      // `toolCalls` therefore only detaches the step's footer from cards it no
+      // longer claims; the cards themselves remain the record of what ran.
       const node = findAssistant(nodes, data.turn, data.step)
       let changed = false
       if (node !== undefined && (node.text !== '' || node.reasoning !== '' || node.toolCalls.length > 0)) {

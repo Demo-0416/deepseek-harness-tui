@@ -4,12 +4,11 @@
  * It takes a folded node list (see `core/nodes.ts`) and maintains one component
  * instance per node key. A node whose `version` it has already applied is left
  * untouched, so a burst of stream chunks re-renders one assistant step rather
- * than rebuilding the transcript; a node that disappears (only a `/clear`
- * watermark or a palette reset can do that) drops its component.
+ * than rebuilding the transcript; a node that stops rendering (a `/clear`
+ * watermark, a palette reset, a withdrawn submission) drops its component.
  *
- * Two placements are not a plain node→component map, and both live here:
- * a step's timing footer trails the tool cards that step requested, and
- * hidden-mode turn folding gives a turn one assistant header across its steps.
+ * One placement is not a plain node→component map and lives here: a step's
+ * timing footer trails the tool cards that step requested.
  * Process-local rows the entry appends (command output, notices, the status
  * card) are interleaved by the node count they were appended at, so they keep
  * their place in the conversation as the log grows.
@@ -25,6 +24,7 @@ import type {
   ChatNode,
   ContextCardNode,
   ToolCallNode,
+  UserMessageNode,
 } from '../core/types.ts'
 import type { StepTimingTracker } from '../chat/timing.ts'
 import { displayText } from './text.ts'
@@ -43,6 +43,9 @@ import {
  * model stopped seeing that history, not that the history is gone.
  */
 export const COMPACTION_MARKER = '… earlier context was compacted …'
+
+/** Label above a prompt that was submitted into a running turn. */
+export const STEERING_BADGE = 'Steering'
 
 /** Everything the reconciler needs to build a component for a node. */
 export interface TranscriptDeps {
@@ -77,26 +80,6 @@ function block(child: Component): Container {
   container.addChild(new Spacer(1))
   container.addChild(child)
   return container
-}
-
-/**
- * Re-derive hidden-mode folding for one turn: the first step with a visible
- * body owns the turn's single Assistant header, every other step renders as a
- * headerless continuation (empty ones render nothing). Any other visibility
- * restores the per-step headers.
- */
-function applyTurnFolding(steps: readonly StreamingAssistantComponent[], hidden: boolean): void {
-  let headerSeen = false
-  for (const step of steps) {
-    if (!hidden) {
-      step.setFoldedContinuation(false)
-    } else if (!headerSeen && step.hasVisibleBody()) {
-      headerSeen = true
-      step.setFoldedContinuation(false)
-    } else {
-      step.setFoldedContinuation(true)
-    }
-  }
 }
 
 /** The keyed reconciler over one chat container. */
@@ -138,7 +121,6 @@ export class TranscriptReconciler {
     this.nodeCount = nodes.length
     const seen = new Set<string>()
     const children: Component[] = []
-    const byTurn = new Map<number, StreamingAssistantComponent[]>()
     let openStep: StreamingAssistantComponent | undefined
     // A step's timing footer waits for the tool cards that step requested, so
     // it renders at the tail of the step's own output.
@@ -175,9 +157,6 @@ export class TranscriptReconciler {
           const view = this.assistantView(node)
           seen.add(node.key)
           children.push(view)
-          const steps = byTurn.get(node.turn)
-          if (steps === undefined) byTurn.set(node.turn, [view])
-          else steps.push(view)
           // A step stays open until it closes, not until its message settles:
           // the tool phase between `assistant/message` and `step/end` is exactly
           // when the footer's elapsed time has to keep moving.
@@ -210,9 +189,11 @@ export class TranscriptReconciler {
           ))))
           break
         case 'user-message':
+          // A submission the inbox discarded keeps its place in the fold and
+          // renders nothing, exactly like an unlanded compaction.
+          if (node.withdrawn === true) break
           seen.add(node.key)
-          children.push(this.plainView(node.key, node.version, () =>
-            block(new UserMessageComponent(node.text, this.deps.palette, this.deps.mdTheme))))
+          children.push(this.plainView(node.key, node.version, () => this.userView(node)))
           break
         case 'notice':
           seen.add(node.key)
@@ -231,7 +212,6 @@ export class TranscriptReconciler {
       if (!seen.has(key)) this.views.delete(key)
     }
     this.openStep = openStep
-    for (const steps of byTurn.values()) applyTurnFolding(steps, this.visibility === 'hidden')
     this.chat.clear()
     for (const child of children) this.chat.addChild(child)
   }
@@ -283,7 +263,7 @@ export class TranscriptReconciler {
   }
 
   /**
-   * Set the Ctrl+O card visibility on every mounted card and re-fold turns.
+   * Set the Ctrl+O card visibility on every mounted card.
    * @param visibility - hidden, collapsed preview, or full body.
    */
   setVisibility(visibility: ToolCardVisibility): void {
@@ -343,6 +323,22 @@ export class TranscriptReconciler {
     const component = create()
     this.views.set(key, { kind: 'plain', version, component })
     return component
+  }
+
+  /**
+   * Build one user turn: the filled prompt block, under a `Steering` badge when
+   * the turn interrupted a running one. Claude Code's block names no role, so
+   * an ordinary prompt carries no label at all and the badge is the exception
+   * that says this text reached the model mid-answer.
+   */
+  private userView(node: UserMessageNode): Component {
+    const body = new UserMessageComponent(node.text, this.deps.palette, this.deps.mdTheme)
+    if (node.source !== 'steering') return block(body)
+    const container = new Container()
+    container.addChild(new Spacer(1))
+    container.addChild(new Text(this.deps.palette.dim(STEERING_BADGE), 0, 0))
+    container.addChild(body)
+    return container
   }
 
   /** Mount or update one injected-context card. */

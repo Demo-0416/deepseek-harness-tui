@@ -8,7 +8,7 @@
  */
 
 import type { ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
-import { errorChain, LlmError, type ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { errorChain, type ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { TuiOverlaySession } from '../extension/types.ts'
 import { displayText } from '../components/text.ts'
 import {
@@ -46,6 +46,28 @@ type ContextResolution =
   | { readonly kind: 'error'; readonly error: unknown }
 
 /**
+ * Whether a resolution failed only because the route's adapter has not
+ * registered yet.
+ *
+ * Matched on the error's `code`, never with `instanceof LlmError`: this bundle
+ * resolves `@deepseek-ai/dsh-llm` from its own installation while the runtime
+ * that mounts it resolves the host's, so the two `LlmError` classes are
+ * different objects and an `instanceof` guard is false for the very error it
+ * exists to recognize.
+ * @param error - the rejection from `resolveModelInfo`.
+ * @returns true when the failure is a missing adapter registration.
+ */
+function isMissingAdapter(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  return (error as { code?: unknown }).code === 'NO_ADAPTER'
+}
+
+/** The `provider/model` a resolution was made for, for change detection. */
+function routeKey(selection: ModelSelection | undefined): string | undefined {
+  return selection === undefined ? undefined : `${selection.provider}/${selection.model}`
+}
+
+/**
  * Build the model-selection controller for one chat channel.
  * @param deps - channel collaborators and shared target handle.
  * @returns the controller wired to the channel's overlay and prompt views.
@@ -62,10 +84,23 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
   // activates; that transient NO_ADAPTER is not an error — the resolution
   // waits for the next `llm/adapters-updated` commit instead of surfacing it.
   let awaitingAdapter = false
+  // Route the live resolution was made for, so an adapter commit that also
+  // moved the selection (the settings load that registers providers is the
+  // same one that carries `agent-default-model`) re-resolves rather than
+  // leaving the prompt reporting a stale model's context window.
+  let resolvedRoute: string | undefined
+  // Nothing the mount itself resolves is worth a transcript row: at that
+  // moment the adapter plugins have not necessarily activated, so ANY failure
+  // here is a startup-ordering fact, not something the user did or can act on.
+  // The screen degrades to the model name with no context percentage, and the
+  // adapter-commit listener below resolves it for real. Cleared by the first
+  // user-driven selection, whose failure the user IS waiting on.
+  let silentResolution = true
 
   const resolveContextWindow = (selected: ModelSelection | undefined): void => {
     contextWindow = undefined
     awaitingAdapter = false
+    resolvedRoute = routeKey(selected)
     const resolution: Promise<ContextResolution> = selected === undefined
       ? Promise.resolve({ kind: 'resolved', contextWindow: undefined } as const)
       : ctx.llm.resolveModelInfo(selected.provider, selected.model).then(
@@ -76,7 +111,7 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
     void resolution.then((result) => {
       if (contextResolution !== resolution) return
       if (result.kind === 'error') {
-        if (selected !== undefined && result.error instanceof LlmError && result.error.code === 'NO_ADAPTER') {
+        if (selected !== undefined && (silentResolution || isMissingAdapter(result.error))) {
           awaitingAdapter = true
           return
         }
@@ -93,7 +128,12 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
   // unrelated topology changes stay silent. The disposer rides the channel's
   // detachListeners() through detach(), matching the sibling listeners.
   const disposeAdapterListener = ctx.on('llm/adapters-updated', () => {
-    if (deps.isDisposed() || !awaitingAdapter) return
+    if (deps.isDisposed()) return
+    // Repaint regardless: the selection is read live, and the settings load
+    // that registers these adapters is the same one that carries the user's
+    // default model, so the prompt's route may have moved with them.
+    deps.requestRender()
+    if (!awaitingAdapter && routeKey(target.current) === resolvedRoute) return
     resolveContextWindow(target.current)
   })
   resolveContextWindow(target.current)
@@ -116,6 +156,9 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
       model: selected.model,
       ...reasoningEffort === undefined ? {} : { reasoningEffort },
     }
+    // The user picked this route and is waiting on it, so from here a failed
+    // resolution is reportable rather than startup noise.
+    silentResolution = false
     resolveContextWindow(target.current)
     const reasoning = targetReasoningLabel(selected, reasoningEffort)
     deps.appendNotice([

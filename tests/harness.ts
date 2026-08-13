@@ -162,6 +162,12 @@ export interface TuiHarnessOptions {
   goodbyeMessage?: TuiRuntime['goodbyeMessage']
   /** Set false to exercise the optional session-query degradation path. */
   mountSessionQuery?: boolean
+  /**
+   * Extra services provided on the test context before the TUI mounts, for the
+   * optional ones it reads through `ctx.get` (`agentDefaultModel`,
+   * `tuiStartup`, …). Provided last, so a name here wins over the defaults.
+   */
+  services?: Record<string, unknown>
 }
 
 /** Everything a mounted harness lets a test drive or inspect. */
@@ -292,6 +298,9 @@ export async function createTuiTestContext(options: TuiHarnessOptions = {}): Pro
   }
   if (options.mountSessionQuery !== false && ctx.get('sessionQuery') === undefined) {
     await ctx.plugin(TestSessionQueryEngine)
+  }
+  for (const [service, value] of Object.entries(options.services ?? {})) {
+    ctx.provide(service, value as never)
   }
   const sessionId = SessionId(options.config?.sessionId ?? 'main-session')
   const session = ctx.sessions.create(

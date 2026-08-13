@@ -11,12 +11,16 @@
  * The snapshot is the boundary: the node array is replaced wholesale per batch,
  * and each node carries a `version` the reconciler compares, so subscribers
  * never diff content. Per-process presentation state (spinners, stopwatches,
- * pending steering) is deliberately not here; it belongs to the entry point.
+ * the queued-steering count) is deliberately not here; it belongs to the entry
+ * point. The one exception is {@link SessionStore.appendOptimistic}: a
+ * just-submitted message is a placeholder for a log entry that has not been
+ * written yet, keyed so the entry replaces it, not a second read model.
  * @module dsh-tui/core/session-store
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { MessageId, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 // Type imports load the SessionEventMap declaration merges.
 import type {} from '@deepseek-ai/dsh-agent'
@@ -25,8 +29,12 @@ import type {} from '@deepseek-ai/dsh-compaction'
 import type {} from '@deepseek-ai/dsh-plan-mode'
 import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-user-approval'
-import { foldEvent } from './nodes.ts'
-import type { ChatNode, SessionSnapshot } from './types.ts'
+import {
+  appendOptimisticUserMessage,
+  foldEvent,
+  withdrawOptimisticUserMessage,
+} from './nodes.ts'
+import type { ChatNode, SessionSnapshot, UserMessageNode } from './types.ts'
 
 /** One animation frame: bursts of stream chunks publish one snapshot. */
 const BATCH_INTERVAL_MS = 16
@@ -126,6 +134,25 @@ export class SessionStore {
     })
   }
 
+  /**
+   * Echo one just-submitted user message into the draft before any event
+   * records it, so the prompt appears where it was sent rather than after the
+   * answer it interrupted. The `user/message` event lands on the same node.
+   * @param message - the message handed to the agent.
+   * @param source - `steering` when a running turn was interrupted, else `user`.
+   */
+  appendOptimistic(message: UserMessage, source: UserMessageNode['source']): void {
+    if (appendOptimisticUserMessage(this.nodes, message, source)) this.scheduleFlush()
+  }
+
+  /**
+   * Withdraw the echo of a submission the agent's inbox discarded.
+   * @param id - the discarded message's identity.
+   */
+  withdrawOptimistic(id: MessageId): void {
+    if (withdrawOptimisticUserMessage(this.nodes, id)) this.scheduleFlush()
+  }
+
   /** Apply one event to the draft and schedule a snapshot flush. */
   private apply(event: SessionEvent): void {
     const nodesChanged = foldEvent(this.nodes, event)
@@ -168,11 +195,17 @@ export class SessionStore {
     return this.snapshot
   }
 
-  /** Unsubscribe from the event bus and drop any pending batch. */
+  /** Unsubscribe from the event bus, publishing whatever the last batch held. */
   dispose(): void {
     if (this.batchTimer !== null) {
       clearTimeout(this.batchTimer)
       this.batchTimer = null
+      // Flush before dropping the timer: a dispose that lands inside a batch
+      // window would otherwise discard up to BATCH_INTERVAL_MS of folded
+      // events, and the last frame before teardown is exactly the one a
+      // resume handoff leaves on screen.
+      this.snapshot = this.publish()
+      for (const listener of this.listeners) listener()
     }
     this.listeners.clear()
     this.offSessionEvent()

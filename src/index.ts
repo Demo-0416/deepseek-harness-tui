@@ -19,6 +19,8 @@ import {
   Spacer,
   Text,
   TuiMainScreen,
+  isKeyRelease,
+  isKeyRepeat,
   matchesKey,
   type Component,
   type EditorTheme,
@@ -34,13 +36,14 @@ import {
   type AgentHandle,
   type AgentOptions,
   type AgentStatus,
+  type ModelSelection,
   type ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-loop'
 import type {} from '@deepseek-ai/dsh-token-meter'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { createUserMessage, errorChain } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, MessageId } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm-retry'
 // Type import declaration-merges the compaction bracket events onto the
 // session event map, so `compaction/start` / `compaction/end` are typed here.
@@ -301,6 +304,57 @@ function lastActivityTime(session: Session): number | undefined {
   return session.events.at(-1)?.time
 }
 
+/**
+ * How long a transient confirmation (the Ctrl+O card cycle, the Ctrl+R
+ * reasoning toggle) stays on the status row before the row goes back to what it
+ * was showing.
+ */
+const STATUS_FLASH_MS = 1_500
+
+/**
+ * Read the live default model selection, when a default-model service is
+ * mounted.
+ *
+ * Optional service: `agentDefaultModel` is not one of this bundle's injections,
+ * so it is read through the non-throwing accessor and shape-checked rather than
+ * typed. Called on every read of the selection, never cached: the service reads
+ * its user layer from a settings file that loads asynchronously, so a value
+ * captured while the TUI mounts is the bundle's inline default rather than the
+ * user's `agent-default-model`.
+ * @param ctx - the runner context.
+ * @returns the current default selection, or `undefined` when unavailable.
+ */
+function defaultModelSelection(ctx: Context): ModelSelection | undefined {
+  const service = ctx.get('agentDefaultModel') as {
+    currentSelection?: () => { provider?: unknown; model?: unknown; reasoningEffort?: unknown } | undefined
+  } | undefined
+  const selection = service?.currentSelection?.()
+  if (selection === undefined) return undefined
+  const { provider, model, reasoningEffort } = selection
+  if (typeof provider !== 'string' || typeof model !== 'string') return undefined
+  return {
+    provider,
+    model,
+    // The service's own effort id, re-branded: this crosses an untyped optional
+    // service boundary, and the adapter validates the value it accepts.
+    ...typeof reasoningEffort === 'string' ? { reasoningEffort: reasoningEffort as ReasoningEffortId } : {},
+  }
+}
+
+/**
+ * The route `--model` fixed for this process, when the flag was given.
+ *
+ * Read from the startup service rather than from {@link Config}: `Config` is
+ * the deployment's serializable presentation settings, while this is one
+ * process's command line, which is also why it is absent in an embedder.
+ * @param ctx - the runner context.
+ * @returns the explicit route, or `undefined` when none was given.
+ */
+function startupSelection(ctx: Context): ModelSelection | undefined {
+  const route = parseModelSelection(ctx.get('tuiStartup')?.model)
+  return route === undefined ? undefined : { provider: route.provider, model: route.model }
+}
+
 interface RunningStatus {
   turn: number | undefined
   timer: ReturnType<typeof setInterval>
@@ -383,7 +437,14 @@ export function createTuiChat(
     paddingX: 1,
   })
   const todo = new TodoComponent(palette)
-  const compactionStatusLine = new Text('', 0, 0)
+  /**
+   * The row above the prompt: a live compaction's stopwatch while one runs,
+   * otherwise whatever transient confirmation is flashing, otherwise nothing.
+   * View-state confirmations belong here rather than in the transcript — they
+   * report the state of the screen, not something the conversation did.
+   */
+  const statusLine = new Text('', 0, 0)
+  let flashingStatus: { text: string; timer: ReturnType<typeof setTimeout> } | undefined
   let showReasoning = resolved.showReasoning
   // Ctrl+O cycles collapsed -> expanded -> hidden. Codex-style: hidden drops
   // tool cards entirely, collapsed previews, expanded shows full bodies.
@@ -401,9 +462,10 @@ export function createTuiChat(
     startedAt: number
     timer: ReturnType<typeof setInterval>
   } | undefined
-  // TUI steering submissions that the inbox has not yet claimed or discarded.
-  // Correlation ids avoid guessing whether a running-state submission actually
-  // joined steering or fell back to the queued-turn FIFO during turn close.
+  // TUI steering submissions that the inbox has not yet claimed or discarded,
+  // for the prompt's queued badge. The same claimed/discarded signals settle
+  // the optimistic echo in the store (one node per MessageId), so this set
+  // counts pending work and owns no transcript state of its own.
   const pendingSteering = new Set<MessageId>()
   let disposed = false
   let shuttingDown: Promise<void> | undefined
@@ -421,7 +483,31 @@ export function createTuiChat(
   const commandControllers = new Set<AbortController>()
   const referenceControllers = new Set<AbortController>()
   let tuiServiceFiber: Fiber | undefined
-  const target: ModelSelectionRef = { current: initialTarget(agent), assembled: undefined }
+  // The route the next step runs under, resolved on EVERY read rather than
+  // frozen at mount, the way the Web host's `selectionFor` resolves it:
+  //   1. a route this process picked — the `-m` flag, or a `/model` selection;
+  //   2. this session's own latest logged request header, so a resumed session
+  //      keeps the model it ran under;
+  //   3. the live `agentDefaultModel` selection, whose user layer arrives with
+  //      an asynchronous settings load that mounting does not wait for;
+  //   4. the options the agent was created with (an embedder's fixed route).
+  // Freezing tier 3 at mount was the bug: it captured the bundle's inline
+  // default instead of the user's `agent-default-model` setting.
+  let pickedTarget: ModelSelection | undefined = startupSelection(ctx)
+  const target: ModelSelectionRef = {
+    get current(): ModelSelection | undefined {
+      if (pickedTarget !== undefined) return pickedTarget
+      // `initialTarget` reads the logged header first and the agent's own
+      // options second, which is exactly tiers 2 and 4; the live default sits
+      // between them, so it is consulted only when no request was logged.
+      if (agent.session.requestHeader()?.config !== undefined) return initialTarget(agent)
+      return defaultModelSelection(ctx) ?? initialTarget(agent)
+    },
+    set current(next: ModelSelection | undefined) {
+      pickedTarget = next
+    },
+    assembled: undefined,
+  }
   // `updatePromptValues` (defined below) closes over the model controller, but
   // the controller needs `appendNotice`/`overlayManager`, defined after that
   // closure. Declare here, assign once after those exist, and defer the first
@@ -490,9 +576,11 @@ export function createTuiChat(
     const queued = runningStatus === undefined ? undefined : formatQueuedStatus(pendingSteering.size)
     queuedValue.set(queued === undefined ? undefined : palette.dim(queued))
     symbolValue.set(palette.bold(palette.accent('dsh')))
-    compactionStatusLine.setText(compacting === undefined
-      ? ''
-      : palette.dim(`Context being compacted ${formatStatusDuration(renderTime - compacting.startedAt)}`))
+    // A live compaction owns the row while it runs; a flash only fills it in
+    // between, so a transient confirmation can never hide ongoing work.
+    statusLine.setText(compacting !== undefined
+      ? palette.dim(`Context being compacted ${formatStatusDuration(renderTime - compacting.startedAt)}`)
+      : flashingStatus === undefined ? '' : palette.dim(displayText(flashingStatus.text)))
     // `${indicator}` owns the caret column and its trailing gap before the
     // cursor. The active status glyph replaces the `>` caret in place — same
     // width every frame — fading in when work starts, throbbing while it runs,
@@ -538,7 +626,7 @@ export function createTuiChat(
   ui.addChild(new Spacer(1))
   todoContainer.addChild(todo)
   ui.addChild(todoContainer)
-  ui.addChild(compactionStatusLine)
+  ui.addChild(statusLine)
   ui.addChild(promptContext)
   ui.addChild(questionContainer)
   ui.addChild(inputPromptLine)
@@ -571,6 +659,36 @@ export function createTuiChat(
   const appendNotice = (message: string, kind: 'info' | 'warning' | 'error' = 'info'): void => {
     const color = kind === 'error' ? palette.error : kind === 'warning' ? palette.warning : palette.dim
     transcript.appendLocal(new Spacer(1), new Text(color(displayText(message)), 0, 0))
+    requestRender()
+  }
+
+  /** Stop the flash timer and clear the transient text it was showing. */
+  const clearFlash = (): void => {
+    if (flashingStatus === undefined) return
+    clearTimeout(flashingStatus.timer)
+    flashingStatus = undefined
+  }
+
+  /**
+   * Confirm a view-state change on the status row for {@link STATUS_FLASH_MS},
+   * then restore the row.
+   *
+   * View state (which cards are visible, whether reasoning renders) is a
+   * property of the screen, not of the conversation: repeating its
+   * confirmations into the transcript pushed the conversation up the screen
+   * every time the user cycled Ctrl+O, which is exactly when they are reading
+   * it. A later flash replaces an earlier one rather than queueing.
+   * @param message - the confirmation to show.
+   */
+  const flashStatus = (message: string): void => {
+    clearFlash()
+    flashingStatus = {
+      text: message,
+      timer: setTimeout(() => {
+        flashingStatus = undefined
+        requestRender()
+      }, STATUS_FLASH_MS),
+    }
     requestRender()
   }
 
@@ -669,6 +787,7 @@ export function createTuiChat(
       clearInterval(compacting.timer)
       compacting = undefined
     }
+    clearFlash()
     clearTurnStatus()
   }
 
@@ -896,10 +1015,9 @@ export function createTuiChat(
 
   const setToolsVisibility = (next: ToolCardVisibility): void => {
     toolsVisibility = next
-    // The reconciler owns card visibility and hidden-mode turn folding, so one
-    // call re-places every mounted card and re-folds every turn.
+    // The reconciler owns card visibility, so one call re-places every card.
     transcript.setVisibility(toolsVisibility)
-    appendNotice(toolsVisibility === 'hidden' ? 'Tool cards hidden.' : `Tool and context cards ${toolsVisibility}.`)
+    flashStatus(toolsVisibility === 'hidden' ? 'Tool cards hidden.' : `Tool and context cards ${toolsVisibility}.`)
   }
 
   const toggleTools = (): void => {
@@ -914,7 +1032,7 @@ export function createTuiChat(
     // Every mounted step toggles in place, so a running stream keeps streaming
     // and the rows above it keep their positions.
     transcript.setShowReasoning(showReasoning)
-    appendNotice(`Reasoning blocks ${showReasoning ? 'shown' : 'hidden'}.`)
+    flashStatus(`Reasoning blocks ${showReasoning ? 'shown' : 'hidden'}.`)
   }
 
   const toggleReasoning = (): void => { setReasoning(!showReasoning) }
@@ -1253,7 +1371,15 @@ export function createTuiChat(
     // Queued before the prompt so the nearest pre-step claims both together.
     if (attachedContext !== undefined) agent.inject(attachedContext)
     const message = createUserMessage({ content, source: { kind: 'user' } })
-    if (agent.status === 'running') {
+    const steering = agent.status === 'running'
+    // Echo the prompt before delivering it. A steered message is recorded only
+    // when the running driver claims it at its next step boundary, so its
+    // `user/message` event lands after the answer it interrupted has already
+    // streamed rows onto the screen: without this the prompt would appear
+    // below the reply it came before. The echo is keyed by MessageId, so the
+    // event lands on this exact node instead of appending a second one.
+    store.appendOptimistic(message, steering ? 'steering' : 'user')
+    if (steering) {
       // Steering is never subject to prompt admission; a running driver
       // consumes it at its next step boundary.
       agent.steer(message)
@@ -1433,36 +1559,49 @@ export function createTuiChat(
 
   const removeInputListener = ui.addInputListener((data) => {
     if (overlayManager.hasActiveOverlay()) return undefined
+    // `matchesKey` reports the key, not the transition: under the Kitty
+    // keyboard protocol one physical Ctrl+O arrives as press, then release
+    // (and a repeat per auto-repeat tick), and every one of them matches. Each
+    // binding below acts once, on the press, and swallows the rest of its own
+    // key's events so they never reach the editor. Terminals without the
+    // protocol send press only, so this changes nothing for them.
+    const press = !isKeyRelease(data) && !isKeyRepeat(data)
     if (matchesKey(data, Key.ctrl('o'))) {
-      toggleTools()
+      if (press) toggleTools()
       return { consume: true }
     }
     if (matchesKey(data, Key.ctrl('r'))) {
-      toggleReasoning()
+      if (press) toggleReasoning()
       return { consume: true }
     }
     if (matchesKey(data, Key.ctrl('l'))) {
-      ui.invalidate()
-      ui.requestRender(true)
+      if (press) {
+        ui.invalidate()
+        ui.requestRender(true)
+      }
       return { consume: true }
     }
     if (matchesKey(data, Key.escape) && agent.status === 'running') {
-      agent.cancel({ kind: 'user' })
+      if (press) agent.cancel({ kind: 'user' })
       return { consume: true }
     }
     if (matchesKey(data, Key.ctrl('c'))) {
-      if (agent.status === 'running') {
-        agent.cancel({ kind: 'user' })
-      } else if (editor.getText() !== '') {
-        editor.setText('')
-      } else {
-        requestExit()
+      if (press) {
+        if (agent.status === 'running') {
+          agent.cancel({ kind: 'user' })
+        } else if (editor.getText() !== '') {
+          editor.setText('')
+        } else {
+          requestExit()
+        }
       }
       return { consume: true }
     }
     if (matchesKey(data, Key.ctrl('d'))) {
-      if (agent.status === 'running') appendNotice('Cancel the active turn before exiting.', 'warning')
-      else requestExit()
+      if (press) {
+        if (agent.status === 'running') appendNotice('Cancel the active turn before exiting.', 'warning')
+        else requestExit()
+      }
       return { consume: true }
     }
     return undefined
@@ -1504,6 +1643,10 @@ export function createTuiChat(
   })
   const disposeDiscarded = ctx.on('agent/inbox/discarded', (payload) => {
     if (payload.agent !== agent) return
+    // Discarded means no `user/message` will ever land for it (cancelling a
+    // turn clears the whole inbox), so the echo has to go with it: the model
+    // never saw this prompt, and a transcript that keeps showing it is lying.
+    store.withdrawOptimistic(payload.message.id)
     settlePendingSteering(payload.message.id)
   })
   const disposeStatus = ctx.on('agent/status', (payload) => {
@@ -1538,6 +1681,7 @@ export function createTuiChat(
   const detachListeners = (): void => {
     skillAbort.abort()
     fileSearch.dispose()
+    clearFlash()
     removeInputListener()
     disposeCommandChanges()
     disposeSkillChanges()
@@ -1739,33 +1883,19 @@ function parseModelSelection(value: string | undefined): ModelRoute | undefined 
 }
 
 /**
- * Read the route a default-model service selected, when one is mounted.
- *
- * Optional service: `agentDefaultModel` is not part of this bundle's required
- * injections, so it is read through the non-throwing accessor and shape-checked
- * rather than typed.
- * @param ctx - the runner context.
- * @returns the current default route, or `undefined` when unavailable.
- */
-function defaultModelRoute(ctx: Context): ModelRoute | undefined {
-  const service = ctx.get('agentDefaultModel') as {
-    currentSelection?: () => { provider?: unknown; model?: unknown } | undefined
-  } | undefined
-  const selection = service?.currentSelection?.()
-  if (selection === undefined) return undefined
-  const { provider, model } = selection
-  if (typeof provider !== 'string' || typeof model !== 'string') return undefined
-  return { provider, model }
-}
-
-/**
  * Resolve the per-agent model options for this run.
- * @param ctx - the runner context.
+ *
+ * Only an explicit `--model` fixes the agent's own options. A default-model
+ * service is deliberately NOT read here: it loads its user layer from settings
+ * asynchronously, so a route captured at startup is the bundle's inline default
+ * rather than the user's. The chat's model selection reads that service live
+ * instead (see `defaultModelSelection`) and applies it through the
+ * `agent/request` waterfall, which is the surface that actually routes a step.
  * @param startup - the parsed command line.
- * @returns agent options, or `undefined` to leave the route to the agent row.
+ * @returns agent options, or `undefined` to leave the route to the selection.
  */
-function resolveAgentOptions(ctx: Context, startup: TuiStartupValues): AgentOptions | undefined {
-  const route = parseModelSelection(startup.model) ?? defaultModelRoute(ctx)
+function resolveAgentOptions(startup: TuiStartupValues): AgentOptions | undefined {
+  const route = parseModelSelection(startup.model)
   if (route === undefined) return undefined
   return { provider: route.provider, model: route.model }
 }
@@ -1859,7 +1989,7 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
     }
     appExit(code)
   }
-  const agentOptions = resolveAgentOptions(ctx, startup)
+  const agentOptions = resolveAgentOptions(startup)
   // A host that owns the process (a launcher able to re-exec) wins; otherwise
   // resume happens in this process through `handoff` below.
   const hostResume = ctx.get('tuiResumeHost')
