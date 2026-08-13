@@ -37,11 +37,10 @@
     "test": "node --import tsx --test tests/unit/*.test.ts"
   },
   "dependencies": {
+    "@earendil-works/pi-tui": "^0.84.1",
     "commander": "^15.0.0",
-    "get-east-asian-width": "^1.6.0",
-    "ink": "^7.1.1",
-    "marked": "^18.0.9",
-    "react": "^19.2.8"
+    "diff": "^9.0.0",
+    "saxes": "6.0.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -57,7 +56,19 @@
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6",
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-agent-loop": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-goal": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm-retry": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-projection": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-projection-cache": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-reference": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-title": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-token-meter": "^0.1.0-rc.6"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -75,9 +86,20 @@
     "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@types/node": "^22.10.0",
-    "@types/react": "^19.2.0",
     "tsdown": "^0.22.14",
     "tsx": "^4.23.12",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "@deepseek-ai/dsh-agent-loop": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-goal": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm-retry": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-projection": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-projection-cache": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-reference": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-title": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-token-meter": "^0.1.0-rc.6"
   }
 }

@@ -21,7 +21,12 @@ export interface EditorProps {
   disabled?: boolean
   /** Called when the user presses Ctrl+C. */
   onCancel?: () => void
+  /** Slash commands offered by the autocomplete menu. */
+  commands?: readonly { name: string; description: string }[]
 }
+
+/** Visible rows in the command autocomplete menu. */
+const MENU_PAGE = 8
 
 interface Cursor {
   row: number
@@ -34,11 +39,25 @@ function toLines(text: string): string[] {
   return lines.length === 0 ? [''] : lines
 }
 
-export function Editor({ onSubmit, history = [], placeholder, disabled = false, onCancel }: EditorProps): React.ReactElement {
+export function Editor({ onSubmit, history = [], placeholder, disabled = false, onCancel, commands = [] }: EditorProps): React.ReactElement {
   const theme = useTheme()
   const [lines, setLines] = useState<string[]>([''])
   const [cursor, setCursor] = useState<Cursor>({ row: 0, col: 0 })
   const [historyIndex, setHistoryIndex] = useState<number | undefined>(undefined)
+  const [menuIndex, setMenuIndex] = useState(0)
+  const [menuSuppressed, setMenuSuppressed] = useState(false)
+
+  // The command menu is offered while the input is one line, starts with '/',
+  // and has no arguments yet (no space typed).
+  const firstLine = lines[0] ?? ''
+  const menuQuery = lines.length === 1 && firstLine.startsWith('/') && !firstLine.includes(' ')
+    ? firstLine.slice(1).toLowerCase()
+    : undefined
+  const menuItems = menuQuery === undefined || menuSuppressed
+    ? []
+    : commands.filter(c => c.name.toLowerCase().startsWith(menuQuery))
+  const menuOpen = menuItems.length > 0
+  const selected = menuItems[Math.min(menuIndex, menuItems.length - 1)]
 
   const update = useCallback((newLines: string[], newCursor: Cursor) => {
     setLines(newLines)
@@ -46,6 +65,8 @@ export function Editor({ onSubmit, history = [], placeholder, disabled = false, 
   }, [])
 
   const insertText = useCallback((insert: string) => {
+    setMenuSuppressed(false)
+    setMenuIndex(0)
     setLines(prev => {
       const next = [...prev]
       const line = next[cursor.row] ?? ''
@@ -72,6 +93,41 @@ export function Editor({ onSubmit, history = [], placeholder, disabled = false, 
 
   useInput((input, key) => {
     if (disabled) return
+
+    // The command menu owns navigation/accept keys while visible.
+    if (menuOpen) {
+      if (key.upArrow) {
+        setMenuIndex(i => (i + menuItems.length - 1) % menuItems.length)
+        return
+      }
+      if (key.downArrow) {
+        setMenuIndex(i => (i + 1) % menuItems.length)
+        return
+      }
+      if (key.tab) {
+        if (selected !== undefined) {
+          const text = `/${selected.name} `
+          setLines([text])
+          setCursor({ row: 0, col: text.length })
+          setMenuIndex(0)
+        }
+        return
+      }
+      if (key.return) {
+        if (selected !== undefined) {
+          onSubmit(`/${selected.name}`)
+          setLines([''])
+          setCursor({ row: 0, col: 0 })
+          setHistoryIndex(undefined)
+          setMenuIndex(0)
+        }
+        return
+      }
+      if (key.escape) {
+        setMenuSuppressed(true)
+        return
+      }
+    }
 
     if (key.return) {
       submit()
@@ -166,6 +222,8 @@ export function Editor({ onSubmit, history = [], placeholder, disabled = false, 
       return
     }
     if (key.backspace || key.delete) {
+      setMenuSuppressed(false)
+      setMenuIndex(0)
       setLines(prev => {
         if (cursor.col === 0 && cursor.row === 0) return prev
         const next = [...prev]
@@ -207,6 +265,9 @@ export function Editor({ onSubmit, history = [], placeholder, disabled = false, 
         ]
       })
 
+  const menuStart = Math.max(0, Math.min(menuIndex - Math.floor(MENU_PAGE / 2), menuItems.length - MENU_PAGE))
+  const menuVisible = menuItems.slice(menuStart, menuStart + MENU_PAGE)
+
   return (
     <Box flexDirection="column">
       {visibleLines.map((segments, row) => (
@@ -225,6 +286,26 @@ export function Editor({ onSubmit, history = [], placeholder, disabled = false, 
           </Text>
         </Box>
       ))}
+      {menuOpen && (
+        <Box flexDirection="column">
+          {menuVisible.map((item, i) => {
+            const index = menuStart + i
+            const active = index === Math.min(menuIndex, menuItems.length - 1)
+            return (
+              <Box key={item.name}>
+                <Text color={active ? theme.brand : theme.dim}>{active ? '❯ ' : '  '}</Text>
+                <Text color={active ? theme.brand : theme.text} bold={active}>
+                  /{item.name.padEnd(18)}
+                </Text>
+                <Text color={theme.dim}>{item.description}</Text>
+              </Box>
+            )
+          })}
+          {menuItems.length > MENU_PAGE && (
+            <Text color={theme.dim}>  … {menuItems.length} commands · ↑↓ move · tab complete · enter run</Text>
+          )}
+        </Box>
+      )}
     </Box>
   )
 }
