@@ -44,9 +44,9 @@ export const CLAUDE_COLORS = {
   permission: rgb(177, 185, 249),
   /** Plan-mode chrome. */
   planMode: rgb(72, 150, 140),
-  /** Background fill behind a user message (unused by the transcript's box, kept for parity). */
+  /** Background fill behind a user message, the block that marks the user's own turns. */
   userMessageBg: rgb(55, 55, 55),
-  /** Muted border of the user message box and other outlines. */
+  /** Muted outline of a bordered surface. */
   borderMuted: rgb(68, 68, 68),
   /** Tool branch connectors (`├ └ │`), a fixed gray independent of the terminal theme. */
   branch: rgb(72, 72, 72),

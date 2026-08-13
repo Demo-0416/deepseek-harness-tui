@@ -31,7 +31,6 @@ import { preview, renderUnknownXml } from './xml-tool-output.ts'
 import { displayInlineText, displayText } from './text.ts'
 import { gradientText, type Palette } from './theme.ts'
 import { contentText, type ParsedArguments } from './content.ts'
-import { attachBranch, renderBranchBlock, withBranch } from '../render/branch.ts'
 import {
   diffLanguage,
   parseDiffBounded,
@@ -41,7 +40,7 @@ import {
   type ParsedDiff,
 } from '../render/diff.ts'
 import { buildPreviewText } from '../render/preview.ts'
-import { CLAUDE_COLORS, fg as paintFg, type Rgb } from '../render/palette.ts'
+import { bg as paintBg, CLAUDE_COLORS, fg as paintFg, type Rgb } from '../render/palette.ts'
 import {
   formatCompletionTime,
   formatTimingTotals,
@@ -140,15 +139,18 @@ class PrefixedComponent implements Component {
 }
 
 /**
- * A rounded box around a child component, the frame Claude Code puts around the
- * user's own message: `╭─ Label ─…─╮`, `│ … │`, `╰…╯`. The border is a muted
- * gray and the content carries no background fill, so the box reads as a quiet
- * outline on any terminal background rather than as a colored banner.
+ * A filled block around a child component, the shape Claude Code gives the
+ * user's own message: no border at all, one column of padding on each side, and
+ * every row filled edge to edge with the fixed rgb(55,55,55) fill. The fill is
+ * what makes the user's turns scannable in a long transcript, and because it is
+ * a background rather than a frame, a drag-select copies the prompt text alone.
+ *
+ * With color disabled the fill cannot be drawn, so the block degrades to the
+ * same one-column padding with no escape on the row at all.
  */
-class RoundedBoxComponent implements Component {
+class FilledBlockComponent implements Component {
   constructor(
     private readonly child: Component,
-    private readonly label: string,
     private readonly palette: Palette,
   ) {}
 
@@ -157,15 +159,14 @@ class RoundedBoxComponent implements Component {
   }
 
   render(width: number): string[] {
-    const outer = Math.max(8, width)
-    const inner = outer - 4
-    const border = (text: string): string => accent(this.palette, CLAUDE_COLORS.borderMuted, text)
-    const head = `─ ${displayInlineText(this.label)} `
-    const top = border(`╭${head}${'─'.repeat(Math.max(0, outer - 2 - visibleWidth(head)))}╮`)
-    const bottom = border(`╰${'─'.repeat(Math.max(0, outer - 2))}╯`)
-    const body = this.child.render(inner)
-      .map(row => `${border('│')} ${truncateToWidth(row, inner, '', true)} ${border('│')}`)
-    return plainIfNoColor(this.palette, [top, ...body, bottom])
+    const inner = Math.max(1, width - 2)
+    // Every row is padded to the same width so the fill is a rectangle rather
+    // than a ragged right edge.
+    const rows = this.child.render(inner).map(row => truncateToWidth(row, inner, '', true))
+    if (!colorEnabled(this.palette)) {
+      return rows.map(row => stripTerminalSequences(` ${row}`).trimEnd())
+    }
+    return rows.map(row => paintBg(CLAUDE_COLORS.userMessageBg, ` ${row} `))
   }
 }
 
@@ -217,19 +218,22 @@ export class HeaderComponent implements Component {
 }
 
 /**
- * A user or steering prompt in the transcript, framed in Claude Code's rounded
- * box with the role as the frame's label. The box makes the user's own turns
- * scannable in a long transcript without a background fill, which would fight
- * the terminal's own scheme and bleed into a copied selection.
+ * A user or steering prompt in the transcript, rendered as Claude Code's
+ * borderless filled block: the prompt text on the fixed rgb(55,55,55) fill with
+ * one column of padding, which is what marks the user's own turns in a long
+ * transcript.
+ *
+ * `_label` is retained from the boxed frame this replaced (no caller ever passed
+ * it): Claude Code's block names no role, so nothing is rendered for it.
  */
 export class UserMessageComponent extends Container {
-  constructor(text: string, palette: Palette, mdTheme: MarkdownTheme, label = 'You') {
+  constructor(text: string, palette: Palette, mdTheme: MarkdownTheme, _label = 'You') {
     super()
     const body = new Markdown(displayText(text), 0, 0, mdTheme, { color: value => palette.text(value) }, {
       preserveOrderedListMarkers: true,
       preserveBackslashEscapes: true,
     })
-    this.addChild(new RoundedBoxComponent(body, label, palette))
+    this.addChild(new FilledBlockComponent(body, palette))
   }
 }
 
@@ -322,6 +326,8 @@ export class StreamingAssistantComponent extends Container {
   private readonly blocks = new Map<number, StreamingBlock>()
   private settledContent: readonly ContentBlock[] | undefined
   private foldedContinuation = false
+  /** The last folded text applied through {@link setFoldedText}, for idempotence. */
+  private foldedText: { text: string; reasoning: string; settled: boolean } | undefined
   /**
    * The step's timing footer. The renderer keeps it at the tail of the chat so
    * it trails any tool cards the step appends after this assistant message; it
@@ -350,6 +356,41 @@ export class StreamingAssistantComponent extends Container {
    */
   settle(content: readonly ContentBlock[]): void {
     this.settledContent = content
+    // A direct drive invalidates the folded-text memo, so the two entry points
+    // cannot leave this component showing one and remembering the other.
+    this.foldedText = undefined
+    this.rebuild()
+  }
+
+  /**
+   * Apply one step's folded text: the accumulated deltas while the step
+   * streams, the settled message's text once it lands. Idempotent — an
+   * unchanged triple rebuilds nothing — so a reconciler may call it for every
+   * snapshot without re-rendering a step that did not move.
+   * @param text - The step's response text so far, or its settled text.
+   * @param reasoning - The step's reasoning text so far, or its settled reasoning.
+   * @param settled - Whether the step's assistant message has landed.
+   */
+  setFoldedText(text: string, reasoning: string, settled: boolean): void {
+    if (this.foldedText?.text === text
+      && this.foldedText.reasoning === reasoning
+      && this.foldedText.settled === settled) return
+    this.foldedText = { text, reasoning, settled }
+    // Reasoning first, then the response: the same order a step streams them,
+    // which is the order the block indexes below preserve.
+    const content: StreamingBlock[] = [
+      ...reasoning === '' ? [] : [{ type: 'reasoning', text: reasoning }],
+      ...text === '' ? [] : [{ type: 'text', text }],
+    ]
+    this.blocks.clear()
+    if (settled) {
+      this.settledContent = content.map((block): ContentBlock => block.type === 'reasoning'
+        ? { type: 'reasoning', text: block.text }
+        : { type: 'text', text: block.text })
+    } else {
+      this.settledContent = undefined
+      for (const [index, block] of content.entries()) this.blocks.set(index, block)
+    }
     this.rebuild()
   }
 
@@ -390,6 +431,7 @@ export class StreamingAssistantComponent extends Container {
     } else if (chunk.type === 'block-end' && (chunk.block.type === 'text' || chunk.block.type === 'reasoning')) {
       this.blocks.set(chunk.index, { type: chunk.block.type, text: chunk.block.text })
     }
+    this.foldedText = undefined
     this.rebuild()
     this.timing.invalidate()
   }
@@ -449,14 +491,32 @@ export class StreamingAssistantComponent extends Container {
   }
 }
 
-/** Columns a branch-prefixed body row spends on its connector: indent, glyph, space. */
-const BRANCH_WIDTH = 3
+/**
+ * Claude Code's tool bullet. The product ships the heavy `⏺` and falls back to
+ * the plain `●` off macOS, where the heavy glyph is commonly missing from the
+ * terminal font and renders as a replacement box.
+ */
+const TOOL_BULLET = process.platform === 'darwin' ? '⏺' : '●'
 
 /**
- * One block of a tool card's body, hung off its own branch connector: a terminal
- * card's command echo, its output, a diff. `fitted` rows are already wrapped to
- * the body width (a rendered diff, a rendered Markdown document) and MUST NOT be
- * re-flowed — a diff row's background fill would tear across a re-wrap.
+ * The lead-in of a tool card's result block: two columns of indent, Claude
+ * Code's `⎿` result glyph, then two columns of gap. Continuation rows align
+ * under the body with {@link RESULT_INDENT}, so a wrapped result reads as one
+ * left-aligned block rather than as a tree.
+ */
+const RESULT_LEAD = '  ⎿  '
+
+/** The continuation indent of a result block: {@link RESULT_LEAD}'s width in spaces. */
+const RESULT_INDENT = ' '.repeat(RESULT_LEAD.length)
+
+/** Columns a result row spends on its prefix, taken from the body width. */
+const RESULT_PREFIX_WIDTH = RESULT_LEAD.length
+
+/**
+ * One block of a tool card's body: a terminal card's command echo, its output, a
+ * diff. `fitted` rows are already wrapped to the body width (a rendered diff, a
+ * rendered Markdown document) and MUST NOT be re-flowed — a diff row's
+ * background fill would tear across a re-wrap.
  */
 interface CardSection {
   readonly rows: readonly string[]
@@ -559,14 +619,24 @@ export class ToolCardComponent extends CachedCardComponent {
    * @param event - The `tool/result` event payload.
    */
   updateResult(event: Extract<SessionEvent, { type: 'tool/result' }>['data']): void {
-    this.diffBodyCache = undefined
-    this.dropLines()
     const result = event.message.content[0]
-    this.result = {
+    this.setResult({
       content: [...result.content],
       isError: result.isError === true,
       ...event.meta !== undefined ? { meta: event.meta } : {},
-    }
+    })
+  }
+
+  /**
+   * Record an already-projected tool result and derive its result view. Takes
+   * the result rather than the event so a folded node can drive the card
+   * without re-deriving the event payload.
+   * @param result - The model-facing blocks, the failure flag, and the tool's `meta`.
+   */
+  setResult(result: { content: ContentBlock[]; isError: boolean; meta?: JsonValue }): void {
+    this.diffBodyCache = undefined
+    this.dropLines()
+    this.result = { ...result }
     if (this.parsed.valid && this.definition?.presentResult) {
       try {
         const view = this.definition.presentResult(this.parsed.value, this.result)
@@ -591,42 +661,53 @@ export class ToolCardComponent extends CachedCardComponent {
     // keeps only the conversation, the way Codex hides tool calls.
     if (this.visibility === 'hidden') return []
     const expanded = this.visibility === 'expanded'
-    // The body hangs off a branch connector, which costs the leading indent
-    // column plus the glyph and its space.
-    const inner = Math.max(20, width - BRANCH_WIDTH)
+    // The body is one left-aligned block under the header, so it loses exactly
+    // the columns the `⎿` lead-in occupies.
+    const inner = Math.max(20, width - RESULT_PREFIX_WIDTH)
     const rows: string[] = ['', this.headerRow(width)]
-    const sections = this.bodySections(inner, expanded)
-    for (const [index, section] of sections.entries()) {
-      // Every section but the last keeps the tree open (`├`/`│`); the last one
-      // closes it with `└`, so a card visibly ends.
-      const continued = index < sections.length - 1
-      const prefixed = section.fitted
-        ? attachBranch(section.rows, continued)
-        : renderBranchBlock(withBranch(section.rows.join('\n'), continued), Math.max(1, width - 1))
-      for (const row of prefixed) rows.push(` ${row}`)
+    // Claude Code marks a card's result once: the first body row of the whole
+    // card carries `⎿`, and every later row — of this section or the next —
+    // aligns under it. Sections remain separate only so a `fitted` one (a
+    // rendered diff, whose background fills would tear) is never re-wrapped.
+    let lead = true
+    for (const section of this.bodySections(inner, expanded)) {
+      const sectionRows = section.fitted
+        ? section.rows
+        : section.rows.flatMap(row => wrapTextWithAnsi(row, inner))
+      for (const row of sectionRows) {
+        if (lead) {
+          lead = false
+          rows.push(`${this.palette.dim(RESULT_LEAD)}${row}`)
+          continue
+        }
+        // A blank body row keeps no indent: trailing spaces would otherwise be
+        // copied out of the transcript and read as stray whitespace.
+        rows.push(stripTerminalSequences(row).trim() === '' ? '' : `${RESULT_INDENT}${row}`)
+      }
     }
     return plainIfNoColor(this.palette, rows)
   }
 
   /**
-   * The card's one header row: `● <tool> <summary>`. The bullet carries the
-   * call's state as color (dim while running, green settled, red failed) and the
-   * tool name is bold, so a transcript scans as a list of what ran; the summary
-   * is the call's own one-line detail (a command, an edited path) in the
-   * recessed tone.
+   * The card's one header row: `⏺ <tool>(<summary>)`. The bullet carries the
+   * call's state as color (Claude Code's orange while the call is in flight,
+   * green settled, red failed) and the tool name is bold, so a transcript scans
+   * as a list of what ran; the parenthesized summary is the call's own one-line
+   * detail (a command, an edited path) in the recessed tone.
    */
   private headerRow(width: number): string {
     const isError = this.result?.isError ?? false
-    const bullet = this.result === undefined
-      ? this.palette.dim('●')
-      : this.palette.bold(accent(this.palette, isError ? CLAUDE_COLORS.error : CLAUDE_COLORS.success, '●'))
+    const status = this.result === undefined
+      ? CLAUDE_COLORS.claude
+      : isError ? CLAUDE_COLORS.error : CLAUDE_COLORS.success
+    const bullet = this.palette.bold(accent(this.palette, status, TOOL_BULLET))
     const name = this.palette.bold(displayText(this.name))
     const summary = this.headerSummary()
     // The header is a single card row: collapse an embedded newline to an inline
     // escape so it cannot break onto extra rows and collide with the body below.
     const text = summary === undefined
       ? `${bullet} ${name}`
-      : `${bullet} ${name} ${this.palette.dim(displayInlineText(summary))}`
+      : `${bullet} ${name}${this.palette.dim(`(${displayInlineText(summary)})`)}`
     return truncateToWidth(text, Math.max(1, width - 2), '')
   }
 
