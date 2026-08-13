@@ -1,0 +1,14 @@
+# dsh-tui bundle patch: an interactive terminal UI riding over dsh-base.
+# Two rows, mirroring the headless bundle's split:
+#   tui-startup parses this app's own command line (the launcher only knows
+#   --profile/--patch and the web/plugin subcommands) and provides the parsed
+#   values as the `tuiStartup` service; tui-runner consumes that service and
+#   owns the Ink render loop, the agent session, and the approval answerer.
+
+- insert:
+    - id: tui-startup
+      name: 'dsh-tui/startup'
+
+    - id: tui-runner
+      name: 'dsh-tui'
+      inject: [tuiStartup]
