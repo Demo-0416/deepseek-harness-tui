@@ -1,67 +1,35 @@
 /**
- * The plugins screen: a read-only table of loaded plugins and their lifecycle
- * status. Esc returns to the chat screen.
+ * Plugins screen: the loaded cordis plugin registry with fiber status.
+ * Esc returns to the chat screen.
  * @module dsh-tui/tui/screens/plugins
  */
 
 import React, { useMemo } from 'react'
 import { Box, Text, useInput } from 'ink'
 import type { TuiController } from '../../core/controller.ts'
-import { ThemedText, useTheme } from '../primitives/themed.tsx'
+import { useTheme } from '../primitives/themed.tsx'
 
-export interface PluginsScreenProps {
-  controller: TuiController
-}
-
-type StatusToken = 'success' | 'warning' | 'error' | 'muted'
-
-/** Map a raw plugin status string to a theme token. */
-function statusToken(status: string): StatusToken {
-  const s = status.toLowerCase()
-  if (s === 'active' || s === 'loaded') return 'success'
-  if (s === 'pending') return 'warning'
-  if (s === 'error') return 'error'
-  return 'muted'
-}
-
-export function PluginsScreen({ controller }: PluginsScreenProps): React.ReactElement {
+export function PluginsScreen({ controller }: { controller: TuiController }): React.ReactElement {
   const theme = useTheme()
   const plugins = useMemo(() => controller.listPlugins(), [controller])
 
   useInput((_input, key) => {
-    if (key.escape) controller.setScreen('chat')
+    if (key.escape || key.return) controller.setScreen('chat')
   })
 
   return (
-    <Box flexDirection="column" padding={1}>
-      <Box justifyContent="space-between">
-        <ThemedText token="brand" bold>plugins</ThemedText>
-        <ThemedText token="muted">{plugins.length} total</ThemedText>
+    <Box flexDirection="column" paddingX={1}>
+      <Box>
+        <Text color={theme.brand} bold>plugins</Text>
+        <Text color={theme.dim}>  {plugins.length} loaded · esc back</Text>
       </Box>
-
-      <Box marginTop={1} justifyContent="space-between">
-        <ThemedText token="dim">NAME</ThemedText>
-        <ThemedText token="dim">STATUS</ThemedText>
-      </Box>
-
-      {plugins.length === 0 ? (
-        <Box marginTop={1}>
-          <ThemedText token="muted">no plugins loaded</ThemedText>
+      {plugins.length === 0 && <Text color={theme.muted}>plugin registry unavailable</Text>}
+      {plugins.map(plugin => (
+        <Box key={plugin.name}>
+          <Text color={theme.muted}>{plugin.name.padEnd(48)}</Text>
+          <Text color={plugin.status === 'active' ? theme.success : theme.dim}>{plugin.status}</Text>
         </Box>
-      ) : (
-        <Box flexDirection="column">
-          {plugins.map(plugin => (
-            <Box key={plugin.name} justifyContent="space-between">
-              <ThemedText token="text">{plugin.name}</ThemedText>
-              <ThemedText token={statusToken(plugin.status)}>{plugin.status}</ThemedText>
-            </Box>
-          ))}
-        </Box>
-      )}
-
-      <Box marginTop={1}>
-        <Text color={theme.dim}>esc back</Text>
-      </Box>
+      ))}
     </Box>
   )
 }

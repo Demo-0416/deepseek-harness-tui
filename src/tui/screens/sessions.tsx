@@ -1,131 +1,83 @@
 /**
- * The session picker screen: lists persisted sessions (newest first) with a
- * type-to-filter search. Up/Down moves the selection, Enter resumes the
- * selected session, Esc returns to chat.
+ * Session picker: lists persisted sessions newest first, resumes the
+ * selection, or starts a fresh session. Esc returns to the chat screen.
  * @module dsh-tui/tui/screens/sessions
  */
 
 import React, { useEffect, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
-import { homedir } from 'node:os'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import type { TuiController } from '../../core/controller.ts'
-import { ThemedText, useTheme } from '../primitives/themed.tsx'
+import { useTheme } from '../primitives/themed.tsx'
 
-export interface SessionPickerProps {
-  controller: TuiController
-}
+/** Visible rows in the picker window. */
+const PAGE = 15
 
-/** Abbreviate a cwd by replacing the home prefix with ~. */
-function shortCwd(cwd: string | undefined): string {
-  if (cwd === undefined || cwd === '') return '~'
-  const home = homedir()
-  if (cwd === home) return '~'
-  if (cwd.startsWith(`${home}/`)) return `~${cwd.slice(home.length)}`
-  return cwd
-}
-
-/** Format an epoch-ms timestamp as HH:MM. */
-function formatTime(epochMs: number): string {
-  const d = new Date(epochMs)
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  return `${hh}:${mm}`
-}
-
-export function SessionPicker({ controller }: SessionPickerProps): React.ReactElement {
+export function SessionPicker({ controller }: { controller: TuiController }): React.ReactElement {
   const theme = useTheme()
   const [sessions, setSessions] = useState<SessionHeader[] | undefined>(undefined)
-  const [filter, setFilter] = useState('')
-  const [selected, setSelected] = useState(0)
+  const [cursor, setCursor] = useState(0)
+  const activeId = controller.getState().sessionId
 
   useEffect(() => {
-    let cancelled = false
-    controller.listSessions()
-      .then(list => { if (!cancelled) setSessions(list) })
-      .catch(() => { if (!cancelled) setSessions([]) })
-    return () => { cancelled = true }
+    void controller.listSessions().then(list => {
+      setSessions(list.filter(s => s.origin !== 'subagent'))
+    })
   }, [controller])
-
-  const query = filter.toLowerCase()
-  const filtered = (sessions ?? []).filter(s =>
-    query === ''
-    || s.id.toLowerCase().includes(query)
-    || (s.cwd ?? '').toLowerCase().includes(query),
-  )
-  const clamped = Math.min(selected, Math.max(0, filtered.length - 1))
 
   useInput((input, key) => {
     if (key.escape) {
       controller.setScreen('chat')
       return
     }
-    if (key.return) {
-      const target = filtered[clamped]
-      if (target !== undefined) void controller.resumeSession(target.id)
+    if (sessions === undefined || sessions.length === 0) {
+      if (input === 'n') void controller.newSession()
       return
     }
-    if (key.upArrow) {
-      setSelected(Math.max(0, clamped - 1))
-      return
-    }
-    if (key.downArrow) {
-      setSelected(Math.min(filtered.length - 1, clamped + 1))
-      return
-    }
-    if (key.backspace || key.delete) {
-      setFilter(prev => prev.slice(0, -1))
-      setSelected(0)
-      return
-    }
-    if (input.length > 0 && !key.meta && !key.ctrl) {
-      setFilter(prev => prev + input)
-      setSelected(0)
+    if (key.upArrow) setCursor(c => Math.max(0, c - 1))
+    else if (key.downArrow) setCursor(c => Math.min(sessions.length - 1, c + 1))
+    else if (key.return) {
+      const target = sessions[cursor]
+      if (target !== undefined && target.id !== activeId) void controller.resumeSession(target.id)
+      else controller.setScreen('chat')
+    } else if (input === 'n') {
+      void controller.newSession()
     }
   })
 
+  const start = Math.max(0, Math.min(cursor - Math.floor(PAGE / 2), (sessions?.length ?? 0) - PAGE))
+  const visible = sessions?.slice(start, start + PAGE) ?? []
+
   return (
-    <Box flexDirection="column" padding={1}>
-      <Box justifyContent="space-between">
-        <ThemedText token="brand" bold>sessions</ThemedText>
-        <ThemedText token="muted">
-          {sessions === undefined ? 'loading…' : `${filtered.length}/${sessions.length}`}
-        </ThemedText>
+    <Box flexDirection="column" paddingX={1}>
+      <Box>
+        <Text color={theme.brand} bold>sessions</Text>
+        <Text color={theme.dim}>  ↑↓ move · enter resume · n new · esc back</Text>
       </Box>
-
-      <Box marginTop={1}>
-        <Text color={theme.muted}>❯ </Text>
-        <Text>
-          <Text>{filter}</Text>
-          <Text inverse> </Text>
-        </Text>
-      </Box>
-
-      <Box flexDirection="column" marginTop={1}>
-        {sessions !== undefined && filtered.length === 0 ? (
-          <ThemedText token="muted">no sessions yet</ThemedText>
-        ) : (
-          filtered.map((s, i) => {
-            const isSelected = i === clamped
-            return (
-              <Box key={s.id}>
-                <Text color={isSelected ? theme.brand : theme.muted} bold={isSelected}>
-                  {isSelected ? '❯' : ' '}
-                </Text>
-                <Text color={isSelected ? theme.brand : theme.text} bold={isSelected}>
-                  {' '}{shortCwd(s.cwd)}
-                </Text>
-                <Text color={theme.muted}>{'  '}{formatTime(s.createdAt)}</Text>
-                <Text color={theme.dim}>{'  '}{s.id.slice(0, 8)}</Text>
-              </Box>
-            )
-          })
-        )}
-      </Box>
-
-      <Box marginTop={1}>
-        <Text color={theme.dim}>↑↓ select · enter resume · esc back</Text>
-      </Box>
+      {sessions === undefined && <Text color={theme.muted}>loading…</Text>}
+      {sessions !== undefined && sessions.length === 0 && (
+        <Text color={theme.muted}>no persisted sessions — press n to start one</Text>
+      )}
+      {visible.map((session, i) => {
+        const index = start + i
+        const active = index === cursor
+        const isCurrent = session.id === activeId
+        const when = new Date(session.createdAt).toLocaleString()
+        return (
+          <Box key={session.id}>
+            <Text color={active ? theme.brand : theme.dim}>{active ? '❯ ' : '  '}</Text>
+            <Text color={active ? theme.text : theme.muted} bold={isCurrent}>
+              {session.id.slice(0, 24).padEnd(26)}
+            </Text>
+            <Text color={theme.dim}>{when}</Text>
+            {session.cwd !== undefined && <Text color={theme.dim}>  {session.cwd}</Text>}
+            {isCurrent && <Text color={theme.success}>  ● current</Text>}
+          </Box>
+        )
+      })}
+      {sessions !== undefined && sessions.length > PAGE && (
+        <Text color={theme.dim}>{start + 1}-{Math.min(start + PAGE, sessions.length)} of {sessions.length}</Text>
+      )}
     </Box>
   )
 }

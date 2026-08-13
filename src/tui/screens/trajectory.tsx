@@ -1,137 +1,65 @@
 /**
- * The trajectory screen: a reverse-chronological ledger of the session's raw
- * events for debugging the agent's event stream. Shows the last 100 events,
- * newest first; ↑/↓ scroll, esc returns to chat.
+ * Trajectory screen: the raw session event log, newest at the bottom, with
+ * simple scroll. Esc returns to the chat screen.
  * @module dsh-tui/tui/screens/trajectory
  */
 
-import React, { useMemo, useState, useSyncExternalStore } from 'react'
+import React, { useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import type { TuiController } from '../../core/controller.ts'
-import { ThemedText, useTheme } from '../primitives/themed.tsx'
+import { useTheme } from '../primitives/themed.tsx'
 
-/** How many trailing events the ledger shows. */
-const WINDOW = 100
-/** Max length of the data summary per row. */
-const SUMMARY_MAX = 80
-/** How many data fields the summary includes. */
-const SUMMARY_FIELDS = 3
+/** Visible rows per page. */
+const PAGE = 25
 
-/** Theme token for an event type, per the screen's color rules. */
-function typeToken(type: string): 'dim' | 'text' | 'brand' | 'error' | 'muted' {
-  if (type.startsWith('turn') || type.startsWith('step')) return 'dim'
-  if (type.startsWith('user') || type.startsWith('assistant')) return 'text'
-  if (type.startsWith('tool')) return 'brand'
-  if (type === 'error' || type.startsWith('error/') || type.endsWith('/error')) return 'error'
-  return 'muted'
-}
-
-/** Format an epoch-ms timestamp as HH:MM:SS. */
-function formatTime(time: number): string {
-  const date = new Date(time)
-  const hh = String(date.getHours()).padStart(2, '0')
-  const mm = String(date.getMinutes()).padStart(2, '0')
-  const ss = String(date.getSeconds()).padStart(2, '0')
-  return `${hh}:${mm}:${ss}`
-}
-
-/** Truncate a summary to the max length with an ellipsis. */
-function truncate(text: string): string {
-  return text.length > SUMMARY_MAX ? `${text.slice(0, SUMMARY_MAX)}…` : text
-}
-
-/** Render one data value as a short string. */
-function renderValue(value: unknown): string {
-  if (value === null) return 'null'
-  if (value === undefined) return ''
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value)
-  }
-  try {
-    return JSON.stringify(value) ?? String(value)
-  } catch {
-    return String(value)
-  }
-}
-
-/** Summarize an event's data payload as `key=value` pairs, truncated. */
-function summarizeData(data: unknown): string {
-  if (data === null || data === undefined) return ''
-  if (typeof data !== 'object') return truncate(renderValue(data))
-  const parts: string[] = []
-  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-    const rendered = renderValue(value)
-    if (rendered === '') continue
-    parts.push(`${key}=${rendered}`)
-    if (parts.length >= SUMMARY_FIELDS) break
-  }
-  return truncate(parts.join(' '))
-}
-
-export interface TrajectoryScreenProps {
-  controller: TuiController
-}
-
-export function TrajectoryScreen({ controller }: TrajectoryScreenProps): React.ReactElement {
+export function TrajectoryScreen({ controller }: { controller: TuiController }): React.ReactElement {
   const theme = useTheme()
-  const [offset, setOffset] = useState(0)
-
-  // Re-render as new events stream in: the store flushes on a batch timer.
-  const store = controller.sessionStore
-  useSyncExternalStore(
-    useMemo(() => (store === undefined ? (() => () => {}) : store.subscribe.bind(store)), [store]),
-    useMemo(() => (() => controller.sessionEvents().length), [controller]),
-  )
-
   const events = controller.sessionEvents()
-  const total = events.length
-  const shown = Math.min(WINDOW, total)
-  const rows = events.slice(-WINDOW).reverse()
-  const maxOffset = Math.max(0, rows.length - 1)
-  const scroll = Math.min(offset, maxOffset)
-  const visible = rows.slice(scroll)
+  // Offset from the tail: 0 shows the newest page.
+  const [offset, setOffset] = useState(0)
+  const maxOffset = Math.max(0, events.length - PAGE)
 
-  useInput((_input, key) => {
+  useInput((input, key) => {
     if (key.escape) {
       controller.setScreen('chat')
       return
     }
-    if (key.upArrow) {
-      setOffset(prev => Math.min(prev + 1, maxOffset))
-      return
-    }
-    if (key.downArrow) {
-      setOffset(prev => Math.max(prev - 1, 0))
-    }
+    if (key.upArrow || input === 'k') setOffset(o => Math.min(maxOffset, o + 1))
+    else if (key.downArrow || input === 'j') setOffset(o => Math.max(0, o - 1))
+    else if (key.pageUp) setOffset(o => Math.min(maxOffset, o + PAGE))
+    else if (key.pageDown) setOffset(o => Math.max(0, o - PAGE))
+    else if (input === 'g') setOffset(maxOffset)
+    else if (input === 'G') setOffset(0)
   })
+
+  const end = events.length - offset
+  const start = Math.max(0, end - PAGE)
+  const visible = events.slice(start, end)
 
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box>
-        <ThemedText token="brand" bold>trajectory</ThemedText>
-        <ThemedText token="muted">  showing last {shown} of {total}</ThemedText>
+        <Text color={theme.brand} bold>trajectory</Text>
+        <Text color={theme.dim}>
+          {'  '}{events.length} events · showing {start + 1}-{end} · ↑↓/jk scroll · g/G ends · esc back
+        </Text>
       </Box>
-      <Box>
-        <ThemedText token="dim">↑/↓ scroll · esc back to chat</ThemedText>
-      </Box>
-      {total === 0 && (
-        <Box>
-          <ThemedText token="muted">no events yet</ThemedText>
-        </Box>
-      )}
-      {scroll > 0 && (
-        <Box>
-          <Text color={theme.dim}>── ↑ {scroll} older ──</Text>
-        </Box>
-      )}
-      {visible.map(event => (
-        <Box key={event.seq}>
-          <Text color={theme.dim}>{String(event.seq).padStart(5, ' ')}</Text>
-          <Text color={theme.muted}> {formatTime(event.time)} </Text>
-          <ThemedText token={typeToken(event.type)} bold>{event.type}</ThemedText>
-          <Text color={theme.muted}> {summarizeData(event.data)}</Text>
-        </Box>
-      ))}
+      {visible.map((event, i) => {
+        let preview = ''
+        try {
+          preview = JSON.stringify((event as { data?: unknown }).data ?? {})
+        } catch {
+          // Cyclic or non-serializable payloads only lose their preview.
+          preview = '<unserializable>'
+        }
+        return (
+          <Box key={start + i}>
+            <Text color={theme.dim}>{String(start + i).padStart(5)} </Text>
+            <Text color={theme.plan}>{event.type.padEnd(22)}</Text>
+            <Text color={theme.muted}>{preview.length > 110 ? `${preview.slice(0, 110)}…` : preview}</Text>
+          </Box>
+        )
+      })}
     </Box>
   )
 }
