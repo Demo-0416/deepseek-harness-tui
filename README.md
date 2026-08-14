@@ -75,7 +75,7 @@ all three.
 
 | Surface | Keys |
 |---|---|
-| Panel (`/help`, `/hotkeys`, `/palette`, `/status`) | Up/Down scroll · PgUp/PgDn page · g/G or Home/End top or bottom · Esc or Ctrl+C close |
+| Panel (`/help`, `/hotkeys`, `/palette`, `/status`, `/mcp`, `/doctor`) | Up/Down scroll · PgUp/PgDn page · g/G or Home/End top or bottom · Esc or Ctrl+C close |
 | Question | Up/Down move · Space toggle (multi-select) · Tab/c custom answer, Esc back to the options · PgUp/PgDn page long detail · Enter submit · Esc or Ctrl+C cancel |
 | Permission prompt | Up/Down move · 1-4 answer straight away · Enter confirm · Esc or Ctrl+C deny |
 | History search (Ctrl+R) | type to match · Ctrl+R steps to an older match · Tab or Esc accepts into the editor · Enter sends it · Ctrl+C or an emptied query restores the draft |
@@ -122,6 +122,23 @@ left. Every other binding is configurable — see `keybindings` below.
 Those are this bundle's own commands. Whatever else the profile mounts registers
 its own on top of them, and `/help` lists what the running session actually has.
 
+`/details` is retired. It packed two unrelated switches into one argument syntax
+— `[collapsed|expanded|hidden] [reasoning [on|off]]` — that had to be memorized
+to be used, and it remembered neither past the process. The two things it did
+belong in different places: the tool-card phase is what Ctrl+O cycles on the
+spot, and the thinking display is a standing preference. Both are rows in
+`/config` now, beside the theme row that opens `/theme`. Its
+`detailsDialogWidth` was renamed `settingsDialogWidth`, and its argument
+completions are `/theme`'s four values.
+
+What `/config` and `/theme` change applies at once and is written to the `tui`
+section of the harness's own settings document (`$DSH_HOME/settings.yaml`),
+through the same optional `settings` service `/model` saves a default model
+with. Every `/config` row reads its value live, so Ctrl+O pressed while the
+panel is open moves the tool-card row under it. A host that never mounts that
+service keeps every switch working for the session and simply forgets it at
+exit.
+
 `/lang` switches this terminal's own chrome — the command list, the panels
 (`/help`, `/status`, `/config`, `/search`, `/skills`, `/mcp`, `/doctor`,
 `/plugins`), the prompt and status rows, the dialogs and their buttons, and the
@@ -157,7 +174,14 @@ its four values, and `/resume` this workspace's recent sessions.
   row, and the prompt with its context line. A run of consecutive read-only
   calls — reads, greps, globs, `ls`/`cat`-shaped shell commands, MCP queries —
   reports as one row (`Searched for 3 patterns, read 2 files`) instead of one
-  card each; Ctrl+O opens the run back into its cards.
+  card each, and the row counts up while the run is still going before it
+  settles into the past tense; Ctrl+O opens the run back into its cards. A call
+  that writes never joins one — `cat a > b` writes `b`, whatever its verb says —
+  while a call that fails stays in the run and turns its bullet red, because a
+  failure the reader cannot see is worse than a row that admits one. Each
+  fragment of that row is a whole phrase per language rather than a verb and a
+  noun joined at render time, so Chinese picks its own word order, measure
+  words, and comma.
 - **Rewind** — `/rewind`, or a double Esc at an empty prompt: go back to an
   earlier prompt. With a host that can fork the session the conversation moves
   with it and the original stays resumable; otherwise the prompt comes back to
@@ -172,7 +196,24 @@ its four values, and `/resume` this workspace's recent sessions.
 - **Plugins** — `/plugins`: search and inspect the Loader's entries.
 - **Skills** — `/skills`: search what this session composes and read one skill's
   body; `/skill:<name>` is how you then load it into the conversation.
+- **Settings** — `/config`: the preferences this terminal decides for itself —
+  the thinking pin, the tool-card phase a session opens on, the theme — plus the
+  language and model rows, which are read-only and name the command that changes
+  them.
+- **Theme** — `/theme`, or the `/config` row: `auto` (follow the terminal's
+  report), `light`, `dark`, `no-color`, previewed on the screen behind the
+  picker as you move and restored if you leave by Esc.
 - **Status** — `/status`: session diagnostics, system prompt, registered tools.
+- **MCP** — `/mcp`: which MCP server each of this session's tools came from,
+  read back out of the `mcp__<server>__<tool>` names the tools are registered
+  under, because the harness keeps no registry to ask. It is read-only by
+  construction — the terminal holds no handle to connect, restart, or
+  authenticate a server — and a profile with no MCP row is told how to mount one
+  instead of shown an empty list.
+- **Doctor** — `/doctor`: what the session is running *on*, where `/status`
+  describes the session itself — the Node version, the terminal, the model
+  route, and the services this terminal degrades quietly without. Each check is
+  one line: a verdict, what was observed, and the one thing to do about it.
 - **Help** — `/help`: keys and slash commands.
 
 ## Configuration

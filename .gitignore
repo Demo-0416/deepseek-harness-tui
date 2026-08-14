@@ -1,5 +1,8 @@
 node_modules/
-lib/
+# lib/ is the build output, and it is committed on this branch: a dsh profile
+# mounts this package straight from the worktree (`dsh plugin add link:...`),
+# which resolves `main`/`exports` into lib/ without ever running a build.
+# Regenerate with `pnpm build` and commit the diff alongside the src change.
 *.tsbuildinfo
 .DS_Store
 .env
