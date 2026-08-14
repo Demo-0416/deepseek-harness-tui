@@ -10,14 +10,14 @@
  * @module @deepseek-ai/dsh-tui/render/preview
  */
 
-import { CLAUDE_COLORS, fg } from './palette.ts'
+import { BRAND_COLORS, fg } from './palette.ts'
 
 /** Style one line of previewed output; the default is the recessed status tone. */
 export type LineStyler = (line: string) => string
 
 /** The default recessed tone for preview chrome and unstyled body rows. */
 function muted(text: string): string {
-  return fg(CLAUDE_COLORS.inactive, text)
+  return fg(BRAND_COLORS.inactive, text)
 }
 
 /** Budgets and styling for {@link buildPreviewText}. */
@@ -67,7 +67,7 @@ export function buildPreviewText(lines: readonly string[], options: PreviewOptio
     text += `${text === '' ? '' : '\n'}${muted(`... (${remaining} more lines${hint})`)}`
   }
   if (expanded && totalLineCount > maxLines) {
-    text += `\n${fg(CLAUDE_COLORS.warning, `(display capped at ${maxLines} lines)`)}`
+    text += `\n${fg(BRAND_COLORS.warning, `(display capped at ${maxLines} lines)`)}`
   }
   return text
 }

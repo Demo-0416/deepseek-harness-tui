@@ -31,7 +31,7 @@ import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { displayInlineText, displayText } from './text.ts'
 import type { Palette } from './theme.ts'
 import { t } from '../i18n/index.ts'
-import { CLAUDE_COLORS, fg as paintFg } from '../render/palette.ts'
+import { BRAND_COLORS, fg as paintFg } from '../render/palette.ts'
 
 /**
  * What the user answered, in the two outcomes a person can produce. The
@@ -113,7 +113,7 @@ const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
  * `bold` carrying no escape is what tells the two apart.
  */
 function permissionAccent(palette: Palette, text: string): string {
-  return palette.bold('x') === 'x' ? text : paintFg(CLAUDE_COLORS.permission, text)
+  return palette.bold('x') === 'x' ? text : paintFg(BRAND_COLORS.permission, text)
 }
 
 /**

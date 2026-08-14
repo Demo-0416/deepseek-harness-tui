@@ -1,10 +1,9 @@
 /**
- * Claude Code's exact color values and the truecolor ANSI helpers the render
- * package paints with. These are fixed 24-bit brand colors taken from the
- * official claude-code dark theme, deliberately outside the theme-adaptive
- * {@link ../components/theme.ts | role palette}: a Claude Code transcript is
- * recognizable by these particular tones (the orange bullet, the diff greens),
- * so they must not remap with the terminal's own scheme.
+ * The dsh brand palette: fixed 24-bit colors built around the DeepSeek
+ * brand blue (#4D6BFE), deliberately outside the theme-adaptive
+ * {@link ../components/theme.ts | role palette}. A dsh transcript is
+ * recognizable by these tones (the blue bullet, the diff greens), so they
+ * must not remap with the terminal's own scheme.
  *
  * Every helper closes only the SGR group it opens — foreground spans close with
  * `39`, background spans with `49`, attributes with their own reset — so a span
@@ -19,12 +18,13 @@ export interface Rgb {
     readonly b: number;
 }
 /**
- * The Claude Code dark theme's exact palette. Names mirror the upstream theme
- * keys so a value can be traced back to the product it was taken from.
+ * The dsh brand palette. Names describe each color's role; the brand blue is
+ * the DeepSeek mark ink shared with the startup gradient in
+ * {@link ../components/theme.ts}.
  */
-export declare const CLAUDE_COLORS: {
-    /** The brand orange: the assistant bullet, the spinner verb, an in-progress todo. */
-    readonly claude: Rgb;
+export declare const BRAND_COLORS: {
+    /** The brand blue: the assistant bullet, the spinner verb, an in-progress todo. */
+    readonly brand: Rgb;
     /** A settled, successful tool call. */
     readonly success: Rgb;
     /** A failed tool call, and a signal/exit-status pill. */
@@ -33,15 +33,15 @@ export declare const CLAUDE_COLORS: {
     readonly warning: Rgb;
     /** The recessed status tone: elapsed time, token counts, fold hints. */
     readonly inactive: Rgb;
-    /** A permission prompt's accent. */
+    /** A permission prompt's accent, and inline code in prose. */
     readonly permission: Rgb;
-    /** Plan-mode chrome, on a dark terminal; see {@link claudeSchemeColors}. */
+    /** Plan-mode chrome, on a dark terminal; see {@link brandSchemeColors}. */
     readonly planMode: Rgb;
-    /** Auto-accept chrome, on a dark terminal; see {@link claudeSchemeColors}. */
+    /** Auto-accept chrome, on a dark terminal; see {@link brandSchemeColors}. */
     readonly autoAccept: Rgb;
     /**
      * Background fill behind a user message on a dark terminal, the block that
-     * marks the user's own turns; see {@link claudeSchemeColors}.
+     * marks the user's own turns; see {@link brandSchemeColors}.
      */
     readonly userMessageBg: Rgb;
     /** Muted outline of a bordered surface. */
@@ -72,18 +72,18 @@ export declare const CLAUDE_COLORS: {
     readonly diffSafeMuted: Rgb;
 };
 /**
- * The three Claude Code colors that cannot be one fixed brand tone.
+ * The three brand colors that cannot be one fixed tone.
  *
- * Everything else in {@link CLAUDE_COLORS} is a foreground the product keeps
+ * Everything else in {@link BRAND_COLORS} is a foreground the product keeps
  * across its themes, so it reads on any background. These do not: a fill is
  * only legible against the terminal's own background, and the two mode tones
- * are mid colors that upstream darkens for a light theme (`utils/theme.ts` —
- * plan dark `rgb(72,150,140)`, light `rgb(0,102,102)`; auto-accept dark
+ * are mid colors that must darken for a light theme (plan dark
+ * `rgb(90,115,190)`, light `rgb(20,70,145)`; auto-accept dark
  * `rgb(175,135,255)`, light `rgb(135,0,255)`). Left at their dark values on a
  * white terminal, the user's own prompts turn into a dark bar with dark text on
  * it and the mode badges wash out — which is exactly what the fixed fill did.
  */
-export interface ClaudeSchemeColors {
+export interface BrandSchemeColors {
     /** Background fill behind a user message. */
     readonly userMessageBg: Rgb;
     /** Plan-mode chrome: the mode badge and the plan blocks that carry it. */
@@ -92,8 +92,7 @@ export interface ClaudeSchemeColors {
     readonly autoAccept: Rgb;
 }
 /**
- * Claude Code's own values for the scheme-dependent colors, taken from its
- * `darkTheme` and `lightTheme`.
+ * The scheme-dependent brand colors.
  *
  * Returned as a fresh object per call so a caller can hold one and refresh it
  * in place (`Object.assign`) when the terminal reports a scheme change, the way
@@ -101,7 +100,7 @@ export interface ClaudeSchemeColors {
  * @param scheme - The terminal's reported color scheme.
  * @returns The fill and the two mode tones for that scheme.
  */
-export declare function claudeSchemeColors(scheme: 'dark' | 'light'): ClaudeSchemeColors;
+export declare function brandSchemeColors(scheme: 'dark' | 'light'): BrandSchemeColors;
 /** Reset every SGR group. Only for a span that owns the whole line. */
 export declare const RESET = "\u001B[0m";
 /** Close a foreground span without touching background or attributes. */

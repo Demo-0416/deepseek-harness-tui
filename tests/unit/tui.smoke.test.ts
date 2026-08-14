@@ -237,10 +237,14 @@ describe('TUI smoke', { skip: skipWithoutEntry }, () => {
     const harness = await mount()
     try {
       const rows = harness.terminal.text().split('\n').map(row => row.trimEnd())
-      assert.match(rows[0] ?? '', /^ DEEPSEEK HARNESS v\d+\.\d+\.\d+$/, `banner row:\n${rows.slice(0, 4).join('\n')}`)
+      const banner = rows.slice(0, 12).join('\n')
+      // The welcome box in Claude Code's full shape: the wordmark rides the top
+      // border, and the panels below carry the mascot and the identity lines.
+      assert.match(rows[0] ?? '', /^ ╭─ DEEPSEEK HARNESS v\d+\.\d+\.\d+ ─+╮$/u, `banner opens on the titled frame:\n${banner}`)
       // The route the next turn runs under, then the workspace: what Claude Code
-      // puts under its own wordmark.
-      assert.equal(rows[1], ' deepseek-v4-flash · /workspace/project')
+      // centers beside its own mascot in the left panel.
+      assert.ok(rows.some(row => /^ │ +deepseek-v4-flash +│.*│$/u.test(row)), `route row:\n${banner}`)
+      assert.ok(rows.some(row => /^ │ +\/workspace\/project +│.*│$/u.test(row)), `workspace row:\n${banner}`)
       const frame = harness.terminal.text()
       // A fresh session's id is a uuid the user did not choose and cannot act
       // on; only a resumed one is worth naming.
@@ -266,8 +270,12 @@ describe('TUI smoke', { skip: skipWithoutEntry }, () => {
     try {
       const rows = harness.terminal.text().split('\n').map(row => row.trimEnd())
       // The short id is exactly what `--resume` takes back, and the title says
-      // which conversation it is — so neither needs a transcript row of its own.
-      assert.equal(rows[2], ' resumed 85d19568 · ordering bug')
+      // which conversation it is — so neither needs a transcript row of its
+      // own; both ride the box's last identity line.
+      assert.ok(
+        rows.some(row => /^ │ +resumed 85d19568 · ordering bug +│.*│$/u.test(row)),
+        `resumed row:\n${rows.slice(0, 12).join('\n')}`,
+      )
       assert.ok(
         !harness.terminal.text().includes('5bbc-4347'),
         `the full uuid stays off the banner:\n${harness.terminal.text()}`,

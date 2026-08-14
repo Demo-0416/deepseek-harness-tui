@@ -263,12 +263,14 @@ function referenceLabels(source: unknown): string[] | undefined {
 
 /**
  * A producer-injected context card's label: the plugin name when the source
- * names one, else its `kind`. The union is merge-extensible and the log is a
- * replay boundary, so this reads the fields without narrowing on `kind`.
+ * names one, the invoked skill for a `skill-invocation` injection, else its
+ * `kind`. The union is merge-extensible and the log is a replay boundary, so
+ * this reads the fields without narrowing on `kind`.
  */
 function contextLabel(source: unknown): string {
-  const record = source as { kind?: unknown; plugin?: unknown }
+  const record = source as { kind?: unknown; plugin?: unknown; name?: unknown }
   if (typeof record.plugin === 'string') return record.plugin
+  if (record.kind === 'skill-invocation' && typeof record.name === 'string') return `skill:${record.name}`
   if (typeof record.kind === 'string') return record.kind
   /* v8 ignore next -- every logged source carries at least a string kind. */
   return 'context'

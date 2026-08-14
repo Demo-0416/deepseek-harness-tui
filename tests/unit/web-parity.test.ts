@@ -346,7 +346,10 @@ describe('TUI /plugins', { skip: skipWithoutEntry }, () => {
       await delay(SETTLE_MS)
       const filtered = harness.terminal.text()
       assert.match(filtered, /1\/3 entries · 1 active/)
-      assert.ok(!filtered.includes('dsh-agent-loop'), `the filter must hide non-matches:\n${filtered}`)
+      // The banner's own `[Plugins]` summary sits above the panel and lists the
+      // whole inventory, so the filter is asserted on the panel's region only.
+      const panel = filtered.slice(filtered.indexOf('/plugins'))
+      assert.ok(!panel.includes('dsh-agent-loop'), `the filter must hide non-matches:\n${filtered}`)
 
       harness.terminal.send('\x1b')
       await delay(SETTLE_MS)

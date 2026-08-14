@@ -31,6 +31,7 @@ import { displayPath } from '../chat/helpers.ts'
 import { displayText } from './text.ts'
 import type { Palette } from './theme.ts'
 import { t } from '../i18n/index.ts'
+import { withTuiPresenters } from './tool-presenters.ts'
 import {
   CollapsedGroupComponent,
   ContextCardComponent,
@@ -699,7 +700,7 @@ export class TranscriptReconciler {
     const component = new ToolCardComponent(
       node.name,
       node.args,
-      this.deps.toolDefinition(node.name),
+      withTuiPresenters(node.name, this.deps.toolDefinition(node.name)),
       this.deps.maxToolOutputLines,
       this.deps.maxDiffEditLength,
       this.deps.palette,

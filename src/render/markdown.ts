@@ -9,7 +9,7 @@
  * - Styling is injected. Upstream hard-codes `chalk` plus a theme lookup;
  *   here every visual decision is a {@link MarkdownAnsiTheme} function, and
  *   {@link claudeMarkdownTheme} reproduces the upstream choices on top of
- *   {@link ../render/palette.ts | CLAUDE_COLORS}.
+ *   {@link ../render/palette.ts | BRAND_COLORS}.
  * - Rendering is synchronous and returns wrapped rows rather than one joined
  *   string, so a pi-tui component can render inside its own `render(width)`
  *   pass. Syntax highlighting is therefore not bundled: upstream resolves
@@ -40,7 +40,7 @@
 
 import { stripTerminalSequences, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui'
 import { Marked, type Token, type Tokens } from 'marked'
-import { CLAUDE_COLORS, dim, fg } from './palette.ts'
+import { BRAND_COLORS, dim, fg } from './palette.ts'
 
 /**
  * Line separator. Always `\n` — `os.EOL` is `\r\n` on Windows and the stray
@@ -121,7 +121,7 @@ export interface MarkdownAnsiTheme {
 }
 
 /**
- * Claude Code's own styling, on {@link ../render/palette.ts | CLAUDE_COLORS}.
+ * Claude Code's own styling, on {@link ../render/palette.ts | BRAND_COLORS}.
  *
  * `codeBlock` paints a fenced block in the same tone as an inline codespan.
  * Upstream leaves it unstyled because `cli-highlight` colors it token by token;
@@ -135,8 +135,8 @@ export const claudeMarkdownTheme: MarkdownAnsiTheme = {
   heading: (text, depth) => (depth === 1 ? bold(italic(underline(text))) : bold(text)),
   bold: text => bold(text),
   italic: text => italic(text),
-  code: text => fg(CLAUDE_COLORS.permission, text),
-  codeBlock: text => fg(CLAUDE_COLORS.permission, text),
+  code: text => fg(BRAND_COLORS.permission, text),
+  codeBlock: text => fg(BRAND_COLORS.permission, text),
   link: text => `${BLUE}${text}${FG_DEFAULT}`,
   quote: text => dim(text),
   listBullet: text => text,

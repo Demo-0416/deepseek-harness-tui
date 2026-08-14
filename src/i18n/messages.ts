@@ -76,7 +76,7 @@ export const EN_MESSAGES = {
   'hotkeys.interrupt': 'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
   'hotkeys.interruptAgain': 'Ctrl+C again on a turn that will not cancel exits without waiting for it',
   'hotkeys.panel': 'In a panel: ↑/↓ scroll • PgUp/PgDn page • g/G top or bottom • Esc close',
-  'hotkeys.question': 'In a question: ↑/↓ move • Space multi-select • {custom} • Enter confirm • Esc cancel',
+  'hotkeys.question': 'In a question: ↑/↓ move • 1-9 answer straight away • Space multi-select • "{custom}" row for a custom answer • Enter confirm • Esc cancel',
   'hotkeys.approval': 'In an approval: ↑/↓ move • 1-4 answer straight away • Enter confirm • Esc deny',
   'help.skill': '/skill:<name> [instructions] — load a skill into the conversation',
 
@@ -320,18 +320,17 @@ export const EN_MESSAGES = {
   // The last line an exiting terminal prints: how to come back to this session.
   'exit.resumeHint': 'Resume this session: {command}',
 
-  // The user-question dialog.
-  'dialog.question.header': 'Question {position}/{total} ({unanswered} unanswered)',
-  'dialog.question.selectOne': 'Select at least one option, or press {keys} for a custom answer.',
+  // The user-question dialog. The custom answer is the last numbered row of the
+  // option list rather than a separate mode, so its label is a list item the
+  // user reads and picks, not a key they have to be told about.
+  'dialog.question.customAnswerLabel': 'Type something.',
+  'dialog.question.progress': 'Question {position}/{total} · {unanswered} unanswered',
+  'dialog.question.selectOne': 'Select at least one option, or answer on the "{label}" row.',
   'dialog.question.emptyAnswer': 'Enter an answer before submitting.',
-  'dialog.question.selectedCount': '{count} selected',
-  'dialog.question.customAnswer': '{keys} custom answer',
-  'dialog.question.navigate': '↑/↓ navigate',
-  'dialog.question.spaceToggle': 'Space toggle',
-  'dialog.question.submit': 'Enter submit',
-  'dialog.question.escOptions': 'Esc options',
-  'dialog.question.escCancel': 'Esc cancel',
-  'dialog.question.escInterrupt': 'Esc interrupt',
+  'dialog.question.navigate': '↑/↓ to navigate',
+  'dialog.question.spaceToggle': 'Space to toggle',
+  'dialog.question.submit': 'Enter to select',
+  'dialog.question.escCancel': 'Esc to cancel',
   'dialog.question.moreAbove': '↑ {count} more',
   'dialog.question.moreBelow': '↓ {count} more',
   // The two rows the dialog only prints when the terminal cannot hold it: the
@@ -525,6 +524,10 @@ export const EN_MESSAGES = {
   // moves between them. `{key}` is filled from the installed keybinding manager,
   // so a rebound action prints its own key here too.
   'transcript.planModeBadge': 'plan mode on',
+  // Selected while a turn was already running: the mode writes no `plan/mode`
+  // event until the next accepted pre-step, so the badge says when it lands
+  // rather than pretending the mode is already in force.
+  'transcript.planModeBadgePending': 'plan mode on (next step)',
   'transcript.autoAcceptBadge': 'auto-accept on',
   'transcript.modeCycleHint': '({key} to cycle)',
   // The marker an XML tool result folds its hidden children behind. Same
@@ -706,7 +709,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'hotkeys.interrupt': 'Ctrl+C 运行中取消；输入中清空输入；空闲时连按两次退出',
   'hotkeys.interruptAgain': '对取消不掉的轮次再按一次 Ctrl+C，会直接退出而不再等它',
   'hotkeys.panel': '面板内：↑/↓ 滚动 • PgUp/PgDn 翻页 • g/G 跳到首尾 • Esc 关闭',
-  'hotkeys.question': '提问框内：↑/↓ 移动 • Space 多选 • {custom} • Enter 确认 • Esc 取消',
+  'hotkeys.question': '提问框内：↑/↓ 移动 • 1-9 直接作答 • Space 多选 • 在"{custom}"那一行自己填答案 • Enter 确认 • Esc 取消',
   'hotkeys.approval': '授权框内：↑/↓ 移动 • 1-4 直接作答 • Enter 确认 • Esc 拒绝',
   'help.skill': '/skill:<name> [instructions] — 把一个 skill 加载进对话',
 
@@ -900,17 +903,14 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'dialog.resume.ageDays.other': '{count} 天前',
   'exit.resumeHint': '恢复本会话：{command}',
 
-  'dialog.question.header': '第 {position}/{total} 个问题（{unanswered} 个待回答）',
-  'dialog.question.selectOne': '至少选择一项，或按 {keys} 自己填写答案。',
+  'dialog.question.customAnswerLabel': '自己写一个答案。',
+  'dialog.question.progress': '第 {position}/{total} 个问题 · {unanswered} 个待回答',
+  'dialog.question.selectOne': '至少选择一项，或在"{label}"那一行填写答案。',
   'dialog.question.emptyAnswer': '提交前请先填写答案。',
-  'dialog.question.selectedCount': '已选 {count} 项',
-  'dialog.question.customAnswer': '{keys} 自定义答案',
   'dialog.question.navigate': '↑/↓ 移动',
   'dialog.question.spaceToggle': 'Space 选中',
-  'dialog.question.submit': 'Enter 提交',
-  'dialog.question.escOptions': 'Esc 返回选项',
+  'dialog.question.submit': 'Enter 选择',
   'dialog.question.escCancel': 'Esc 取消',
-  'dialog.question.escInterrupt': 'Esc 中断',
   'dialog.question.moreAbove': '↑ 还有 {count} 项',
   'dialog.question.moreBelow': '↓ 还有 {count} 项',
   'dialog.question.error': '错误：{message}',
@@ -1049,6 +1049,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'transcript.compactionMarker': '… 更早的上下文已被压缩 …',
   'transcript.steeringBadge': '插入指令',
   'transcript.planModeBadge': 'plan 模式已开启',
+  'transcript.planModeBadgePending': 'plan 模式已开启（下一步生效）',
   'transcript.autoAcceptBadge': 'auto-accept 已开启',
   'transcript.modeCycleHint': '({key} 切换模式)',
   'transcript.xmlOmitted.one': '… 还有 {count} 行（{key} 展开）',

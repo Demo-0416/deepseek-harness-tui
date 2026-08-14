@@ -24,7 +24,7 @@
 
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
 import { diffWords, structuredPatch } from 'diff'
-import { bgAnsi, BG_DEFAULT, CLAUDE_COLORS, fgAnsi, RESET } from './palette.ts'
+import { bgAnsi, BG_DEFAULT, BRAND_COLORS, fgAnsi, RESET } from './palette.ts'
 
 /** Split view engages only at this width or above; below it a diff renders unified. */
 export const SPLIT_MIN_WIDTH = 150
@@ -54,10 +54,10 @@ const D_RST = RESET
 const D_BOLD = '\x1b[1m'
 const D_DIM = '\x1b[2m'
 
-const BG_ADD = bgAnsi(CLAUDE_COLORS.diffAddedBg)
-const BG_DEL = bgAnsi(CLAUDE_COLORS.diffRemovedBg)
-const BG_ADD_W = bgAnsi(CLAUDE_COLORS.diffAddedWordBg)
-const BG_DEL_W = bgAnsi(CLAUDE_COLORS.diffRemovedWordBg)
+const BG_ADD = bgAnsi(BRAND_COLORS.diffAddedBg)
+const BG_DEL = bgAnsi(BRAND_COLORS.diffRemovedBg)
+const BG_ADD_W = bgAnsi(BRAND_COLORS.diffAddedWordBg)
+const BG_DEL_W = bgAnsi(BRAND_COLORS.diffRemovedWordBg)
 // The gutter shares its row's fill: one continuous band from the sign column
 // through the code, which is how the change reads as a single stripe.
 const BG_GUTTER_ADD = BG_ADD
@@ -66,13 +66,13 @@ const BG_GUTTER_DEL = BG_DEL
 const BG_BASE = BG_DEFAULT
 const BG_EMPTY = BG_DEFAULT
 
-const FG_ADD = fgAnsi(CLAUDE_COLORS.diffAddedFg)
-const FG_DEL = fgAnsi(CLAUDE_COLORS.diffRemovedFg)
-const FG_DIM = fgAnsi(CLAUDE_COLORS.diffDim)
-const FG_LNUM = fgAnsi(CLAUDE_COLORS.diffLineNumber)
-const FG_RULE = fgAnsi(CLAUDE_COLORS.diffRule)
-const FG_STRIPE = fgAnsi(CLAUDE_COLORS.diffStripe)
-const FG_SAFE_MUTED = fgAnsi(CLAUDE_COLORS.diffSafeMuted)
+const FG_ADD = fgAnsi(BRAND_COLORS.diffAddedFg)
+const FG_DEL = fgAnsi(BRAND_COLORS.diffRemovedFg)
+const FG_DIM = fgAnsi(BRAND_COLORS.diffDim)
+const FG_LNUM = fgAnsi(BRAND_COLORS.diffLineNumber)
+const FG_RULE = fgAnsi(BRAND_COLORS.diffRule)
+const FG_STRIPE = fgAnsi(BRAND_COLORS.diffStripe)
+const FG_SAFE_MUTED = fgAnsi(BRAND_COLORS.diffSafeMuted)
 const DIVIDER = `${FG_RULE}│${D_RST}`
 
 /** One row of a parsed diff. `sep` is a collapsed-context marker, not file content. */

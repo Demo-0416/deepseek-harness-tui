@@ -356,6 +356,23 @@ describe('TUI submission routing', { skip: skipWithoutEntry }, () => {
       await unmount(harness)
     }
   })
+
+  it('sends a pasted absolute path to the model instead of reading it as a command', async () => {
+    const harness = await mount()
+    try {
+      harness.terminal.send('/Users/me/my_agents/dsh-tui')
+      harness.terminal.send('\r')
+      await delay(SETTLE_MS)
+
+      // A leading '/' alone used to make this "Unknown command", even though
+      // the line cannot parse as a command name: it was a path the user
+      // pasted, not a command they typed.
+      assert.doesNotMatch(harness.terminal.text(), /Unknown command/)
+      assert.deepEqual(delivered(harness), ['/Users/me/my_agents/dsh-tui'])
+    } finally {
+      await unmount(harness)
+    }
+  })
 })
 
 /** One discovered skill, with only the fields the entry reads spelled out. */
@@ -369,7 +386,7 @@ function summary(name: string): SkillSummary {
   }
 }
 
-/** The loaded definition `/skill:<name>` renders into the first user turn. */
+/** The loaded definition `/skill:<name>` injects beside the first user turn. */
 function definition(name: string): SkillDefinition {
   return { ...summary(name), content: `body of ${name}` }
 }
@@ -402,7 +419,10 @@ describe('TUI startup skill ordering', { skip: skipWithoutEntry }, () => {
 
       const sent = delivered(harness)
       assert.equal(sent.length, 2, `both turns land once the skill resolves:\n${sent.join('\n---\n')}`)
-      assert.match(sent[0] ?? '', /<skill name="migrate">/, 'the seeded skill goes first')
+      assert.equal(sent[0], '/skill:migrate', 'the seeded skill\'s command-line echo goes first')
+      // The body is injected context beside the turn, never user prose.
+      const injected = harness.agent.injected.map(messageText)
+      assert.match(injected[0] ?? '', /<skill_content name="migrate">/, 'its body rides the injected context')
       assert.equal(sent[1], 'and also fix the tests', 'and the held prompt follows it, unchanged')
     } finally {
       await unmount(harness)

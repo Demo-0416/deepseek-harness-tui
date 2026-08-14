@@ -16,7 +16,7 @@ import { type Config } from './config.ts';
 import type { TuiResumeHost, TuiRuntime } from './runtime.ts';
 import type { TuiStartupValues } from './startup.ts';
 export { TuiPromptService } from './prompt.ts';
-export { renderSkillInvocation } from './chat/skill-invocation.ts';
+export { renderSkillEcho } from './chat/skill-invocation.ts';
 export type { TuiForkRequest, TuiResumeHost, TuiRuntime } from './runtime.ts';
 export { resolveTuiConfig, TuiConfigSchema, Config, type ResolvedTuiConfig, type ResolvedTuiThemeConfig, type TuiConfig, type TuiThemeConfig, } from './config.ts';
 export { DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES, DEFAULT_FILE_SEARCH_MAX_ENTRIES, DEFAULT_FILE_SEARCH_MAX_RESULTS, } from './chat/file-autocomplete.ts';

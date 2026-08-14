@@ -9,7 +9,7 @@
  * - Styling is injected. Upstream hard-codes `chalk` plus a theme lookup;
  *   here every visual decision is a {@link MarkdownAnsiTheme} function, and
  *   {@link claudeMarkdownTheme} reproduces the upstream choices on top of
- *   {@link ../render/palette.ts | CLAUDE_COLORS}.
+ *   {@link ../render/palette.ts | BRAND_COLORS}.
  * - Rendering is synchronous and returns wrapped rows rather than one joined
  *   string, so a pi-tui component can render inside its own `render(width)`
  *   pass. Syntax highlighting is therefore not bundled: upstream resolves
@@ -73,7 +73,7 @@ export interface MarkdownAnsiTheme {
     readonly hr: (text: string) => string;
 }
 /**
- * Claude Code's own styling, on {@link ../render/palette.ts | CLAUDE_COLORS}.
+ * Claude Code's own styling, on {@link ../render/palette.ts | BRAND_COLORS}.
  *
  * `codeBlock` paints a fenced block in the same tone as an inline codespan.
  * Upstream leaves it unstyled because `cli-highlight` colors it token by token;

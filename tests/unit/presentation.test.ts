@@ -29,7 +29,7 @@ import {
 import { StatusCardComponent, type StatusCardRow } from '../../src/components/dialogs.ts'
 import { setLocale, t } from '../../src/i18n/index.ts'
 import { claudeMarkdownTheme } from '../../src/render/markdown.ts'
-import { claudeSchemeColors } from '../../src/render/palette.ts'
+import { brandSchemeColors } from '../../src/render/palette.ts'
 import type { AssistantNode, ChatNode, ToolCallNode, UserMessageNode } from '../../src/core/types.ts'
 import {
   createTuiTestHarness,
@@ -214,8 +214,8 @@ describe('user message block', () => {
     const palette = createPalette(true)
     const dark = new UserMessageComponent('prompt', palette, 'dark').render(WIDTH).join('')
     const light = new UserMessageComponent('prompt', palette, 'light').render(WIDTH).join('')
-    const darkFill = claudeSchemeColors('dark').userMessageBg
-    const lightFill = claudeSchemeColors('light').userMessageBg
+    const darkFill = brandSchemeColors('dark').userMessageBg
+    const lightFill = brandSchemeColors('light').userMessageBg
     assert.ok(dark.includes(`48;2;${String(darkFill.r)};${String(darkFill.g)};${String(darkFill.b)}m`), dark)
     assert.ok(light.includes(`48;2;${String(lightFill.r)};${String(lightFill.g)};${String(lightFill.b)}m`), light)
     // A white terminal draws black text; upstream's light fill is near-white,
@@ -233,7 +233,7 @@ describe('user message block', () => {
     const palette = createPalette(true)
     const { reconciler, rows } = mountReconciler({ palette, scheme: 'light' })
     reconciler.reconcile([userNode('prompt')])
-    const fill = claudeSchemeColors('light').userMessageBg
+    const fill = brandSchemeColors('light').userMessageBg
     assert.ok(
       rows().join('').includes(`48;2;${String(fill.r)};${String(fill.g)};${String(fill.b)}m`),
       'the block is filled for the terminal the user is actually on',
@@ -280,14 +280,21 @@ describe('plan mode indicator', () => {
     const dark = planModeRow(palette, 'dark')
     const light = planModeRow(palette, 'light')
     assert.match(dark, /⏸ plan mode on/)
-    const darkTone = claudeSchemeColors('dark').planMode
-    const lightTone = claudeSchemeColors('light').planMode
+    const darkTone = brandSchemeColors('dark').planMode
+    const lightTone = brandSchemeColors('light').planMode
     assert.ok(dark.includes(`38;2;${String(darkTone.r)};${String(darkTone.g)};${String(darkTone.b)}m`), dark)
     assert.ok(light.includes(`38;2;${String(lightTone.r)};${String(lightTone.g)};${String(lightTone.b)}m`), light)
   })
 
   it('carries no escape when color is disabled', () => {
     assert.doesNotMatch(planModeRow(createPalette(false)), /\x1b/u)
+  })
+
+  it('says the mode commits at the next step while pending', () => {
+    // The cycle hint slot stays empty here: the badge's own words are what a
+    // queued selection changes, not the key it names.
+    const row = planModeRow(createPalette(true), 'dark', undefined, true)
+    assert.match(row, /⏸ plan mode on \(next step\)/)
   })
 })
 

@@ -111,7 +111,7 @@ export declare class StatusCardComponent implements Component {
     invalidate(): void;
     render(width: number): string[];
 }
-/** The left/right template line rendered above the editor. */
+/** The left/right template line rendered below the editor. */
 export declare class PromptContextComponent implements Component {
     private readonly leftTemplate;
     private readonly rightTemplate;
@@ -121,26 +121,16 @@ export declare class PromptContextComponent implements Component {
     render(width: number): string[];
 }
 /**
- * How the two keys that open a question's custom answer are named, wherever
- * they are named.
+ * The custom-answer row's label, as the dialog renders it and every other
+ * surface names it: the row is an ordinary numbered option at the end of the
+ * list, so there is no dedicated key to document — arrows or its number reach
+ * it like any other option.
  *
- * Both keys are bound — `Tab` and `c` — and neither belongs to the keybinding
- * registry, so nothing generated from the registry can spell them: the dialog
- * footer, the dialog's own "nothing selected" refusal, the shortcut list
- * `/help`, `/hotkeys` and `?` print, and the README's question row are four
- * hand-written places that have to agree. Three of them read this constant;
- * the README is held to it by the docs suite.
+ * The dialog and the shortcut list read `dialog.question.customAnswerLabel` per
+ * frame, so `/lang` moves what the user sees; this constant is the English form
+ * the docs suite holds the README to, which is a document that has no locale.
  */
-export declare const CUSTOM_ANSWER_KEYS = "Tab/c";
-/**
- * The custom-answer row as the question dialog's footer and the shortcut list
- * both print it, in English.
- *
- * The rendering surfaces read `dialog.question.customAnswer` per frame, so
- * `/lang` moves what the user sees; this constant is the English form the docs
- * suite holds the README to, which is a document that has no locale.
- */
-export declare const CUSTOM_ANSWER_HINT: string;
+export declare const CUSTOM_ANSWER_LABEL: string;
 /** A user's answer to one question: chosen option labels and an optional custom answer. */
 export interface QuestionSelection {
     selected: string[];
@@ -442,7 +432,12 @@ export declare class ResumePicker implements Component, Focusable {
     private renderScopeLine;
     render(width: number): string[];
 }
-/** Inline dialog for one user question with option or custom-answer modes. */
+/**
+ * Inline dialog for one user question. The option list carries a trailing
+ * "Type something." row — the custom answer is a numbered list item that turns
+ * into a one-line editor when focused, the way Claude Code renders its
+ * "Other" option, rather than a separate mode that trades the list away.
+ */
 export declare class QuestionDialog implements Component, Focusable {
     private readonly question;
     private readonly position;
@@ -457,14 +452,21 @@ export declare class QuestionDialog implements Component, Focusable {
     private selected;
     private headerPage;
     private selectedBlockPage;
-    private mode;
     private error;
     private readonly input;
     private readonly options;
     focused: boolean;
     constructor(question: AskUserQuestionItem, position: number, total: number, unanswered: number, maxVisible: number, maxHeight: () => number, palette: Palette, done: (selection: QuestionSelection) => void, cancel: () => void);
+    /** Index of the trailing custom-answer row, one past the last option. */
+    private get inputIndex();
     invalidate(): void;
+    /** Move the focus row by `delta`, wrapping over options plus the input row. */
+    private moveSelection;
     handleInput(data: string): void;
+    /** Toggle one option's multi-select mark and land the focus on it. */
+    private toggleOption;
+    /** Answer from an option row: the row itself, or every mark plus the typed text. */
+    private submitOption;
     private submitCustom;
     private selectedOptionLabels;
     /** Page backward through an oversized option, then through question detail. */
@@ -472,15 +474,26 @@ export declare class QuestionDialog implements Component, Focusable {
     /** Page forward through question detail, then through an oversized option. */
     private pageForward;
     render(width: number): string[];
+    /**
+     * The `❯ 1. ` lead-in for one answer row, plain for width math and styled
+     * for display: the pointer carries the accent, the number stays dim, and a
+     * multi-select mark turns success once checked — so only the label itself
+     * reads at full strength, the way Claude Code's option rows are toned.
+     */
+    private rowPrefix;
     /** Render one option as wrapped label and indented description lines. */
     private renderOptionBlock;
+    /**
+     * Render the trailing custom-answer row: a numbered "Type something." item
+     * that becomes the one-line editor while focused and keeps showing whatever
+     * was typed after the focus moves on.
+     */
+    private renderInputBlock;
     /** Keep the question visible when fixed chrome must be compacted. */
     private compactQuestionHeader;
     /** Keep Page Up / Page Down discoverable when a full pager status cannot fit. */
     private pagerStatus;
-    /** Render custom-mode controls on one row when the header must compact. */
-    private compactCustomControls;
-    /** Render a one-row option footer that retains every mode-specific control. */
+    /** Render a one-row footer that retains every control when height compacts. */
     private compactOptionControls;
     /**
      * Choose option blocks that fit while keeping the selected option visible.

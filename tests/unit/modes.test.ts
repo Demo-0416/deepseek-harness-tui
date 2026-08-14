@@ -36,7 +36,7 @@ import {
 } from '../../src/chat/modes.ts'
 import { autoAcceptRow, planModeRow } from '../../src/components/transcript.ts'
 import { createPalette } from '../../src/components/theme.ts'
-import { claudeSchemeColors } from '../../src/render/palette.ts'
+import { brandSchemeColors } from '../../src/render/palette.ts'
 
 /** The four presets this bundle's `cordis.patch.yml` configures. */
 const PRESETS = ['read-only', NORMAL_PRESET, AUTO_ACCEPT_PRESET, 'danger-full-access'] as const
@@ -140,15 +140,15 @@ describe('mode badges', () => {
     assert.match(plan, /\x1b\[2[;m][^\x1b]*\(Shift\+Tab to cycle\)/u)
     assert.match(accept, /\x1b\[2[;m][^\x1b]*\(Shift\+Tab to cycle\)/u)
 
-    const planTone = claudeSchemeColors('dark').planMode
-    const acceptTone = claudeSchemeColors('dark').autoAccept
+    const planTone = brandSchemeColors('dark').planMode
+    const acceptTone = brandSchemeColors('dark').autoAccept
     assert.ok(plan.includes(`38;2;${String(planTone.r)};${String(planTone.g)};${String(planTone.b)}m`), plan)
     assert.ok(accept.includes(`38;2;${String(acceptTone.r)};${String(acceptTone.g)};${String(acceptTone.b)}m`), accept)
   })
 
   it('darkens the auto-accept tone for a light terminal', () => {
     const palette = createPalette(true)
-    const light = claudeSchemeColors('light').autoAccept
+    const light = brandSchemeColors('light').autoAccept
     const row = autoAcceptRow(palette, 'light')
     assert.ok(row.includes(`38;2;${String(light.r)};${String(light.g)};${String(light.b)}m`), row)
     // The hint is optional: an unbound action prints the badge alone rather

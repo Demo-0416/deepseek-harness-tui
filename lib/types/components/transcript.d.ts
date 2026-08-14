@@ -93,39 +93,55 @@ export interface HeaderInfo {
      * skills must not spend a banner row saying so.
      */
     readonly skills?: readonly string[];
+    /**
+     * Plugin module names mounted into this session, rendered as the banner's
+     * `[Plugins]` summary. Read per render, like the model: the Loader keeps
+     * mounting entries after the banner is on screen, and the inventory service
+     * itself is a host mount that may resolve late. Absent (or an empty read)
+     * renders no section.
+     */
+    readonly plugins?: () => readonly string[] | undefined;
 }
 /**
- * Borderless startup banner, in Claude Code's shape: the wordmark and version on
- * one line, what this session is running as on the next, and then the input.
+ * Startup banner in the shape of Claude Code's welcome box, at three widths.
+ * On a wide terminal ({@link FULL_MIN_WIDTH}+) a session with a skill list gets
+ * the two-column frame {@link renderFull} draws — mascot and identity on the
+ * left, skills on the right, wordmark in the border. Under that, the badge
+ * shape below: a dim rounded border around the brand mark and the session's
+ * identity lines, with the skill summary as a borderless section under it.
  *
  * ```text
- *  DEEPSEEK HARNESS v0.1.0
- *  deepseek-v4-pro · ~/src/project
- *  resumed 85d19568 · fix the ordering bug
+ *  ╭───────────────────────────────────────────╮
+ *  │  ▄███▄  █▄█▄   DEEPSEEK HARNESS v0.1.0    │
+ *  │ ▐▀▀██▙▟▙▄▀▀    deepseek-v4-pro            │
+ *  │ ▜▖  ▝█▙█▛      ~/src/project              │
+ *  │  ▀▙▟█▄▛▀       resumed 85d19568 · a title │
+ *  ╰───────────────────────────────────────────╯
  *
  *  [Skills]
  *  lark-doc, lark-base, meego-tech-story, +12 more
  * ```
  *
- * The session id is on the resumed line only. A fresh session's id is a uuid the
- * user did not choose and cannot act on, and printing it (as this banner did)
- * spent the first thing on screen saying nothing; a resumed one is exactly what
- * `--resume` takes back, so it is worth its line — with the logged title beside
- * it, which is why the title is no longer a transcript row of its own. Each line
- * renders as plain left-padded text, matching transcript notices, so it reads on
- * any theme.
+ * The box hugs its widest identity line rather than the terminal: it is a
+ * badge, not a layout region. The session id is on the resumed line only. A
+ * fresh session's id is a uuid the user did not choose and cannot act on, and
+ * printing it (as this banner once did) spent the first thing on screen saying
+ * nothing; a resumed one is exactly what `--resume` takes back, so it is worth
+ * its line — with the logged title beside it, which is why the title is not a
+ * transcript row of its own.
  *
- * The skill summary is a section rather than another identity line, so it goes
- * last, under a blank row: which session this is (route, workspace, resume) is
- * one block, and what it can do is another. On a fresh session — the common
- * case, with no resume and no configured welcome — that puts it directly under
- * the workspace row.
+ * The skill summary stays outside the border, under a blank row: the box says
+ * which session this is (mark, route, workspace, resume), and the section
+ * under it says what the session can do. A configured welcome line renders
+ * between them, as plain left-padded text matching transcript notices. Under
+ * {@link MIN_BOXED_WIDTH} columns the whole banner degrades to that plain
+ * stack — a box that cannot fit its own art has nothing left to frame.
  */
 export declare class HeaderComponent implements Component {
     private readonly info;
     private readonly palette;
     private readonly gradient;
-    /** Columns of the wordmark currently revealed; `undefined` renders it whole. */
+    /** Columns of the banner currently revealed; `undefined` renders it whole. */
     private revealWidth;
     /**
      * @param info - The identity lines this banner states.
@@ -136,22 +152,82 @@ export declare class HeaderComponent implements Component {
      */
     constructor(info: HeaderInfo, palette: Palette, gradient: () => boolean);
     /**
-     * Clip the wordmark to `width` columns (the sweep reveal); `undefined` restores it.
-     *
-     * Only the wordmark sweeps. The lines under it state where the session is
-     * running, and wiping those in as well made the whole screen move at startup.
-     * @param width - Revealed wordmark width in columns, or `undefined` for the whole row.
+     * Clip every banner row to `width` columns (the sweep reveal); `undefined`
+     * restores the full banner. The clip changes no row count, so the screen
+     * does not move while the sweep runs — the box and its art wipe in
+     * left-to-right over a frame that already has its final height.
+     * @param width - Revealed width in columns, or `undefined` for the whole banner.
      */
     setRevealWidth(width: number | undefined): void;
     invalidate(): void;
     render(width: number): string[];
+    /** The wordmark fragment: gradient brand name, bold product name, dim version. */
+    private wordmark;
+    /** The `resumed <id> · <title>` line, or `undefined` on a fresh session. */
+    private resumedLine;
     /**
-     * The `[Skills]` section: its label row and the packed name rows, or nothing
-     * when the entry supplied no skills.
+     * The two-column welcome box, in the shape of Claude Code's full startup
+     * frame: the wordmark spliced into the top border, the left panel centering
+     * the welcome line, the large whale, and the identity lines, and the right
+     * panel spending the box's height on the skill summary.
+     *
+     * ```text
+     *  ╭─ DEEPSEEK HARNESS v0.1.0 ────────────────────────────────╮
+     *  │                          │ [Skills]                      │
+     *  │      ▗▄▄▄██  █▄▜▙▖       │ lark-doc, lark-base, hotcli   │
+     *  │     ▟████▙▟█▄▝█▛▀        │ meego-tech-story, +12 more    │
+     *  │     █   ▀▜█▙▝██▘         │                               │
+     *  │     ▝▙▖ ▗▖▀███▘          │                               │
+     *  │      ▝▀███▙▟▀▀▘          │                               │
+     *  │                          │                               │
+     *  │   deepseek-v4-pro        │                               │
+     *  │   ~/src/project          │                               │
+     *  ╰──────────────────────────┴───────────────────────────────╯
+     * ```
+     *
+     * @param width - Render width in columns.
+     * @returns Every banner row, or `undefined` when the entry supplied no skill
+     * list — with nothing to spend the right panel on, the badge box says the
+     * same thing in a third of the rows.
+     */
+    private renderFull;
+    /**
+     * The bordered banner: whale art beside the identity lines inside a dim
+     * rounded frame, then the welcome line and skill section below it.
+     * @param width - Render width in columns.
+     * @returns Every banner row, already indented.
+     */
+    private renderBoxed;
+    /**
+     * The borderless narrow-terminal banner: the same lines the box carries,
+     * stacked as plain left-padded text with no art.
+     * @param width - Render width in columns.
+     * @returns Every banner row, already indented.
+     */
+    private renderPlain;
+    /**
+     * What renders under the identity block in either shape: the configured
+     * welcome line, then the skill section.
+     * @param width - Render width in columns.
+     * @returns The trailing rows, already indented.
+     */
+    private trailer;
+    /**
+     * The skill names with something to show: a blank entry would render as a
+     * stray `, ,` in either summary shape.
+     */
+    private skillNames;
+    /** The plugin module names with something to show, read fresh per render. */
+    private pluginNames;
+    /**
+     * One borderless summary section (`[Skills]`, `[Plugins]`): its label row and
+     * the packed name rows, or nothing when there is nothing to list.
      * @param usable - Columns a banner row may occupy.
+     * @param label - The section's bracket label.
+     * @param names - The names to pack, in the order the entry supplied them.
      * @returns The section's rows, led by the blank row that separates it.
      */
-    private skillRows;
+    private sectionRows;
 }
 /**
  * A user or steering prompt in the transcript, rendered as Claude Code's
@@ -209,9 +285,12 @@ export declare class UserMessageComponent implements Component {
  * @param palette - Active role palette; decides whether the tone is emitted.
  * @param scheme - Terminal color scheme, which picks the plan tone.
  * @param hint - The cycle hint, already parenthesised and translated.
+ * @param pending - True when the mode was selected during a running turn and
+ *   commits at the next accepted pre-step (no `plan/mode` event yet). The badge
+ *   says so rather than pretending the mode is already in force.
  * @returns The badge row, ready to render above the prompt.
  */
-export declare function planModeRow(palette: Palette, scheme?: TerminalColorScheme, hint?: string): string;
+export declare function planModeRow(palette: Palette, scheme?: TerminalColorScheme, hint?: string, pending?: boolean): string;
 /**
  * The sign that this session runs its tool calls without asking: the
  * auto-accept preset's badge, in upstream's electric violet.
@@ -467,7 +546,7 @@ export declare class ToolCardComponent extends CachedCardComponent {
     protected renderLines(width: number): string[];
     /**
      * The card's one header row: `⏺ <tool>(<summary>)`. The bullet carries the
-     * call's state as color (Claude Code's orange while the call is in flight,
+     * call's state as color (the brand blue while the call is in flight,
      * green settled, red failed) and the tool name is bold, so a transcript scans
      * as a list of what ran; the parenthesized summary is the call's own one-line
      * detail (a command, an edited path) in the recessed tone.
