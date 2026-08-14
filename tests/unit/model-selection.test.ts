@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId, type LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import {
   createTuiTestHarness,
   disposeTuiTestHarness,
@@ -404,6 +404,67 @@ describe('model selection', { skip: skipWithoutEntry }, () => {
         !resolved.includes('Could not resolve model context'),
         `the retry stays silent too:\n${resolved}`,
       )
+    } finally {
+      await unmount(harness)
+    }
+  })
+})
+
+describe('subagent route fallback', { skip: skipWithoutEntry }, () => {
+  /**
+   * Resolve one `agent/request` waterfall the way a child agent's loop does,
+   * seeded with the config its own (possibly empty) options propose.
+   */
+  const resolveRequest = (harness: Harness, seed: LlmCallConfig): Promise<LlmCallConfig> =>
+    harness.ctx.waterfall(
+      'agent/request',
+      { turn: 1, step: 1, signal: new AbortController().signal },
+      () => Promise.resolve(seed),
+    )
+
+  it('fills a routeless child request with the chat\'s live selection', async () => {
+    // A subagent/workflow child mints its own scope and inherits only
+    // `AgentOptions` — which this TUI leaves empty so the live default stays
+    // live. Without the fallback its loop throws "has no provider/model" and
+    // the child dies before its first step.
+    const harness = await mount({
+      services: { agentDefaultModel: { currentSelection: () => SEEDED } },
+    })
+    try {
+      // The loop proposes `options.provider ?? ''`, so an absent route arrives
+      // as empty strings, not undefined.
+      const resolved = await resolveRequest(harness, { provider: '', model: '' })
+      assert.equal(resolved.provider, SEEDED.provider)
+      assert.equal(resolved.model, SEEDED.model)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('leaves an explicitly routed child request untouched', async () => {
+    const harness = await mount({
+      services: { agentDefaultModel: { currentSelection: () => SEEDED } },
+    })
+    try {
+      // A workflow's per-child provider/model option must win over the chat's
+      // own selection: explicit overrides are the documented escape hatch.
+      const resolved = await resolveRequest(harness, { provider: 'other-provider', model: 'other-model' })
+      assert.equal(resolved.provider, 'other-provider')
+      assert.equal(resolved.model, 'other-model')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('passes a routeless request through when nothing is selected anywhere', async () => {
+    // No default-model service, and an agent created without options: the
+    // fallback has nothing honest to offer, so the loop's own loud
+    // "has no provider/model" error stays the outcome.
+    const harness = await mount({ agentOptions: {} as never })
+    try {
+      const resolved = await resolveRequest(harness, { provider: '', model: '' })
+      assert.equal(resolved.provider, '')
+      assert.equal(resolved.model, '')
     } finally {
       await unmount(harness)
     }

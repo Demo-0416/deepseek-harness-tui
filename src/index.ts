@@ -51,7 +51,7 @@ import type {} from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-token-meter'
 import { parseCommand, type CommandResult } from '@deepseek-ai/dsh-commands'
 import { createUserMessage, errorChain } from '@deepseek-ai/dsh-llm'
-import type { CallId, ContentBlock, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { CallId, ContentBlock, LlmCallConfig, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm-retry'
 // Type import declaration-merges the compaction bracket events onto the
 // session event map, so `compaction/start` / `compaction/end` are typed here.
@@ -1489,6 +1489,38 @@ export function createTuiChat(
   })
 
   const disposeTargetListeners = installModelSelection(agent.ctx, target)
+
+  // Subagent children (tool-subagent / workflow spawns) mint their own scope
+  // with no parent chain, so the agent-scoped selection above never routes
+  // them, and they inherit only `AgentOptions` — which this TUI deliberately
+  // leaves empty so the live default stays live (see `resolveAgentOptions`).
+  // This listener is the other half of that decision: registered on the
+  // UNTAGGED runner context, it hears every agent in the process, and fills a
+  // resolved request that still has no route with the same selection the
+  // mounted chat would run its own next step under. A route that is already
+  // resolved — the mounted agent under the scoped listener above, or a child
+  // started with explicit per-child options — passes through untouched.
+  const disposeChildRouteFallback = ctx.on(
+    'agent/request',
+    async (_payload, next): Promise<LlmCallConfig> => {
+      const resolved = await next()
+      // The loop builds its proposal from `options.provider ?? ''`, so an
+      // absent route arrives as undefined OR the empty string.
+      const hasRoute = resolved.provider !== undefined && resolved.provider !== ''
+        && resolved.model !== undefined && resolved.model !== ''
+      if (hasRoute) return resolved
+      const selected = target.current
+      if (selected === undefined) return resolved
+      return {
+        ...resolved,
+        provider: selected.provider,
+        model: selected.model,
+        ...resolved.reasoningEffort === undefined && selected.reasoningEffort !== undefined
+          ? { reasoningEffort: selected.reasoningEffort }
+          : {},
+      }
+    },
+  )
 
   modelController = createModelController({
     ctx,
@@ -4049,6 +4081,7 @@ export function createTuiChat(
     disposeAgent()
     disposeSchemeListener()
     disposeTargetListeners()
+    disposeChildRouteFallback()
     disposeApprovals()
     modelController.detach()
   }
@@ -4563,6 +4596,17 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
     await active.handle.dispose()
   }
 
+  // `ui.stop()` leaves the outgoing chat's frame in place (it only parks the
+  // cursor below the rendered lines), so every in-process handoff wipes the
+  // screen AND the scrollback before mounting its replacement — otherwise the
+  // session being left stays stacked above the one taking over. Exit keeps the
+  // frame on purpose; only a handoff that repaints over the same terminal
+  // clears it.
+  const resetScreen = (): void => {
+    // 3J erases the scrollback, 2J the visible screen, H homes the cursor.
+    terminal.write('\x1b[3J\x1b[2J\x1b[H')
+  }
+
   /**
    * In-process resume: tear the current chat and agent down, resume the
    * selected session, and mount a fresh chat over it. Rejects before
@@ -4578,6 +4622,7 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
       }
     }
     await teardown()
+    resetScreen()
     let resumed: AgentHandle
     try {
       resumed = await ctx.agents.resume({
@@ -4611,6 +4656,7 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
    */
   async function forkHandoff(fork: TuiForkRequest): Promise<never> {
     await teardown()
+    resetScreen()
     let forked: AgentHandle
     try {
       forked = await ctx.agents.create({
@@ -4649,6 +4695,7 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
     const leaving = mounted?.handle.agent.session
     if (leaving !== undefined) await ctx.sessions.flush(leaving)
     await teardown()
+    resetScreen()
     let created: AgentHandle
     try {
       const composition = await composeAgentPreset(ctx, startup.preset)

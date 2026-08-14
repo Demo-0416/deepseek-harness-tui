@@ -5,6 +5,14 @@ installed as a dsh profile bundle. It renders into the terminal's main screen �
 no alternate screen, so the conversation stays in the scrollback after you leave
 — and runs in the same process as the agent it drives.
 
+![dsh TUI demo: launch, ask, watch the agent read a file and answer](assets/demo.gif)
+
+A turn as it streams: the tool card the agent's `read` call renders, the
+thinking that follows it, the answer arriving token by token — and the editor
+still live underneath, waiting for a steer (`Enter`) or a cancel (`Esc`):
+
+![A streaming turn: tool card, thinking, partial answer, steer hint](assets/turn-streaming.png)
+
 ## Prerequisite
 
 The [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) must be installed
@@ -22,6 +30,8 @@ dsh plugin --profile tui add deepseek-harness-tui
 
 This installs the package into a new `tui` profile (dsh-base + deepseek-harness-tui) and
 activates it on next launch.
+
+![The welcome screen: banner, model route, workspace, and loaded plugins](assets/welcome.png)
 
 ## Usage
 
