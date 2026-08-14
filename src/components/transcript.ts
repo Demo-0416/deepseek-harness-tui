@@ -633,9 +633,35 @@ function assistantMessageChildren(
 const PLAN_MODE_ICON = '⏸'
 
 /**
+ * Claude Code's accept-edits badge (`permissionModeSymbol('acceptEdits')`,
+ * `utils/permissions/PermissionMode.ts`).
+ */
+const AUTO_ACCEPT_ICON = '⏵⏵'
+
+/**
+ * One mode badge: the row Claude Code keeps at the left of the strip under its
+ * input frame (`PromptInputFooterLeftSide.tsx:348-355`), in that mode's tone,
+ * with the cycle key named after it in dim.
+ *
+ * Upstream's `<Text color={getModeColor(mode)}>{symbol} {title} on</Text>`
+ * followed by a `dimColor` shortcut hint, with the hint dropped once the footer
+ * carries two other pills. Nothing here counts pills, because nothing else
+ * shares the row.
+ * @param palette - Active role palette; decides whether the tone is emitted.
+ * @param color - The mode's tone for the active scheme.
+ * @param text - The badge sentence, already translated.
+ * @param hint - The parenthesised cycle hint, or `undefined` to leave it off.
+ * @returns The badge row, ready to render above the prompt.
+ */
+function modeRow(palette: Palette, color: Rgb, text: string, hint: string | undefined): string {
+  const badge = accent(palette, color, `${GUTTER}${text}`)
+  return hint === undefined ? badge : `${badge} ${palette.dim(hint)}`
+}
+
+/**
  * The one permanent sign that this session is in plan mode: the badge Claude
- * Code keeps at the left of the row under its input frame
- * (`PromptInputFooterLeftSide.tsx:348-355`), in the theme's plan tone.
+ * Code keeps at the left of the row under its input frame, in the theme's plan
+ * tone.
  *
  * The mode reaches this terminal as a folded `plan/mode` event and nothing on
  * screen consumed it, so a session could sit in plan mode with the transcript
@@ -645,16 +671,54 @@ const PLAN_MODE_ICON = '⏸'
  * (`PromptInput.tsx:2214-2235` routes only bash and teammate colors), so a
  * colored frame here would be a signal the product does not have.
  *
- * Upstream's trailing `(shift+tab to cycle)` hint is not reproduced: plan mode
- * is set by the harness through the session log, and this terminal binds no key
- * that cycles permission modes. A hint naming a key that does nothing is worse
- * than no hint.
+ * Upstream's trailing `(shift+tab to cycle)` hint used to be dropped here,
+ * because plan mode was only ever set through the session log and this terminal
+ * bound no key that cycled modes. `app.mode.cycle` is that key, so the hint is
+ * back — named from the installed keybinding manager by the caller, never
+ * written out, so a deployment that rebinds the action gets its own key printed.
  * @param palette - Active role palette; decides whether the tone is emitted.
  * @param scheme - Terminal color scheme, which picks the plan tone.
+ * @param hint - The cycle hint, already parenthesised and translated.
  * @returns The badge row, ready to render above the prompt.
  */
-export function planModeRow(palette: Palette, scheme: TerminalColorScheme = 'dark'): string {
-  return accent(palette, claudeSchemeColors(scheme).planMode, `${GUTTER}${PLAN_MODE_ICON} plan mode on`)
+export function planModeRow(
+  palette: Palette,
+  scheme: TerminalColorScheme = 'dark',
+  hint?: string,
+): string {
+  return modeRow(
+    palette,
+    claudeSchemeColors(scheme).planMode,
+    `${PLAN_MODE_ICON} ${t('transcript.planModeBadge')}`,
+    hint,
+  )
+}
+
+/**
+ * The sign that this session runs its tool calls without asking: the
+ * auto-accept preset's badge, in upstream's electric violet.
+ *
+ * Named `auto-accept` rather than upstream's `accept edits`, because the state
+ * behind it is wider than editing: the preset sets `approval/policy` to `never`,
+ * so every tool this agent has runs unattended inside the workspace sandbox, not
+ * just the file writers. A badge that promised only edits would understate what
+ * the user just switched on.
+ * @param palette - Active role palette; decides whether the tone is emitted.
+ * @param scheme - Terminal color scheme, which picks the auto-accept tone.
+ * @param hint - The cycle hint, already parenthesised and translated.
+ * @returns The badge row, ready to render above the prompt.
+ */
+export function autoAcceptRow(
+  palette: Palette,
+  scheme: TerminalColorScheme = 'dark',
+  hint?: string,
+): string {
+  return modeRow(
+    palette,
+    claudeSchemeColors(scheme).autoAccept,
+    `${AUTO_ACCEPT_ICON} ${t('transcript.autoAcceptBadge')}`,
+    hint,
+  )
 }
 
 /**
