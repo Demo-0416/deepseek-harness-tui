@@ -50,6 +50,7 @@ export const EN_MESSAGES = {
   'command.skills.description': 'Search this session\'s skills and read one in full',
   'command.mcp.description': 'Show the MCP servers this agent\'s tools come from',
   'command.doctor.description': 'Check the runtime, terminal, model route, and mounted services',
+  'command.search.description': 'Search this session\'s messages',
 
   // `/lang` itself.
   'lang.name.en': 'English',
@@ -64,9 +65,9 @@ export const EN_MESSAGES = {
   // `/hotkeys`, `/help` and `?`.
   'hotkeys.editor': 'Enter send • Shift/Alt+Enter newline • Up/Down prompt history • Tab accept a completion',
   'hotkeys.entry': '@ reference a file • / run a command • /skill:<name> load a skill • ? this list',
-  'hotkeys.history': '{search} search prompt history backwards • {todos} expand or collapse the plan',
+  'hotkeys.history': '{search} search prompt history backwards • {transcript} search this session\'s messages',
   'hotkeys.cards': '{cycle} cycle tool cards (preview/full/hidden) • {thinking} show or hide thinking blocks',
-  'hotkeys.copy': '{copy} copy the last answer • {redraw} redraw',
+  'hotkeys.copy': '{todos} expand or collapse the plan • {copy} copy the last answer • {redraw} redraw',
   'hotkeys.cancel': '{cancel} cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind',
   'hotkeys.exit': '{exit} exit on an empty prompt • Shift+Ctrl+D session debug panel',
   'hotkeys.interrupt': 'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
@@ -112,6 +113,26 @@ export const EN_MESSAGES = {
   'skills.unknown': 'Unknown skill: {name}',
   'skills.loadFailed': 'Skill "{name}" failed to load: {error}',
   'skills.scanFailed': 'Skill scan failed: {error}',
+
+  // `/search`: the panel over this session's own messages, plus the row labels
+  // the flattened entries carry. The labels are the transcript's own vocabulary,
+  // so they read the same here as they do on the surface they were folded from.
+  'search.empty': 'This session has no messages to search yet.',
+  'search.noMatch': 'No message matches this search.',
+  'search.query': 'search',
+  'search.hint': 'type to search · ↑↓ move · enter open · esc close',
+  'search.detailHint': '↑↓ scroll · PgUp/PgDn page · esc back',
+  'search.count.one': '{visible}/{total} message',
+  'search.count.other': '{visible}/{total} messages',
+  'search.detail.whole': 'the whole message',
+  'search.detail.hits': 'hits for "{query}" are highlighted',
+  'search.role.user': 'You',
+  'search.role.assistant': 'Assistant',
+  'search.role.tool': 'Tool',
+  'search.role.notice': 'Notice',
+  'search.role.context': 'Context',
+  'search.role.reference': 'Files',
+  'search.role.compaction': 'Compacted',
 
   // `/mcp`. The counted rows are plural pairs; the "nothing is mounted" block is
   // three paragraphs, each one key with its own line breaks, so a translation
@@ -380,6 +401,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'command.skills.description': '搜索本会话的 skill，并查看某个 skill 的完整正文',
   'command.mcp.description': '显示本 agent 的工具分别来自哪些 MCP server',
   'command.doctor.description': '检查运行时、终端、模型路由与已挂载的服务',
+  'command.search.description': '搜索本会话的消息',
 
   'lang.name.en': 'English',
   'lang.name.zh': '中文',
@@ -392,9 +414,9 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
 
   'hotkeys.editor': 'Enter 发送 • Shift/Alt+Enter 换行 • Up/Down 翻历史提问 • Tab 采纳补全',
   'hotkeys.entry': '@ 引用文件 • / 执行命令 • /skill:<name> 加载 skill • ? 打开本列表',
-  'hotkeys.history': '{search} 向前搜索历史提问 • {todos} 展开或收起计划',
+  'hotkeys.history': '{search} 向前搜索历史提问 • {transcript} 搜索本次会话的消息',
   'hotkeys.cards': '{cycle} 切换工具卡片（预览/完整/隐藏） • {thinking} 显示或隐藏思考块',
-  'hotkeys.copy': '{copy} 复制最后一条回答 • {redraw} 重绘屏幕',
+  'hotkeys.copy': '{todos} 展开或收起计划 • {copy} 复制最后一条回答 • {redraw} 重绘屏幕',
   'hotkeys.cancel': '{cancel} 取消当前轮次；草稿状态下再按一次清空草稿；空输入时再按一次打开 Rewind',
   'hotkeys.exit': '{exit} 空输入时退出 • Shift+Ctrl+D 打开会话调试面板',
   'hotkeys.interrupt': 'Ctrl+C 运行中取消；输入中清空输入；空闲时连按两次退出',
@@ -434,6 +456,23 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'skills.unknown': '找不到名为 {name} 的 skill',
   'skills.loadFailed': 'skill "{name}" 加载失败：{error}',
   'skills.scanFailed': 'skill 扫描失败：{error}',
+
+  'search.empty': '本会话还没有可搜索的消息。',
+  'search.noMatch': '没有消息匹配这次搜索。',
+  'search.query': '搜索',
+  'search.hint': '输入以搜索 · ↑↓ 移动 · enter 展开 · esc 关闭',
+  'search.detailHint': '↑↓ 滚动 · PgUp/PgDn 翻页 · esc 返回',
+  'search.count.one': '{visible}/{total} 条消息',
+  'search.count.other': '{visible}/{total} 条消息',
+  'search.detail.whole': '完整消息',
+  'search.detail.hits': '“{query}”的命中处已高亮',
+  'search.role.user': '你',
+  'search.role.assistant': '助手',
+  'search.role.tool': '工具',
+  'search.role.notice': '提示',
+  'search.role.context': '上下文',
+  'search.role.reference': '文件',
+  'search.role.compaction': '已压缩',
 
   'mcp.servers.one': '{count} 个 server',
   'mcp.servers.other': '{count} 个 server',

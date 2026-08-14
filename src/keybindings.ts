@@ -27,6 +27,7 @@ import {
 export interface AppKeybindings {
   'app.tools.cycle': true
   'app.history.search': true
+  'app.transcript.search': true
   'app.todos.toggle': true
   'app.thinking.toggle': true
   'app.message.copy': true
@@ -51,6 +52,13 @@ export type AppKeybinding = keyof AppKeybindings
 export const APP_KEYBINDINGS = {
   'app.tools.cycle': { defaultKeys: 'ctrl+o', description: 'Cycle tool cards: preview, full, hidden' },
   'app.history.search': { defaultKeys: 'ctrl+r', description: 'Search prompt history backwards' },
+  // Not Ctrl+F, the key a reader expects for "find": pi-tui binds it as the
+  // editor's forward-char (`tui.editor.cursorRight`), and an app binding is
+  // answered before the editor sees the key, so taking it would silently break
+  // an emacs habit the editor already serves. Ctrl+G is bound by nothing here
+  // or in pi-tui, and reaches the process on every terminal — unlike Ctrl+S,
+  // which a multiplexer or an ssh line may still swallow as flow control.
+  'app.transcript.search': { defaultKeys: 'ctrl+g', description: 'Search this session\'s messages' },
   // Claude Code gives Ctrl+T to the plan and has no thinking switch at all;
   // pi gives it to thinking. This terminal has both, so the collision is real
   // and was decided for thinking: it is the key a user reaches for mid-answer,
