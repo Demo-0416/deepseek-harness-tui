@@ -159,7 +159,7 @@ import {
 } from './components/plugins-panel.ts'
 import {
   compactTargetLabel,
-  CUSTOM_ANSWER_HINT,
+  CUSTOM_ANSWER_KEYS,
   DetailsDialog,
   diagnosticMeter,
   formatDiagnosticCount,
@@ -216,6 +216,7 @@ import { toolCallTouchesFiles, WorkspaceFileSearch } from './chat/file-autocompl
 import { resolveFileSearchCommand } from './chat/fd.ts'
 import {
   detailsArgumentCompletions,
+  langArgumentCompletions,
   memoizeListing,
   modelArgumentCompletions,
   presetArgumentCompletions,
@@ -228,6 +229,9 @@ import {
   whenIdleOrTimeout,
 } from './chat/lifecycle.ts'
 import type { TuiStartupValues } from './startup.ts'
+import { commandDescription, currentLocale, onLocaleChange, setLocale, t } from './i18n/index.ts'
+import { resolveLocaleStore } from './i18n/persistence.ts'
+import { runLangCommand } from './chat/lang-command.ts'
 
 export { TuiPromptService } from './prompt.ts'
 export { renderSkillInvocation } from './chat/skill-invocation.ts'
@@ -447,17 +451,21 @@ const DISPOSED_RECOVERY = 'Run /resume to open another session, or press ctrl+d 
 function keyboardShortcuts(manager: KeybindingsManager): string[] {
   const key = (action: AppKeybinding): string => keyLabel(manager, action)
   return [
-    'Enter send • Shift/Alt+Enter newline • Up/Down prompt history • Tab accept a completion',
-    '@ reference a file • / run a command • /skill:<name> load a skill • ? this list',
-    `${key('app.history.search')} search prompt history backwards • ${key('app.todos.toggle')} expand or collapse the plan`,
-    `${key('app.tools.cycle')} cycle tool cards (preview/full/hidden) • ${key('app.message.copy')} copy the last answer • ${key('app.screen.redraw')} redraw`,
-    `${key('app.cancel')} cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind`,
-    `${key('app.exit')} exit on an empty prompt • Shift+Ctrl+D session debug panel`,
-    'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
-    'Ctrl+C again on a turn that will not cancel exits without waiting for it',
-    'In a panel: ↑/↓ scroll • PgUp/PgDn page • g/G top or bottom • Esc close',
-    `In a question: ↑/↓ move • Space multi-select • ${CUSTOM_ANSWER_HINT} • Enter confirm • Esc cancel`,
-    'In an approval: ↑/↓ move • 1-4 answer straight away • Enter confirm • Esc deny',
+    t('hotkeys.editor'),
+    t('hotkeys.entry'),
+    t('hotkeys.history', { search: key('app.history.search'), todos: key('app.todos.toggle') }),
+    t('hotkeys.cards', {
+      cycle: key('app.tools.cycle'),
+      copy: key('app.message.copy'),
+      redraw: key('app.screen.redraw'),
+    }),
+    t('hotkeys.cancel', { cancel: key('app.cancel') }),
+    t('hotkeys.exit', { exit: key('app.exit') }),
+    t('hotkeys.interrupt'),
+    t('hotkeys.interruptAgain'),
+    t('hotkeys.panel'),
+    t('hotkeys.question', { custom: t('dialog.question.customAnswer', { keys: CUSTOM_ANSWER_KEYS }) }),
+    t('hotkeys.approval'),
   ]
 }
 
@@ -721,6 +729,12 @@ export function createTuiChat(
    */
   const fileSearchCommand = resolveFileSearchCommand(resolved.fileSearchCommand)
   /**
+   * Where `/lang` keeps its answer for the next process. Resolved once: the
+   * choice between the Host's settings document and this bundle's own file is a
+   * property of the deployment, not of the moment the command runs.
+   */
+  const localeStore = resolveLocaleStore(ctx)
+  /**
    * The fallback index, used only when this host has no `fd`. It is built
    * either way so the tool-result listener can drop it without knowing which
    * source is live, and an unused index costs nothing: the traversal starts at
@@ -923,11 +937,13 @@ export function createTuiChat(
     gitValue.set(branch === undefined ? undefined : palette.dim(` (${displayText(branch)})`))
     const rate = cacheHitRate(tokens)
     const usage = `↑${formatTokens(tokens.input)} ↓${formatTokens(tokens.output)}`
-    modelValue.set(`  ${palette.dim(displayText(target.current === undefined ? 'model unset' : compactTargetLabel(target.current)))}`)
-    tokenValue.set(`  ${palette.dim(rate === undefined ? usage : `${usage}  cache ${rate}%`)}`)
+    modelValue.set(`  ${palette.dim(displayText(target.current === undefined
+      ? t('prompt.modelUnset')
+      : compactTargetLabel(target.current)))}`)
+    tokenValue.set(`  ${palette.dim(rate === undefined ? usage : `${usage}  ${t('prompt.cache', { rate })}`)}`)
     const contextWindow = modelController.contextWindow()
     contextValue.set(contextWindow === undefined ? undefined : `  ${palette.dim(
-      `${Math.min(100, Math.round(contextTokens() / contextWindow * 100))}% context`,
+      t('prompt.context', { percent: Math.min(100, Math.round(contextTokens() / contextWindow * 100)) }),
     )}`)
     const goalFragment = formatGoalPrompt(goalState.goal)
     goalValue.set(goalFragment === undefined ? undefined : `  ${palette.dim(goalFragment)}`)
@@ -937,7 +953,7 @@ export function createTuiChat(
     // A live compaction owns the row while it runs; a flash only fills it in
     // between, so a transient confirmation can never hide ongoing work.
     statusLine.setText(compacting !== undefined
-      ? palette.dim(`Context being compacted ${formatStatusDuration(renderTime - compacting.startedAt)}`)
+      ? palette.dim(t('prompt.compacting', { duration: formatStatusDuration(renderTime - compacting.startedAt) }))
       : flashingStatus === undefined ? '' : palette.dim(displayText(flashingStatus.text)))
     // `${indicator}` owns the caret column and its trailing gap before the
     // cursor. The active status glyph replaces the `>` caret in place — same
@@ -1159,7 +1175,7 @@ export function createTuiChat(
   const copyLastAnswer = (): void => {
     const text = lastAnswerText()
     if (text === undefined) {
-      flashStatus('Nothing to copy yet.')
+      flashStatus(t('status.flash.nothingToCopy'))
       return
     }
     const path = clipboardPath()
@@ -1167,10 +1183,8 @@ export function createTuiChat(
       if (disposed) return
       runtime.terminal.write(sequence)
       flashStatus(path === 'native'
-        ? `Copied ${String(text.length)} chars to clipboard.`
-        : path === 'tmux-buffer'
-          ? 'Copied to tmux buffer (prefix+] to paste).'
-          : 'Sent to clipboard via OSC 52.')
+        ? t('status.flash.copied', { count: text.length })
+        : t(path === 'tmux-buffer' ? 'status.flash.copiedTmux' : 'status.flash.copiedOsc52'))
     }, (error: unknown) => {
       /* v8 ignore next 2 -- the clipboard port collapses every subprocess failure into an exit code. */
       if (!disposed) appendNotice(`Copy failed: ${errorChain(error)}`, 'error')
@@ -1568,7 +1582,7 @@ export function createTuiChat(
   const requestExit = (): void => {
     if (agent.status === 'running') {
       cancelActiveTurn()
-      appendNotice('Cancelling the active turn before exit…', 'warning')
+      appendNotice(t('status.flash.cancellingBeforeExit'), 'warning')
       void whenIdleOrTimeout(agent.whenIdle(), EXIT_IDLE_TIMEOUT_MS).then((outcome) => {
         if (outcome === 'timeout') {
           ctx.logger.warn(`dsh-tui: the cancelled turn did not reach idle within ${String(EXIT_IDLE_TIMEOUT_MS)}ms; exiting anyway`)
@@ -1687,12 +1701,12 @@ export function createTuiChat(
    */
   const toggleTodos = (): void => {
     if (!todo.hasTodos()) {
-      flashStatus('No plan in this session yet.')
+      flashStatus(t('status.flash.planEmpty'))
       return
     }
     todo.setExpanded(!todo.isExpanded())
     todo.invalidate()
-    flashStatus(todo.isExpanded() ? 'Plan expanded.' : 'Plan collapsed.')
+    flashStatus(t(todo.isExpanded() ? 'status.flash.planExpanded' : 'status.flash.planCollapsed'))
     requestRender()
   }
 
@@ -1701,7 +1715,7 @@ export function createTuiChat(
     // Every mounted step toggles in place, so a running stream keeps streaming
     // and the rows above it keep their positions.
     transcript.setShowReasoning(showReasoning)
-    flashStatus(`Reasoning blocks ${showReasoning ? 'shown' : 'hidden'}.`)
+    flashStatus(t(showReasoning ? 'status.flash.reasoningShown' : 'status.flash.reasoningHidden'))
   }
 
   // Reasoning display has no key of its own: Ctrl+O's expanded phase already
@@ -1840,6 +1854,7 @@ export function createTuiChat(
       `terminal ${String(runtime.terminal.columns)}x${String(runtime.terminal.rows)} · editor ${String(editorRowCount())} rows`,
       `cards ${toolsVisibility} · reasoning ${showReasoning ? 'shown' : 'hidden'} · plan ${todo.isExpanded() ? 'expanded' : 'collapsed'}`,
       `overlay ${overlayManager.hasActiveOverlay() ? 'active' : 'none'} · pending steering ${String(pendingSteering.size)}`,
+      `locale ${currentLocale()} · preference stored in ${localeStore.origin}`,
       '',
       ...Object.keys(APP_KEYBINDINGS).map(action => `${action} → ${keyLabel(keybindings, action as AppKeybinding)}`),
       ...conflicts.length === 0
@@ -1854,13 +1869,13 @@ export function createTuiChat(
   const showHelp = (): void => {
     const commandLines = ctx.commands.list(agent).map((command) => {
       const input = command.input === undefined ? '' : ` ${command.input.hint}`
-      return `/${command.name}${input} — ${command.description}`
+      return `/${command.name}${input} — ${commandDescription(command.name, command.description)}`
     })
     showPanel('/help', [
       ...keyboardShortcuts(keybindings),
       '',
       ...commandLines,
-      '/skill:<name> [instructions] — load a skill into the conversation',
+      t('help.skill'),
     ].map(line => palette.dim(line)))
   }
 
@@ -1900,7 +1915,7 @@ export function createTuiChat(
     // Assembling the system prompt runs every registered section, some of which
     // read files or ask a service; on a cold cache that is long enough for the
     // screen to look like `/status` never landed.
-    const settleHint = flashPending('Collecting session status…')
+    const settleHint = flashPending(t('status.flash.collecting'))
     const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent, signal)).finally(settleHint)
     /* v8 ignore next -- disposal during the awaited assembly is covered by command-owner teardown tests. */
     if (disposed) return
@@ -1910,11 +1925,16 @@ export function createTuiChat(
     const events = agent.session.events
     const latestActivity = lastActivityTime(agent.session) ?? agent.session.header.createdAt
     const usedContext = Math.max(0, Math.round(contextTokens()))
-    let context = `${formatDiagnosticNumber(usedContext)} used · capacity unknown`
+    let context = t('status.contextUnknown', { used: formatDiagnosticNumber(usedContext) })
     const contextWindow = modelController.contextWindow()
     if (contextWindow !== undefined) {
       const contextPercent = Math.round(usedContext / contextWindow * 100)
-      context = `${diagnosticMeter(contextPercent, palette)} ${String(contextPercent)}% used (${formatDiagnosticNumber(usedContext)} / ${formatDiagnosticNumber(contextWindow)})`
+      context = t('status.contextValue', {
+        meter: diagnosticMeter(contextPercent, palette),
+        percent: contextPercent,
+        used: formatDiagnosticNumber(usedContext),
+        capacity: formatDiagnosticNumber(contextWindow),
+      })
     }
     const rate = cacheHitRate(tokens)
     const turns = events.filter(event => event.type === 'turn/start').length
@@ -1942,34 +1962,50 @@ export function createTuiChat(
     const agentPreset = presetController.currentPreset()
     const groups: readonly (readonly StatusCardRow[])[] = [
       [
-        ['Session', displayText(agent.session.id)],
-        ['Title', displayText(sessionTitle ?? 'untitled')],
-        ['Directory', displayText(cwd)],
-        ['Model', `${model} ${palette.dim(`(effort ${effort}; reasoning blocks ${showReasoning ? 'shown' : 'hidden'})`)}`],
-        ...agentPreset === undefined ? [] : [['Preset', displayText(agentPreset)] as StatusCardRow],
-        ...preset === undefined ? [] : [['Permission', displayText(preset)] as StatusCardRow],
+        [t('status.row.session'), displayText(agent.session.id)],
+        [t('status.row.title'), displayText(sessionTitle ?? t('status.untitled'))],
+        [t('status.row.directory'), displayText(cwd)],
+        [t('status.row.model'), `${model} ${palette.dim(t('status.modelDetail', {
+          effort,
+          reasoning: t(showReasoning ? 'common.shown' : 'common.hidden'),
+        }))}`],
+        ...agentPreset === undefined ? [] : [[t('status.row.preset'), displayText(agentPreset)] as StatusCardRow],
+        ...preset === undefined ? [] : [[t('status.row.permission'), displayText(preset)] as StatusCardRow],
         ...goalStatusRows(goalState.goal, goalState.roundsStarted),
       ],
       [
-        ['Agent', [
+        [t('status.row.agent'), [
           agent.status,
           formatDiagnosticCount(events.length, 'event'),
           formatDiagnosticCount(turns, 'turn'),
           formatDiagnosticCount(steps, 'step'),
           formatDiagnosticCount(toolCalls, 'tool call'),
         ].join(' · ')],
-        ...stats === undefined ? [] : [['Session totals', formatSessionStats(stats)] as StatusCardRow],
+        ...stats === undefined
+          ? []
+          : [[t('status.row.sessionTotals'), formatSessionStats(stats)] as StatusCardRow],
       ],
       [
-        ['Tokens', `${formatDiagnosticNumber(tokens.input)} input + ${formatDiagnosticNumber(tokens.output)} output`],
-        ['KV cache', rate === undefined
-          ? `n/a (${formatDiagnosticNumber(tokens.cacheRead)} read + ${formatDiagnosticNumber(tokens.cacheWrite)} write)`
-          : `${diagnosticMeter(rate, palette)} ${String(rate)}% hit (${formatDiagnosticNumber(tokens.cacheRead)} read + ${formatDiagnosticNumber(tokens.cacheWrite)} write)`],
-        ['Context', context],
+        [t('status.row.tokens'), t('status.tokensValue', {
+          input: formatDiagnosticNumber(tokens.input),
+          output: formatDiagnosticNumber(tokens.output),
+        })],
+        [t('status.row.kvCache'), rate === undefined
+          ? t('status.cacheUnavailable', {
+            read: formatDiagnosticNumber(tokens.cacheRead),
+            write: formatDiagnosticNumber(tokens.cacheWrite),
+          })
+          : t('status.cacheValue', {
+            meter: diagnosticMeter(rate, palette),
+            rate,
+            read: formatDiagnosticNumber(tokens.cacheRead),
+            write: formatDiagnosticNumber(tokens.cacheWrite),
+          })],
+        [t('status.row.context'), context],
       ],
       [
-        ['Created', formatDiagnosticTime(agent.session.header.createdAt)],
-        ['Active', formatDiagnosticTime(latestActivity)],
+        [t('status.row.created'), formatDiagnosticTime(agent.session.header.createdAt)],
+        [t('status.row.active'), formatDiagnosticTime(latestActivity)],
       ],
     ]
     // The card renders itself once, at the panel's own content width; the panel
@@ -1978,10 +2014,10 @@ export function createTuiChat(
     showPanel('/status', [
       ...new StatusCardComponent(groups, palette).render(cardWidth),
       '',
-      palette.bold(palette.accent('System prompt')),
+      palette.bold(palette.accent(t('status.systemPrompt'))),
       ...systemPrompt.split('\n'),
       '',
-      palette.bold(palette.accent('Registered tools')),
+      palette.bold(palette.accent(t('status.registeredTools'))),
       registeredTools,
     ])
   }
@@ -2054,6 +2090,8 @@ export function createTuiChat(
         }
       case 'details':
         return detailsArgumentCompletions
+      case 'lang':
+        return langArgumentCompletions
       case 'resume':
         return prefix => resumeArgumentCompletions(
           {
@@ -2075,7 +2113,7 @@ export function createTuiChat(
           const getArgumentCompletions = argumentCompletionsFor(command.name)
           return {
             name: command.name,
-            description: command.description,
+            description: commandDescription(command.name, command.description),
             ...(command.input === undefined ? {} : { argumentHint: command.input.hint }),
             ...(getArgumentCompletions === undefined ? {} : { getArgumentCompletions }),
           }
@@ -2108,6 +2146,23 @@ export function createTuiChat(
   }
   const disposeCommandChanges = ctx.on('commands/change', refreshCommandAutocomplete)
   refreshCommandAutocomplete()
+
+  /**
+   * Repaint everything after a language switch.
+   *
+   * The same rebuild a color-scheme change does, and for the same reason:
+   * transcript rows cache the strings they were built with, so a component that
+   * is already mounted keeps rendering the previous language until it is
+   * remounted from its node. The slash menu is rebuilt too, because its
+   * descriptions are translated on the way into it.
+   */
+  const disposeLocaleChanges = onLocaleChange(() => {
+    if (disposed) return
+    transcript.reset()
+    applySnapshot(store.getSnapshot())
+    refreshCommandAutocomplete()
+    requestRender()
+  })
 
   const refreshSkillCommands = (): void => {
     const scan = ++skillCommandScan
@@ -2299,6 +2354,17 @@ export function createTuiChat(
       description: 'Select tool-card visibility and reasoning display',
       input: { hint: '[collapsed|expanded|hidden] [reasoning [on|off]]' },
       handler: ({ rawInput }) => runDetails(rawInput),
+    })
+    commandCtx.commands.register({
+      name: 'lang',
+      description: 'Show or switch the interface language',
+      input: { hint: '[en|zh]' },
+      handler: ({ rawInput }) => runLangCommand(rawInput, {
+        store: localeStore,
+        // After the fact, so it reads as what it is: the language did change,
+        // and only its durability did not.
+        reportSaveFailure: message => { appendNotice(message, 'warning') },
+      }),
     })
     commandCtx.commands.register({
       name: 'palette',
@@ -2586,7 +2652,7 @@ export function createTuiChat(
       editor.addToHistory(text)
       editor.setText('')
       queuedSubmissions.push(value)
-      flashStatus('Queued until the startup skill has been sent.')
+      flashStatus(t('status.flash.queuedForSkill'))
       return
     }
     // `/skill:<name>` carries a colon, which the command registry's name
@@ -2736,7 +2802,7 @@ export function createTuiChat(
   const showHistorySearch = (): void => {
     const entries = editor.historyEntries()
     if (entries.length === 0) {
-      flashStatus('No prompt history in this session yet.')
+      flashStatus(t('status.flash.historyEmpty'))
       return
     }
     void historyOverlay?.close()
@@ -2849,7 +2915,7 @@ export function createTuiChat(
     const draft = editor.getText()
     if (draft !== '') {
       if (escapeArmed === undefined) {
-        armEscape('Press esc again to clear the draft.')
+        armEscape(t('status.flash.escDraft'))
         return
       }
       disarmEscape()
@@ -2863,7 +2929,7 @@ export function createTuiChat(
     }
     if (!hasRewindTarget(agent.session.events)) return
     if (escapeArmed === undefined) {
-      armEscape('Press esc again to rewind to an earlier prompt.')
+      armEscape(t('status.flash.escRewind'))
       return
     }
     disarmEscape()
@@ -2928,7 +2994,7 @@ export function createTuiChat(
             disarmExit()
           } else if (exitArmed === undefined) {
             cancelActiveTurn()
-            armExit('Press ctrl+c again to exit without waiting for the turn.')
+            armExit(t('status.flash.exitWithoutTurn'))
           } else {
             disarmExit()
             void shutdown(true)
@@ -2943,7 +3009,7 @@ export function createTuiChat(
         } else if (exitArmed !== undefined) {
           requestExit()
         } else {
-          armExit('Press ctrl+c again to exit.')
+          armExit(t('status.flash.exitAgain'))
         }
       }
       return { consume: true }
@@ -2955,8 +3021,8 @@ export function createTuiChat(
         // something the user had typed but not yet delivered. The row names the
         // key that discards it, so the exit is two deliberate presses away
         // rather than one accident.
-        if (agent.status === 'running') appendNotice('Cancel the active turn before exiting.', 'warning')
-        else if (editor.getText() !== '') flashStatus('Draft in the editor — clear it with ctrl+c to exit.')
+        if (agent.status === 'running') appendNotice(t('status.flash.cancelBeforeExit'), 'warning')
+        else if (editor.getText() !== '') flashStatus(t('status.flash.draftBlocksExit'))
         else requestExit()
       }
       return { consume: true }
@@ -3083,6 +3149,7 @@ export function createTuiChat(
     disarmEscape()
     removeInputListener()
     disposeCommandChanges()
+    disposeLocaleChanges()
     disposeSkillChanges()
     disposePromptChanges()
     for (const value of promptValues) value.dispose()
@@ -3749,6 +3816,11 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
  */
 /* v8 ignore start -- production process wiring; fake-terminal tests cover createTuiChat, and the print suite covers runPrintTask */
 export function apply(ctx: Context, config: Config): void {
+  // Before the first frame, and before `--print` writes its first line: the
+  // language is a property of this process, so every surface it opens — banner,
+  // refusal, panel — has to be in the one the user last chose.
+  const storedLocale = resolveLocaleStore(ctx).load()
+  if (storedLocale !== undefined) setLocale(storedLocale)
   const startup = ctx.tuiStartup
   // Decided before the TTY check, which is a requirement of the renderer and
   // not of this app: `--print` exists to be used from a script, where stdout is

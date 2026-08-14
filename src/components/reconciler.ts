@@ -28,6 +28,7 @@ import type {
 import type { StepTimingTracker } from '../chat/timing.ts'
 import { displayText } from './text.ts'
 import type { Palette } from './theme.ts'
+import { t } from '../i18n/index.ts'
 import {
   ContextCardComponent,
   StreamingAssistantComponent,
@@ -62,9 +63,9 @@ export const STEERING_BADGE = 'Steering'
  * @returns One sentence naming what that phase leaves on screen.
  */
 export function cardPhaseNotice(visibility: ToolCardVisibility): string {
-  if (visibility === 'hidden') return 'Tool cards hidden.'
-  if (visibility === 'expanded') return 'Tool and context cards expanded.'
-  return 'Tool cards collapsed; context hidden.'
+  if (visibility === 'hidden') return t('status.flash.cardsHidden')
+  if (visibility === 'expanded') return t('status.flash.cardsExpanded')
+  return t('status.flash.cardsCollapsed')
 }
 
 /** Everything the reconciler needs to build a component for a node. */

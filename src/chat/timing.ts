@@ -8,6 +8,7 @@
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Palette } from '../components/theme.ts'
+import { t } from '../i18n/index.ts'
 
 /**
  * Render cadence of the status prompt while active, and while the glyph fades
@@ -361,7 +362,7 @@ export function formatTimingTotals(totals: TimingTotals, includeModelWait = fals
  * @returns The badge text, or `undefined` when nothing is queued.
  */
 export function formatQueuedStatus(queued: number): string | undefined {
-  return queued > 0 ? `${queued} queued` : undefined
+  return queued > 0 ? t('prompt.queued', { count: queued }) : undefined
 }
 
 /**

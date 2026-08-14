@@ -33,6 +33,7 @@ import type {
 } from '@deepseek-ai/dsh-host-plugin-inventory'
 import { displayInlineText } from './text.ts'
 import type { Palette } from './theme.ts'
+import { plural, t } from '../i18n/index.ts'
 
 /** The panel's heading, so the command and its view name the same thing. */
 export const PLUGINS_PANEL_TITLE = '/plugins'
@@ -57,21 +58,22 @@ export interface PluginInventoryReader {
  * Shown instead of rows when the deployment did not mount
  * `@deepseek-ai/dsh-host-plugin-inventory`. It names the plugin rather than the
  * service key: the reader's next step is a config change, not a code change.
+ *
+ * These three are the English text of the message keys the panel renders, not a
+ * second source of it: the panel itself looks the key up per frame, so `/lang`
+ * moves it, while the constant stays for the parity fixtures that quote the
+ * shipped English wording.
  */
-export const PLUGINS_UNAVAILABLE =
-  'Plugin inventory is not mounted. Add @deepseek-ai/dsh-host-plugin-inventory to this profile to list Loader entries.'
+export const PLUGINS_UNAVAILABLE = t('plugins.unavailable', undefined, 'en')
 
 /** Shown when the inventory is mounted but the Loader reports no non-group entry. */
-export const PLUGINS_EMPTY = 'The Loader reports no plugin entries.'
+export const PLUGINS_EMPTY = t('plugins.empty', undefined, 'en')
 
 /** Shown when the filter matches nothing; the entries themselves still exist. */
-export const PLUGINS_NO_MATCH = 'No entries match the filter.'
+export const PLUGINS_NO_MATCH = t('plugins.noMatch', undefined, 'en')
 
 /** Terminal rows the panel spends on its own chrome: blank, title, filter, count, footer. */
 const PANEL_CHROME_ROWS = 5
-
-/** The key hints every ready panel ends with, before its position readout. */
-const PANEL_HINT = 'type to filter · ↑↓ move · enter details · esc close'
 
 /**
  * One entry's effective state, collapsing the two independent facts the
@@ -222,7 +224,7 @@ export class PluginsPanel implements Component, Focusable {
 
   /** Body rows for the ready state, plus the display-row index of the selection bar. */
   private body(visible: readonly PluginInventoryEntry[], width: number): { rows: string[]; selectedRow: number } {
-    if (visible.length === 0) return { rows: [this.palette.dim(PLUGINS_NO_MATCH)], selectedRow: 0 }
+    if (visible.length === 0) return { rows: [this.palette.dim(t('plugins.noMatch'))], selectedRow: 0 }
     const statuses = visible.map(entry => pluginEntryStatus(entry))
     const statusColumn = Math.max(...statuses.map(status => status.length))
     const selectedIndex = this.selectedIndex(visible)
@@ -259,23 +261,24 @@ export class PluginsPanel implements Component, Focusable {
     const contentWidth = Math.max(1, width - 2)
     const title = ` ${this.palette.dim(PLUGINS_PANEL_TITLE)}`
     if (this.snapshot === undefined || this.snapshot.entries.length === 0) {
-      const reason = this.snapshot === undefined ? PLUGINS_UNAVAILABLE : PLUGINS_EMPTY
+      const reason = this.snapshot === undefined ? t('plugins.unavailable') : t('plugins.empty')
       return [
         '',
         title,
         ...wrapTextWithAnsi(this.palette.dim(reason), contentWidth).map(line => ` ${line}`),
-        ` ${this.palette.dim('esc close')}`,
+        ` ${this.palette.dim(t('panel.escClose'))}`,
       ]
     }
     const visible = this.filtered()
     this.filter.focused = true
     const filterLine = truncateToWidth(
-      `${this.palette.dim('filter:')} ${this.filter.render(Math.max(1, contentWidth - 8)).join('')}`,
+      `${this.palette.dim(t('plugins.filter'))} ${this.filter.render(Math.max(1, contentWidth - 8)).join('')}`,
       contentWidth,
       '',
     )
     const active = this.snapshot.entries.filter(entry => pluginEntryStatus(entry) === 'active').length
-    const count = `${String(visible.length)}/${String(this.snapshot.entries.length)} entries · ${String(active)} active`
+    const total = this.snapshot.entries.length
+    const count = plural(total, 'plugins.count', { visible: visible.length, total, active })
     const { rows, selectedRow } = this.body(visible, contentWidth)
     const viewport = this.viewport()
     // The selection bar stays in view: scrolling follows it, and a resize or a
@@ -285,7 +288,11 @@ export class PluginsPanel implements Component, Focusable {
     if (selectedRow >= this.offset + viewport) this.offset = selectedRow - viewport + 1
     const shown = rows.slice(this.offset, this.offset + viewport)
     const position = rows.length > viewport
-      ? `  ·  ${String(this.offset + 1)}–${String(this.offset + shown.length)} of ${String(rows.length)}`
+      ? `  ·  ${t('panel.position', {
+        first: this.offset + 1,
+        last: this.offset + shown.length,
+        total: rows.length,
+      })}`
       : ''
     return [
       '',
@@ -293,7 +300,7 @@ export class PluginsPanel implements Component, Focusable {
       ` ${filterLine}`,
       ` ${truncateToWidth(this.palette.dim(count), contentWidth, '')}`,
       ...shown.map(line => ` ${line}`),
-      ` ${truncateToWidth(this.palette.dim(`${PANEL_HINT}${position}`), contentWidth, '')}`,
+      ` ${truncateToWidth(this.palette.dim(`${t('plugins.hint')}${position}`), contentWidth, '')}`,
     ]
   }
 }

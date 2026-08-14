@@ -23,6 +23,7 @@ import {
 } from '@earendil-works/pi-tui'
 import { displayText } from './text.ts'
 import type { Palette } from './theme.ts'
+import { t } from '../i18n/index.ts'
 
 /** What accepting a match asks the caller to do with it. */
 export type HistorySearchOutcome = 'accept' | 'submit'
@@ -138,16 +139,16 @@ export class HistorySearchPanel implements Component, Focusable {
   render(width: number): string[] {
     const contentWidth = Math.max(1, width - 2)
     const match = this.current()
-    const label = this.failed ? 'no matching prompt: ' : 'search prompts: '
-    const heading = `${label}${displayText(this.query)}`
+    const label = t(this.failed ? 'history.noMatch' : 'history.label')
+    const heading = `${label}: ${displayText(this.query)}`
     const body = match === undefined
-      ? this.palette.dim('(type to search your prompt history)')
+      ? this.palette.dim(t('history.empty'))
       : this.palette.accent(displayText(match.split('\n')[0] ?? ''))
     return [
       '',
       ` ${this.palette.dim(truncateToWidth(heading, contentWidth, '…'))}`,
       ` ${truncateToWidth(`❯ ${body}`, contentWidth, '…')}`,
-      ` ${this.palette.dim(truncateToWidth('ctrl+r older · enter send · tab/esc accept · ctrl+c cancel', contentWidth, '…'))}`,
+      ` ${this.palette.dim(truncateToWidth(t('history.hint'), contentWidth, '…'))}`,
     ]
   }
 }

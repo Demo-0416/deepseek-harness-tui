@@ -23,12 +23,10 @@ import {
 } from '@earendil-works/pi-tui'
 import { displayText } from './text.ts'
 import type { Palette } from './theme.ts'
+import { t } from '../i18n/index.ts'
 
 /** Terminal rows the panel spends on its own chrome: title, footer, and the blank above. */
 const PANEL_CHROME_ROWS = 3
-
-/** The scroll hint every panel ends with, before its position readout. */
-const PANEL_HINT = '↑↓ scroll · esc close'
 
 /**
  * One scrollable page of pre-rendered lines in the editor slot.
@@ -117,13 +115,17 @@ export class ScrollablePanel implements Component, Focusable {
     this.scrollTo(this.offset)
     const visible = content.slice(this.offset, this.offset + viewport)
     const position = content.length > viewport
-      ? `  ·  ${String(this.offset + 1)}–${String(this.offset + visible.length)} of ${String(content.length)}`
+      ? `  ·  ${t('panel.position', {
+        first: this.offset + 1,
+        last: this.offset + visible.length,
+        total: content.length,
+      })}`
       : ''
     return [
       '',
       ` ${this.palette.dim(displayText(this.title))}`,
       ...visible.map(line => ` ${line}`),
-      ` ${this.palette.dim(`${PANEL_HINT}${position}`)}`,
+      ` ${this.palette.dim(`${t('panel.hint')}${position}`)}`,
     ]
   }
 }

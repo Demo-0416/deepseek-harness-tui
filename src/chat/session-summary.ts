@@ -14,6 +14,7 @@ import type { GoalSnapshot } from '@deepseek-ai/dsh-goal'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats'
 import { displayInlineText, displayText } from '../components/text.ts'
 import { formatStatusDuration } from './timing.ts'
+import { t } from '../i18n/index.ts'
 
 /**
  * Columns the prompt row spends on a goal objective.
@@ -67,8 +68,8 @@ export function goalStatusRows(
     ...goal.blockedReason === undefined ? [] : [displayInlineText(goal.blockedReason.message)],
   ].join(' · ')
   return [
-    ['Goal', displayText(goal.objective)],
-    ['Goal state', detail],
+    [t('status.row.goal'), displayText(goal.objective)],
+    [t('status.row.goalState'), detail],
   ]
 }
 

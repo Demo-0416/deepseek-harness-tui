@@ -21,6 +21,7 @@ import {
 } from '@earendil-works/pi-tui'
 import { displayText } from './text.ts'
 import type { Palette } from './theme.ts'
+import { t } from '../i18n/index.ts'
 
 /** Rows the panel spends on its own chrome: blank, title, lead line, caveat, footer. */
 const REWIND_CHROME_ROWS = 6
@@ -106,14 +107,12 @@ export class RewindPanel implements Component, Focusable {
   render(width: number): string[] {
     const contentWidth = Math.max(1, width - 2)
     const push = (line: string): string => ` ${truncateToWidth(line, contentWidth, '…')}`
-    const lines: string[] = ['', push(this.palette.bold(this.palette.accent('Rewind')))]
+    const lines: string[] = ['', push(this.palette.bold(this.palette.accent(t('rewind.title'))))]
     if (this.targets.length === 0) {
-      lines.push(push('Nothing to rewind to yet.'), push(this.palette.dim('esc close')))
+      lines.push(push(t('rewind.empty')), push(this.palette.dim(t('panel.escClose'))))
       return lines
     }
-    lines.push(push(this.canFork
-      ? 'Fork the conversation to the point before…'
-      : 'Bring an earlier prompt back to the editor…'))
+    lines.push(push(t(this.canFork ? 'rewind.fork' : 'rewind.reuse')))
     const visible = this.visibleCount()
     const start = Math.max(0, Math.min(
       this.selectedIndex - Math.floor(visible / 2),
@@ -129,8 +128,8 @@ export class RewindPanel implements Component, Focusable {
       lines.push(push(active ? this.palette.bold(this.palette.accent(row)) : row))
     }
     lines.push(
-      push(this.palette.dim('Files are never restored — dsh keeps no file checkpoints.')),
-      push(this.palette.dim('↑/↓ navigate · enter rewind · esc close')),
+      push(this.palette.dim(t('rewind.files'))),
+      push(this.palette.dim(t('rewind.hint'))),
     )
     return lines
   }

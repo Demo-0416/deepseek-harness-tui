@@ -26,6 +26,7 @@
 
 import type { AutocompleteItem } from '@earendil-works/pi-tui'
 import { displayInlineText } from '../components/text.ts'
+import { currentLocale, localeName, LOCALE_IDS, t } from '../i18n/index.ts'
 
 /** One advertised route, as the LLM service lists it. */
 export interface CompletableModel {
@@ -264,6 +265,30 @@ export function detailsArgumentCompletions(argumentPrefix: string): Autocomplete
     for (const value of DETAILS_VISIBILITY) push(value, `Show tool cards ${value}`)
   }
   if (!before.includes('reasoning')) push('reasoning', 'Toggle reasoning blocks, or set them explicitly')
+  return menu(items)
+}
+
+/**
+ * Complete `/lang [en|zh]` with the locales this terminal ships.
+ *
+ * The active one is marked rather than hidden: the menu is also how a user
+ * checks what the language currently is, and a list that dropped the answer
+ * would make them run the command to find out.
+ * @param argumentPrefix - argument text typed so far.
+ * @returns the matching locales, or `null` for no menu.
+ */
+export function langArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
+  const typed = argumentPrefix.trim()
+  const active = currentLocale()
+  const items: AutocompleteItem[] = []
+  for (const locale of LOCALE_IDS) {
+    if (!matches(locale, typed)) continue
+    items.push({
+      value: locale,
+      label: locale,
+      description: locale === active ? `${localeName(locale)} · ${t('lang.active')}` : localeName(locale),
+    })
+  }
   return menu(items)
 }
 
