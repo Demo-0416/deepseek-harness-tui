@@ -26,9 +26,12 @@ import type {
   UserMessageNode,
 } from '../core/types.ts'
 import type { StepTimingTracker } from '../chat/timing.ts'
+import { collapseToolGroups, type CollapsedGroup } from '../core/collapse.ts'
+import { displayPath } from '../chat/helpers.ts'
 import { displayText } from './text.ts'
 import type { Palette } from './theme.ts'
 import {
+  CollapsedGroupComponent,
   ContextCardComponent,
   StreamingAssistantComponent,
   ToolCardComponent,
@@ -56,15 +59,16 @@ export const STEERING_BADGE = 'Steering'
  * Only the expanded phase renders injected context at all (see
  * {@link TranscriptReconciler.reconcile}), so the collapsed sentence no longer
  * claims to be showing context cards: it names what each kind of card actually
- * does in that phase. The hidden and expanded sentences are unchanged, because
- * what they said was already true.
+ * does in that phase — including the read/search runs it reports as one row.
+ * The hidden and expanded sentences are unchanged, because what they said was
+ * already true.
  * @param visibility - The phase the cycle just entered.
  * @returns One sentence naming what that phase leaves on screen.
  */
 export function cardPhaseNotice(visibility: ToolCardVisibility): string {
   if (visibility === 'hidden') return 'Tool cards hidden.'
   if (visibility === 'expanded') return 'Tool and context cards expanded.'
-  return 'Tool cards collapsed; context hidden.'
+  return 'Tool cards collapsed; reads grouped, context hidden.'
 }
 
 /** Everything the reconciler needs to build a component for a node. */
@@ -94,6 +98,8 @@ export interface TranscriptDeps {
   readonly now: () => number
   /** Tool definition lookup, so a card can use the tool's own presenters. */
   readonly toolDefinition: (name: string) => ToolDefinition | undefined
+  /** Workspace directory a collapsed group's file hint is shortened against. */
+  readonly cwd: string
 }
 
 /**
@@ -118,7 +124,37 @@ interface LocalRows {
 type NodeView =
   | { kind: 'assistant'; version: number; component: StreamingAssistantComponent }
   | { kind: 'tool'; version: number; component: ToolCardComponent; argsRaw: string }
+  | { kind: 'group'; signature: string; component: CollapsedGroupComponent }
   | { kind: 'plain'; version: number; component: Component }
+
+/**
+ * A collapsed row's view key: the first member's node key, prefixed so it can
+ * never collide with that member's own card key. The first member of a group is
+ * stable — the log only appends, so nothing can land above it.
+ */
+function groupKey(group: CollapsedGroup): string {
+  return `collapsed:${group.keys[0] ?? group.index}`
+}
+
+/**
+ * Everything a collapsed row shows, as one string. The group is re-planned from
+ * scratch on every snapshot, so the mounted component is refreshed by what the
+ * row would say rather than by object identity — a group whose counts did not
+ * move keeps its cached rows.
+ */
+function groupSignature(group: CollapsedGroup): string {
+  return [
+    group.searchCount,
+    group.readCount,
+    group.listCount,
+    group.mcpCallCount,
+    group.mcpServers.join('|'),
+    group.active,
+    group.failed,
+    group.hint?.kind ?? '',
+    group.hint?.value ?? '',
+  ].join(' ')
+}
 
 /**
  * Wall time of each turn, replayed from the log's `turn/start`/`turn/end` pair.
@@ -256,6 +292,13 @@ export class TranscriptReconciler {
       for (const group of groups) children.push(...group.components)
     }
 
+    // The collapsed phase reports a run of read-only calls as one row instead
+    // of one card each; the other two phases have no groups at all (expanded
+    // shows every card, hidden shows none), so the plan is not even computed.
+    const collapsed = this.visibility === 'collapsed'
+      ? collapseToolGroups(nodes, { from: this.hiddenBefore, isHidden: id => this.isHiddenCall(id) })
+      : new Map<number, CollapsedGroup>()
+
     for (let index = this.hiddenBefore; index < nodes.length; index += 1) {
       const node = nodes[index]
       /* v8 ignore next -- the loop bound keeps the index inside the array. */
@@ -263,6 +306,17 @@ export class TranscriptReconciler {
       emitLocals(index)
       if (node.kind === 'tool-call') {
         if (!node.argsComplete || this.isHiddenCall(node.callId)) continue
+        const group = collapsed.get(index)
+        if (group !== undefined) {
+          // Every member maps to the same group; only the first one renders it,
+          // and the rest are absorbed into the counts that row carries.
+          if (group.index !== index) continue
+          const row = this.groupView(group)
+          seen.add(groupKey(group))
+          if (footer?.calls.includes(node.callId) !== true) flushFooter()
+          children.push(row)
+          continue
+        }
         const card = this.toolView(node)
         seen.add(node.key)
         // A card of the open step renders before that step's footer.
@@ -546,6 +600,31 @@ export class TranscriptReconciler {
     component.setFoldedText(node.text, node.reasoning, node.settled)
     if (node.completedAt !== undefined) component.complete(node.completedAt)
     this.views.set(node.key, { kind: 'assistant', version: node.version, component })
+    return component
+  }
+
+  /**
+   * Mount or update one collapsed read/search row. The row is a component
+   * rather than a rebuilt text line so a running group's counts can be pushed
+   * into it every snapshot without re-wrapping the rows it already computed.
+   */
+  private groupView(group: CollapsedGroup): CollapsedGroupComponent {
+    const key = groupKey(group)
+    const signature = groupSignature(group)
+    const existing = this.views.get(key)
+    if (existing !== undefined && existing.kind === 'group') {
+      if (existing.signature !== signature) {
+        existing.signature = signature
+        existing.component.setGroup(group)
+      }
+      return existing.component
+    }
+    const component = new CollapsedGroupComponent(
+      group,
+      this.deps.palette,
+      path => displayPath(path, this.deps.cwd),
+    )
+    this.views.set(key, { kind: 'group', signature, component })
     return component
   }
 

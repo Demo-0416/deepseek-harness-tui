@@ -130,7 +130,10 @@ recent sessions.
 ### Surfaces
 
 - **Chat** — the main view: streaming messages, tool cards, the plan, the status
-  row, and the prompt with its context line.
+  row, and the prompt with its context line. A run of consecutive read-only
+  calls — reads, greps, globs, `ls`/`cat`-shaped shell commands, MCP queries —
+  reports as one row (`Searched for 3 patterns, read 2 files`) instead of one
+  card each; Ctrl+O opens the run back into its cards.
 - **Rewind** — `/rewind`, or a double Esc at an empty prompt: go back to an
   earlier prompt. With a host that can fork the session the conversation moves
   with it and the original stays resumable; otherwise the prompt comes back to

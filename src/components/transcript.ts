@@ -27,6 +27,12 @@ import type {
   ToolResultView,
 } from '@deepseek-ai/dsh-tools'
 import type { FileDiff } from '@deepseek-ai/dsh-tools'
+import {
+  collapsedSummary,
+  formatCollapseHint,
+  COLLAPSE_TEXT,
+  type CollapsedGroup,
+} from '../core/collapse.ts'
 import { renderUnknownXml } from './xml-tool-output.ts'
 import { displayInlineText, displayText } from './text.ts'
 import { gradientText, type Palette } from './theme.ts'
@@ -1370,6 +1376,78 @@ export class ToolCardComponent extends CachedCardComponent {
     // A whitespace-only row carries no output to dim; leaving it unwrapped keeps
     // Markdown's padding out of the styled ranges.
     return rows.map(row => row.trim() === '' ? row : this.palette.dim(row))
+  }
+}
+
+/**
+ * One run of read-only calls, rendered as the single row that replaces their
+ * cards on the collapsed phase — Claude Code's `CollapsedReadSearchContent`.
+ *
+ * The row is the transcript's default answer to "what has it been doing": a
+ * sentence of counts (`Searched for 3 patterns, read 2 files`) rather than one
+ * card per file. While the group runs it is present-tense, keeps a leading
+ * bullet, and carries a `⎿` row naming the operation in flight; once every call
+ * has settled the bullet goes and the whole row recedes, exactly as upstream.
+ * The group's own cards come back on the expanded phase, where the reconciler
+ * mounts them instead of this row.
+ *
+ * The one addition to upstream's row: a group that contains a failed call keeps
+ * its bullet, in the error color, after it settles. A collapsed row is the only
+ * thing on screen for those calls, and a failure that leaves no mark at all is
+ * a failure the user never learns about.
+ */
+export class CollapsedGroupComponent extends CachedCardComponent {
+  constructor(
+    private group: CollapsedGroup,
+    private readonly palette: Palette,
+    private readonly displayPath: (path: string) => string,
+  ) {
+    super()
+  }
+
+  /**
+   * Apply the group's current counts; a running group re-seals on every
+   * snapshot as its calls land.
+   * @param group - The freshly planned group.
+   */
+  setGroup(group: CollapsedGroup): void {
+    this.group = group
+    this.dropLines()
+  }
+
+  protected renderLines(width: number): string[] {
+    const group = this.group
+    const summary = collapsedSummary(group)
+    // A settled group renders no bullet at all: upstream reserves the gutter
+    // (`<Box minWidth={2} />`) and lets the sentence recede into the margin.
+    const bullet = group.active
+      ? this.palette.bold(accent(this.palette, group.failed ? CLAUDE_COLORS.error : CLAUDE_COLORS.claude, TOOL_BULLET))
+      : group.failed ? accent(this.palette, CLAUDE_COLORS.error, TOOL_BULLET) : ' '
+    const text = group.active ? this.palette.text(summary) : this.palette.dim(summary)
+    // The row wraps rather than truncating, unlike a card header: the key that
+    // opens the group is the last thing on it, and a narrow terminal must not
+    // be the reason the user never learns the row can be opened.
+    const head = `${text} ${this.palette.dim(COLLAPSE_TEXT.expandHint)}`
+    const rows = ['']
+    let first = true
+    for (const row of wrapTextWithAnsi(head, Math.max(20, width - GUTTER_WIDTH - 2))) {
+      rows.push(first ? `${GUTTER}${bullet} ${row}` : `${GUTTER_INDENT}${row}`)
+      first = false
+    }
+    // The hint names the call in flight, so it belongs only to a running group:
+    // a settled one has nothing left to report but its counts.
+    if (group.active && group.hint !== undefined) {
+      const inner = Math.max(20, width - RESULT_PREFIX_WIDTH)
+      const hint = formatCollapseHint(group.hint, this.displayPath)
+      let lead = true
+      for (const line of displayText(hint).split('\n')) {
+        for (const row of wrapTextWithAnsi(this.palette.dim(line), inner)) {
+          rows.push(lead ? `${this.palette.dim(RESULT_LEAD)}${row}` : `${RESULT_INDENT}${row}`)
+          lead = false
+        }
+      }
+    }
+    return plainIfNoColor(this.palette, rows)
   }
 }
 

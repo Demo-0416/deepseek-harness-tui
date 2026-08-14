@@ -106,6 +106,7 @@ function mount(
     // has to be past the log.
     now: () => START + 10_000_000,
     toolDefinition: () => undefined,
+    cwd: '/workspace',
   }
   const chat = new Container()
   const reconciler = new TranscriptReconciler(chat, deps, {
