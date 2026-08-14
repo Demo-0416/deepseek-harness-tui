@@ -176,6 +176,10 @@ export class TranscriptReconciler {
             block(new Text(this.deps.palette.dim(COMPACTION_MARKER), 0, 0))))
           break
         case 'context': {
+          // The hidden phase drops injected context exactly as it drops tool
+          // cards: both are traffic between the harness and the model, and the
+          // phase exists to leave nothing but the conversation on screen.
+          if (this.visibility === 'hidden') break
           seen.add(node.key)
           children.push(this.contextView(node))
           break
@@ -270,8 +274,8 @@ export class TranscriptReconciler {
     this.visibility = visibility
     for (const view of this.views.values()) {
       if (view.kind === 'tool') view.component.setVisibility(visibility)
-      // Context cards carry injected instructions rather than tool traffic, so
-      // they never hide: the hidden phase reads as their collapsed preview.
+      // A context card has two states, not three: the hidden phase drops it in
+      // `reconcile` instead, so only expanded/collapsed reaches the card.
       else if (view.kind === 'context') view.card.setExpanded(visibility === 'expanded')
     }
     this.reconcile(this.nodes)
@@ -347,7 +351,7 @@ export class TranscriptReconciler {
     if (existing !== undefined && existing.kind === 'context' && existing.version === node.version) {
       return existing.component
     }
-    const card = new ContextCardComponent(node.label, node.text, this.deps.maxToolOutputLines, this.deps.palette)
+    const card = new ContextCardComponent(node.label, node.text, this.deps.palette)
     card.setExpanded(this.visibility === 'expanded')
     const component = block(card)
     this.views.set(node.key, { kind: 'context', version: node.version, component, card })

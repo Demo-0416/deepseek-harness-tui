@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { CallId, createToolResultMessage } from '@deepseek-ai/dsh-llm'
+import { CallId, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
 import {
   appendAssistant,
@@ -118,6 +118,90 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       assert.ok(timing > output, `the timing footer trails the tool card:\n${rows.join('\n')}`)
     } finally {
       await unmount(harness)
+    }
+  })
+
+  it('renders a turn in the order its log recorded it, with context above the answer', async () => {
+    // Replay of session-85d19568 (`how are you doing`): the terminal echoes the
+    // prompt, and only then does the agent log `step/start`, the claimed prompt,
+    // the two context snapshots the request was assembled from, and the answer.
+    // No seeded lifecycle, so the step opens exactly where the real log opens it.
+    const terminal = new HeadlessTerminal(100, 40)
+    const harness = await createTuiTestHarness(terminal, () => {}, {
+      cwd: '/workspace/project',
+      omitInitialLifecycle: true,
+      config: { title: 'DSH transcript', welcome: 'ready.', theme: { color: false, inputPrompt: INPUT_PROMPT } },
+    })
+    try {
+      await delay(SETTLE_MS)
+      terminal.send('how are you doing')
+      terminal.send('\r')
+      await delay(SETTLE_MS)
+      const submitted = [...harness.agent.sent.map(delivery => delivery.message), ...harness.agent.followups][0]
+      assert.ok(submitted !== undefined, 'the prompt reached the agent')
+
+      const position = { turn: 1, step: 1 }
+      harness.session.append('turn/start', { turn: 1 })
+      harness.session.append('step/start', position)
+      harness.session.append('user/message', submitted, { surfaceOp: 'append' })
+      harness.session.append('user/message', createUserMessage({
+        content: [{
+          type: 'text',
+          text: 'Current runtime context. This snapshot supersedes earlier ones.\nSANDBOX-POLICY',
+        }],
+        source: {
+          kind: 'plugin',
+          plugin: 'dsh-system-prompt',
+          form: 'snapshot',
+          sections: [{ name: 'sandbox:policy', text: 'SANDBOX-POLICY' }],
+        },
+      }), { surfaceOp: 'append' })
+      harness.session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: '<system-reminder>\nSKILL-CATALOG-BODY\n</system-reminder>' }],
+        // The kind the recorded log carries; this checkout declares no such
+        // source, which is exactly the merge-extensible boundary the fold reads.
+        source: { kind: 'skill-catalog', form: 'catalog' } as never,
+      }), { surfaceOp: 'append' })
+      harness.session.append('assistant/chunk', {
+        ...position,
+        chunk: { type: 'text-delta', index: 0, text: 'ANSWER-TEXT' },
+      })
+      appendAssistant(harness.session, [{ type: 'text', text: 'ANSWER-TEXT' }], undefined, position)
+      harness.session.append('step/end', position)
+      await delay(SETTLE_MS)
+
+      const rows = terminal.text().split('\n').map(row => row.trimEnd())
+      const at = (needle: string): number => rows.findIndex(row => row.includes(needle))
+      const prompt = at('how are you doing')
+      const runtimeCard = at('Context · dsh-system-prompt')
+      const skillCard = at('Context · skill-catalog')
+      const answer = at('ANSWER-TEXT')
+      const timing = at('Completed ')
+      assert.ok(prompt >= 0, `the prompt is on screen:\n${rows.join('\n')}`)
+      assert.ok(runtimeCard > prompt, `context follows the prompt it was sent with:\n${rows.join('\n')}`)
+      assert.ok(skillCard > runtimeCard, `and keeps the log's order between cards:\n${rows.join('\n')}`)
+      assert.ok(answer > skillCard, `the answer follows the context, not the other way round:\n${rows.join('\n')}`)
+      assert.ok(timing > answer, `and its timing footer trails it:\n${rows.join('\n')}`)
+
+      // Collapsed is the default: one dim row per card, naming the toggle.
+      const frame = rows.join('\n')
+      assert.ok(frame.includes('Context · skill-catalog (ctrl+o)'), `a collapsed card names its toggle:\n${frame}`)
+      assert.ok(!frame.includes('SANDBOX-POLICY'), `and shows none of its body:\n${frame}`)
+      assert.ok(!frame.includes('SKILL-CATALOG-BODY'), `for either card:\n${frame}`)
+
+      // Ctrl+O opens them where they stand.
+      terminal.send('\x0f')
+      await delay(SETTLE_MS)
+      const expanded = terminal.text().split('\n').map(row => row.trimEnd())
+      const body = expanded.findIndex(row => row.includes('SANDBOX-POLICY'))
+      assert.ok(body > expanded.findIndex(row => row.includes('how are you doing')),
+        `an expanded card opens under its prompt:\n${expanded.join('\n')}`)
+      assert.ok(expanded.findIndex(row => row.includes('SKILL-CATALOG-BODY'))
+        < expanded.findIndex(row => row.includes('ANSWER-TEXT')),
+      `and still above the answer:\n${expanded.join('\n')}`)
+    } finally {
+      await disposeTuiTestHarness(harness)
+      await terminal.dispose()
     }
   })
 

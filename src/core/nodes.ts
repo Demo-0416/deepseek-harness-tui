@@ -418,23 +418,30 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
       }
       return push(nodes, node)
     }
-    case 'step/start': {
-      const { turn, step } = event.data
-      if (findAssistant(nodes, turn, step) !== undefined) return false
-      openAssistant(nodes, turn, step, time)
-      return true
-    }
+    case 'step/start':
+      // A step opens no node of its own. `step/start` is logged before the
+      // request is assembled, and the messages that request is built from — the
+      // claimed prompt, every producer's context snapshot — are logged *after*
+      // it. Opening the step's node here would put it above all of them, and
+      // since nodes are appended in fold order, each of those messages would
+      // then render below the answer it was sent with. The step's first content
+      // event opens the node instead, at its own log position.
+      return false
     case 'assistant/chunk': {
       const { turn, step, chunk } = event.data
-      const node = openAssistant(nodes, turn, step, time)
       switch (chunk.type) {
-        case 'text-delta':
+        case 'text-delta': {
+          const node = openAssistant(nodes, turn, step, time)
           node.text += chunk.text
           return touch(node)
-        case 'reasoning-delta':
+        }
+        case 'reasoning-delta': {
+          const node = openAssistant(nodes, turn, step, time)
           node.reasoning += chunk.text
           return touch(node)
+        }
         case 'tool-call-delta': {
+          const node = openAssistant(nodes, turn, step, time)
           const tool = openToolCall(nodes, chunk.id, chunk.name ?? '', time)
           if (chunk.name !== undefined && tool.name === '') tool.name = chunk.name
           tool.argsRaw += chunk.argumentsDelta
@@ -448,7 +455,8 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
         }
         default:
           // Block boundaries, usage, and finish carry no transcript content of
-          // their own; the deltas around them already did.
+          // their own; the deltas around them already did. They open no node
+          // either: a fold that reports no change must make none.
           return false
       }
     }

@@ -25,6 +25,9 @@ import {
 } from '../harness.ts'
 import { HeadlessTerminal } from '../headless-terminal.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+// Type import declaration-merges `session/title` onto the session event map so
+// the resumed-banner case can log a title the way the title service does.
+import type {} from '@deepseek-ai/dsh-session-title'
 import { Text, TuiMainScreen } from '@earendil-works/pi-tui'
 
 /** Literal editor prefix, so "the editor is on screen" does not depend on prompt-value registrations. */
@@ -187,6 +190,50 @@ describe('TUI smoke', { skip: skipWithoutEntry }, () => {
       assert.ok(frame.includes(INPUT_PROMPT), `first frame must show the editor prompt:\n${frame}`)
       // `theme.color: false` must keep every cell inheriting the user's palette.
       assert.deepEqual(harness.terminal.themeViolations(), [])
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('opens on the wordmark, the route, and the workspace — and no session id', async () => {
+    const harness = await mount()
+    try {
+      const rows = harness.terminal.text().split('\n').map(row => row.trimEnd())
+      assert.match(rows[0] ?? '', /^ DEEPSEEK HARNESS v\d+\.\d+\.\d+$/, `banner row:\n${rows.slice(0, 4).join('\n')}`)
+      // The route the next turn runs under, then the workspace: what Claude Code
+      // puts under its own wordmark.
+      assert.equal(rows[1], ' deepseek-v4-flash · /workspace/project')
+      const frame = harness.terminal.text()
+      // A fresh session's id is a uuid the user did not choose and cannot act
+      // on; only a resumed one is worth naming.
+      assert.ok(!frame.includes('main-session'), `a new session prints no id:\n${frame}`)
+      assert.ok(!frame.includes('resumed'), `and reports no resume:\n${frame}`)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('names the session it resumed, with the title that session logged', async () => {
+    const harness = await mount({
+      config: { sessionId: 'session-85d19568-5bbc-4347-a601-2f2588fd4832' },
+      beforeMount(session) {
+        appendUser(session, 'earlier prompt')
+        session.append('session/title', {
+          title: 'ordering bug',
+          messageSeqs: [0],
+          source: { kind: 'fallback' },
+        })
+      },
+    })
+    try {
+      const rows = harness.terminal.text().split('\n').map(row => row.trimEnd())
+      // The short id is exactly what `--resume` takes back, and the title says
+      // which conversation it is — so neither needs a transcript row of its own.
+      assert.equal(rows[2], ' resumed 85d19568 · ordering bug')
+      assert.ok(
+        !harness.terminal.text().includes('5bbc-4347'),
+        `the full uuid stays off the banner:\n${harness.terminal.text()}`,
+      )
     } finally {
       await unmount(harness)
     }

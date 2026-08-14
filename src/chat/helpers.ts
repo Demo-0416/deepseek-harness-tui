@@ -8,8 +8,10 @@
  */
 
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   CURSOR_MARKER,
   Editor,
@@ -78,6 +80,58 @@ export function gitBranch(cwd: string): string | undefined {
   } catch (_gitUnavailableOrOutsideWorktree) {
     return undefined
   }
+}
+
+/** Prefix the runner mints session ids with (`session-<uuid>`). */
+const SESSION_ID_PREFIX = 'session-'
+
+/** A minted session id's random part, the only ids worth shortening. */
+const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
+
+/**
+ * Shorten a session id for the resume banner line: `session-<uuid>` becomes the
+ * uuid's first group, which is what a user types back into `--resume` and what
+ * the session directory is named after. Any other identity (`main`, a launcher's
+ * fixed name) is already short and is left exactly as it is.
+ * @param id - the session identity.
+ * @returns the display form of the id.
+ */
+export function shortSessionId(id: string): string {
+  const bare = id.startsWith(SESSION_ID_PREFIX) ? id.slice(SESSION_ID_PREFIX.length) : id
+  return SESSION_UUID.test(bare) ? bare.slice(0, 8) : bare
+}
+
+/** Directory levels searched upward for this bundle's own package.json. */
+const PACKAGE_SEARCH_DEPTH = 4
+
+/**
+ * This bundle's version, for the startup banner.
+ *
+ * Read from the nearest package.json above the running module rather than
+ * imported, because the two layouts this code runs in disagree on the relative
+ * path: `src/chat/helpers.ts` under tsx, one bundled `lib/index.js` after
+ * build. Neither layout has a package.json between the module and the package
+ * root, so the first one found walking up is this package's. A version that
+ * cannot be read is not an error — the banner simply omits it.
+ * @param from - file the search starts from; defaults to this module.
+ * @returns the semver string, or `undefined` when no package.json was readable.
+ */
+export function packageVersion(from: string = fileURLToPath(import.meta.url)): string | undefined {
+  let directory = dirname(from)
+  for (let level = 0; level < PACKAGE_SEARCH_DEPTH; level += 1) {
+    try {
+      const parsed = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as { version?: unknown }
+      if (typeof parsed.version === 'string' && parsed.version !== '') return parsed.version
+    } catch (_missingOrUnreadablePackage) {
+      // Not this level's package.json; keep walking toward the package root.
+    }
+    const parent = dirname(directory)
+    /* v8 ignore next -- the walk always finds this package before the filesystem root. */
+    if (parent === directory) break
+    directory = parent
+  }
+  /* v8 ignore next -- unreachable while the bundle ships its own package.json. */
+  return undefined
 }
 
 /** Milliseconds between banner sweep-reveal frames (~60 fps). */

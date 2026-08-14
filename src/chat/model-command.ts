@@ -190,10 +190,10 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
       options: {
         width: resolved.modelDialogWidth,
         maxHeight: resolved.modelDialogMaxHeight,
-        anchor: 'center',
-        margin: 1,
       },
-    })
+      // The selector belongs under the conversation in the editor slot, like
+      // every other interactive panel — not floating over the transcript.
+    }, 'inline')
     modelOverlay = session
     void session.closed.then(() => {
       if (modelOverlay === session) modelOverlay = undefined

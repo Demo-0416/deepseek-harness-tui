@@ -127,7 +127,7 @@ export const TuiConfigSchema: z<TuiConfig> = z.object(tuiConfigSchemaFields)
 
 /** Serializable plugin configuration. */
 export interface Config extends TuiConfig {
-  /** Banner subtitle line. When absent, the banner has no subtitle and sweeps in on start. */
+  /** Extra dim line under the startup banner. When absent, the wordmark sweeps in on start. */
   welcome?: string
   /** Exact shared agent/session identity driven by this terminal. Defaults to `main`. */
   sessionId?: string

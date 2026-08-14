@@ -146,6 +146,8 @@ import {
   formatCwd,
   gitBranch,
   HintEditor,
+  packageVersion,
+  shortSessionId,
 } from './chat/helpers.ts'
 import {
   createModelController,
@@ -534,16 +536,34 @@ export function createTuiChat(
     toolDefinition: name => ctx.tools.get(name, agent),
   }, { showReasoning, visibility: toolsVisibility })
 
-  // A configured subtitle renders as a banner line; when absent, the banner has
-  // no subtitle. The banner itself sweeps in on start (see startBannerReveal).
   let sessionTitle = store.getSnapshot().title
+  const formattedCwd = displayText(runtime.formatCwd?.(agent.session.header.cwd) ?? formatCwd(agent.session.header.cwd))
+  // A resumed session opens with a conversation this terminal did not hold, and
+  // its id is what `--resume` takes back, so the banner names it. A fresh
+  // session's id is a uuid nobody chose and nothing accepts yet; Claude Code
+  // prints no id at all on a new session, and neither does this.
+  const resumedSessionId = agent.session.events.some(event => event.type === 'user/message')
+    ? shortSessionId(agent.session.id)
+    : undefined
   const header = new HeaderComponent(
-    agent,
-    () => sessionTitle ?? config.welcome,
+    {
+      version: packageVersion(),
+      // Read per render, like the prompt's model fragment: the route resolves
+      // through the live default, which an asynchronous settings load fills in
+      // after mount. Until one resolves the line is just the workspace — an
+      // unresolved route is a startup state, not an error to report.
+      model: () => {
+        const current = target.current
+        return current === undefined ? undefined : compactTargetLabel(current)
+      },
+      cwd: formattedCwd,
+      resumed: resumedSessionId,
+      title: () => sessionTitle,
+      ...config.welcome === undefined ? {} : { welcome: config.welcome },
+    },
     palette,
     resolved.theme.color && resolved.theme.truecolor,
   )
-  const formattedCwd = displayText(runtime.formatCwd?.(agent.session.header.cwd) ?? formatCwd(agent.session.header.cwd))
   const branch = runtime.gitBranch?.(cwd) ?? gitBranch(cwd)
   const promptValues: TuiPromptValueHandle[] = [
     ctx.tuiPrompt.register('cwd', palette.bold(palette.accent(formattedCwd))),
@@ -1702,10 +1722,11 @@ export function createTuiChat(
     modelController.detach()
   }
 
-  // Sweep reveal of the whole banner: the header wipes in left-to-right over
-  // ~BANNER_REVEAL_STEPS frames (started after `ui.start()` succeeds).
-  // Configured subtitles skip it so deployments (and snapshot fixtures) stay
-  // frame-deterministic.
+  // Sweep reveal of the wordmark: it wipes in left-to-right over
+  // ~BANNER_REVEAL_STEPS frames (started after `ui.start()` succeeds). Only that
+  // row sweeps — the lines under it say where this session runs, and animating
+  // them moved the whole screen at startup. A configured welcome line skips the
+  // sweep so deployments (and snapshot fixtures) stay frame-deterministic.
   let revealTimer: ReturnType<typeof setInterval> | undefined
   const stopBannerReveal = (): void => {
     if (revealTimer === undefined) return

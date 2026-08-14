@@ -431,6 +431,67 @@ describe('foldEvent', () => {
     })
   })
 
+  it('keeps a turn in log order: the prompt, its context, then the step that used them', async () => {
+    // Replay of session-85d19568 (`how are you doing`), whose log opens the step
+    // BEFORE recording the claimed prompt and the two context snapshots the
+    // request was assembled from. Opening the step's node on `step/start` put it
+    // above all three, so the runtime-context and skill-catalog cards rendered
+    // under the answer and its timing footer instead of above it.
+    await withSession((session) => {
+      session.append('turn/start', { turn: 1 })
+      session.append('step/start', { turn: 1, step: 1 })
+      appendUser(session, 'how are you doing')
+      session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: 'Current runtime context. This snapshot supersedes earlier snapshots.' }],
+        source: {
+          kind: 'plugin',
+          plugin: '@deepseek-ai/dsh-system-prompt',
+          form: 'snapshot',
+          sections: [{ name: 'sandbox:policy', text: 'Current DSH file policy: workspace-write.' }],
+        },
+      }), { surfaceOp: 'append' })
+      session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: '<system-reminder>\nskills\n</system-reminder>' }],
+        // The recorded kind of the skill service this log came from. Message
+        // sources are a merge-extensible durable boundary, so the fold reads
+        // them without narrowing — and this checkout declares no such kind.
+        source: { kind: 'skill-catalog', form: 'catalog' } as never,
+      }), { surfaceOp: 'append' })
+      session.append('assistant/chunk', {
+        turn: 1,
+        step: 1,
+        chunk: { type: 'block-start', index: 0, blockType: 'text' },
+      })
+      session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'doing well' } })
+      session.append('step/end', { turn: 1, step: 1 })
+
+      const nodes = foldEvents(session.events)
+      assert.deepEqual(kinds(nodes), ['user-message', 'context', 'context', 'assistant'])
+      assert.equal(nodeOf(nodes, 1, 'context').label, '@deepseek-ai/dsh-system-prompt')
+      assert.equal(nodeOf(nodes, 2, 'context').label, 'skill-catalog')
+      assert.equal(nodeOf(nodes, 3, 'assistant').text, 'doing well')
+    })
+  })
+
+  it('opens a step\'s node at its first content, not at step/start', async () => {
+    await withSession((session) => {
+      // `step/start` alone shows nothing: a step with no output yet has no row,
+      // and a node here would anchor every later message below it.
+      assert.equal(foldEvent([], session.append('step/start', { turn: 1, step: 1 })), false)
+      // Nor does a chunk that carries no content of its own.
+      const nodes: ChatNode[] = []
+      assert.equal(foldEvent(nodes, session.append('assistant/chunk', {
+        turn: 1,
+        step: 1,
+        chunk: { type: 'block-start', index: 0, blockType: 'text' },
+      })), false)
+      assert.deepEqual(nodes, [])
+      // A step that produces nothing at all still gets its footer when it ends.
+      assert.equal(foldEvent(nodes, session.append('step/end', { turn: 1, step: 1 })), true)
+      assert.deepEqual(kinds(nodes), ['assistant'])
+    })
+  })
+
   it('ignores a replacement that marks no conversation boundary', async () => {
     await withSession((session) => {
       const prompt = appendUser(session, 'first prompt')

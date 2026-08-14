@@ -17,7 +17,6 @@ import {
   type Component,
   type MarkdownTheme,
 } from '@earendil-works/pi-tui'
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JsonValue, SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
 import type {
@@ -27,7 +26,7 @@ import type {
   ToolResultView,
 } from '@deepseek-ai/dsh-tools'
 import type { FileDiff } from '@deepseek-ai/dsh-tools'
-import { preview, renderUnknownXml } from './xml-tool-output.ts'
+import { renderUnknownXml } from './xml-tool-output.ts'
 import { displayInlineText, displayText } from './text.ts'
 import { gradientText, type Palette } from './theme.ts'
 import { contentText, type ParsedArguments } from './content.ts'
@@ -170,25 +169,56 @@ class FilledBlockComponent implements Component {
   }
 }
 
+/** What the startup banner reports about the session it opens. */
+export interface HeaderInfo {
+  /** This bundle's version, rendered next to the wordmark; omitted when unknown. */
+  readonly version: string | undefined
+  /** The route the next turn runs under, or `undefined` before one resolves. */
+  readonly model: () => string | undefined
+  /** The workspace, already shortened by the host's `formatCwd`. */
+  readonly cwd: string
+  /** Short form of the resumed session's id; `undefined` for a fresh session. */
+  readonly resumed: string | undefined
+  /** The session's logged title, once it has one. */
+  readonly title: () => string | undefined
+  /** Deployment-configured banner line; absent renders none. */
+  readonly welcome?: string
+}
+
 /**
- * Borderless startup banner: product title, an optional configured subtitle,
- * and the session id. No box frame — each line renders as plain left-padded
- * text (matching transcript notices) so it reads on any theme.
+ * Borderless startup banner, in Claude Code's shape: the wordmark and version on
+ * one line, what this session is running as on the next, and then the input.
+ *
+ * ```text
+ *  DEEPSEEK HARNESS v0.1.0
+ *  deepseek-v4-pro · ~/src/project
+ *  resumed 85d19568 · fix the ordering bug
+ * ```
+ *
+ * The session id is on the resumed line only. A fresh session's id is a uuid the
+ * user did not choose and cannot act on, and printing it (as this banner did)
+ * spent the first thing on screen saying nothing; a resumed one is exactly what
+ * `--resume` takes back, so it is worth its line — with the logged title beside
+ * it, which is why the title is no longer a transcript row of its own. Each line
+ * renders as plain left-padded text, matching transcript notices, so it reads on
+ * any theme.
  */
 export class HeaderComponent implements Component {
-  /** Columns of the banner currently revealed; `undefined` renders it whole. */
+  /** Columns of the wordmark currently revealed; `undefined` renders it whole. */
   private revealWidth: number | undefined
 
   constructor(
-    private readonly agent: Agent,
-    private readonly subtitle: () => string | undefined,
+    private readonly info: HeaderInfo,
     private readonly palette: Palette,
     private readonly gradient: boolean,
   ) {}
 
   /**
-   * Clip the banner to `width` columns (the sweep reveal); `undefined` restores it.
-   * @param width - Revealed banner width in columns, or `undefined` for the whole banner.
+   * Clip the wordmark to `width` columns (the sweep reveal); `undefined` restores it.
+   *
+   * Only the wordmark sweeps. The lines under it state where the session is
+   * running, and wiping those in as well made the whole screen move at startup.
+   * @param width - Revealed wordmark width in columns, or `undefined` for the whole row.
    */
   setRevealWidth(width: number | undefined): void {
     this.revealWidth = width
@@ -201,19 +231,27 @@ export class HeaderComponent implements Component {
     const name = this.gradient
       ? this.palette.bold(gradientText('DEEPSEEK'))
       : this.palette.bold(this.palette.accent('DEEPSEEK'))
-    const title = `${name} ${this.palette.bold('HARNESS')}`
-    const detail = displayText(this.agent.session.id)
-    const subtitle = this.subtitle()
+    const version = this.info.version
+    const wordmark = `${name} ${this.palette.bold('HARNESS')}`
+      + (version === undefined ? '' : ` ${this.palette.dim(`v${displayText(version)}`)}`)
+    const model = this.info.model()
+    const title = this.info.title()
+    const welcome = this.info.welcome
+    const cwd = displayText(this.info.cwd)
+    // One dim detail row, wrapped to the usable width.
+    const detail = (text: string): string[] =>
+      wrapTextWithAnsi(this.palette.dim(text), usable).map(line => truncateToWidth(line, usable, ''))
     const lines = [
-      title,
-      ...subtitle === undefined ? [] : [this.palette.dim(displayText(subtitle))],
-      this.palette.dim(detail),
+      // Only the wordmark is clipped by the reveal; the rest states where this
+      // session runs and stays still.
+      truncateToWidth(wordmark, this.revealWidth ?? usable, ''),
+      ...detail(model === undefined ? cwd : `${displayText(model)} · ${cwd}`),
+      ...this.info.resumed === undefined ? [] : detail(
+        `resumed ${displayText(this.info.resumed)}${title === undefined ? '' : ` · ${displayText(title)}`}`,
+      ),
+      ...welcome === undefined ? [] : detail(displayText(welcome)),
     ]
-      .flatMap(line => wrapTextWithAnsi(line, usable))
-      .map(line => ` ${truncateToWidth(line, usable, '')}`)
-    if (this.revealWidth === undefined) return lines
-    const revealed = this.revealWidth
-    return lines.map(line => truncateToWidth(line, revealed, ''))
+    return lines.map(line => ` ${line}`)
   }
 }
 
@@ -879,10 +917,16 @@ function stripReminderFrame(text: string): string {
 
 /**
  * Injected context (plugin/goal source, e.g. `workspace-context`), rendered as a
- * collapsible dim card that shares the tool-card `Ctrl+O` toggle. The header is
- * `Context · <label>`; the body is the message text as dim prose, one tone with
- * the header and the fold marker, folded to `maxOutputLines`, with a surrounding
- * reminder frame stripped because the source label already names the context.
+ * dim card that shares the tool-card `Ctrl+O` toggle.
+ *
+ * Collapsed — the default, and what every session opens with — it is one dim
+ * row, `Context · <label> (ctrl+o)`, and nothing else. This text was never
+ * written for the user: it is the runtime snapshot and skill catalog the
+ * producers hand the model on every request, and previewing its first lines
+ * spent most of a fresh screen on instructions nobody reads, exactly where
+ * Claude Code shows a single line. Expanded, the whole body renders as dim
+ * prose under a header without the toggle hint, with a surrounding reminder
+ * frame stripped because the source label already names the context.
  *
  * Injected context is prose, not markup, so this card does not parse it. The
  * `<system-reminder>` frame is a prompting convention no model is trained on
@@ -899,7 +943,6 @@ export class ContextCardComponent extends CachedCardComponent {
   constructor(
     private readonly label: string,
     private readonly text: string,
-    private readonly maxOutputLines: number,
     private readonly palette: Palette,
   ) {
     super()
@@ -915,17 +958,18 @@ export class ContextCardComponent extends CachedCardComponent {
   }
 
   protected renderLines(width: number): string[] {
-    const header = this.palette.dim(`Context · ${displayText(this.label)}`)
+    const title = `Context · ${displayText(this.label)}`
+    // The collapsed row names the toggle that opens it, the way a folded tool
+    // card's marker does; the expanded header drops the hint it just answered.
+    if (!this.expanded) return [this.palette.dim(`${title} (ctrl+o)`)]
+    const header = this.palette.dim(title)
     // Emptiness is decided on the stripped text: styling a blank body would yield
     // one escape-only row, which reads as a stray blank line under the header.
     const stripped = stripReminderFrame(this.text)
     if (stripped === '') return [header]
     const body = stripped.split('\n')
       .map(line => line === '' ? line : this.palette.dim(displayText(line)))
-    const visibleBody = this.expanded
-      ? body
-      : preview(body, this.maxOutputLines, count => this.palette.dim(`… +${count} lines (Ctrl+O to expand)`))
-    return [header, ...new Text(visibleBody.join('\n'), 0, 0).render(width)]
+    return [header, ...new Text(body.join('\n'), 0, 0).render(width)]
   }
 }
 
