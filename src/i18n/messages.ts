@@ -321,6 +321,12 @@ export const EN_MESSAGES = {
   // `.other` pair carries plural agreement in English and, for the MCP rows,
   // the difference between naming a server and counting the calls to it —
   // which is why the Chinese halves of those two differ where the rest match.
+  // The thinking the run opened with, always the row's first fragment. It takes
+  // a duration rather than a count, so it is a single row per tense instead of
+  // a `.one`/`.other` pair — "1 second" needs no agreement here, the formatted
+  // span (`8s`, `1m 20s`) carries its own unit.
+  'collapse.thinking.active': 'thinking for {duration}',
+  'collapse.thinking.settled': 'thought for {duration}',
   'collapse.search.active.one': 'searching for {count} pattern',
   'collapse.search.active.other': 'searching for {count} patterns',
   'collapse.search.settled.one': 'searched for {count} pattern',
@@ -736,6 +742,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
 
   // 折叠行。中文没有单复数之分，所以 .one 与 .other 填同一句；只有 MCP 那两对
   // 例外——它们的区别不是复数，而是「只报服务名」还是「连调用次数一起报」。
+  'collapse.thinking.active': '正在思考 {duration}',
+  'collapse.thinking.settled': '思考了 {duration}',
   'collapse.search.active.one': '正在搜索 {count} 个 pattern',
   'collapse.search.active.other': '正在搜索 {count} 个 pattern',
   'collapse.search.settled.one': '搜索了 {count} 个 pattern',

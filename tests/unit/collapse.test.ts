@@ -22,6 +22,7 @@ import {
   classifyToolCall,
   collapseToolGroups,
   formatCollapseHint,
+  groupThinkingMs,
   MAX_HINT_CHARS,
   type CollapsedGroup,
 } from '../../src/core/collapse.ts'
@@ -124,6 +125,7 @@ function countsGroup(counts: Partial<CollapsedGroup>): CollapsedGroup {
     listCount: 0,
     mcpCallCount: 0,
     mcpServers: [],
+    thinkingMs: 0,
     active: false,
     failed: false,
     ...counts,
@@ -689,5 +691,190 @@ describe('collapsed groups on the Ctrl+O cycle', () => {
       call('read', { file_path: '/workspace/c.ts' }, { id: 'r3', status: 'running' }),
     ])
     assert.match(rows().join('\n'), /Reading 3 files…/)
+  })
+})
+
+/**
+ * Thinking absorbed into the collapsed row — the group reports the reasoning
+ * that led to its calls, which is the only thinking duration a default
+ * transcript states (the thinking *block* still disappears with its step, and
+ * the `✻` turn row still reports the whole turn, not this).
+ */
+describe('thinking absorbed into the group', () => {
+  /** A step that only thought, with the span the fold would have measured. */
+  function thought(
+    ms: number,
+    overrides: { reasoning?: string; since?: number; step?: number } = {},
+  ): AssistantNode {
+    return step('', {
+      step: overrides.step ?? 1,
+      key: `assistant:1:${overrides.step ?? 1}`,
+      reasoning: overrides.reasoning ?? 'weighing the options',
+      thinkingMs: ms,
+      ...overrides.since === undefined ? {} : { thinkingSince: overrides.since },
+    })
+  }
+
+  it('sums the thinking of every step the run absorbed', () => {
+    const group = onlyGroup([
+      thought(5_000),
+      call('read', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }),
+      // Thinking again mid-run, with no prose to end the run, extends it.
+      thought(3_000, { step: 2 }),
+      call('read', { file_path: '/workspace/c.ts' }),
+    ])
+    assert.equal(group.thinkingMs, 8_000)
+    assert.equal(collapsedSummary(group), 'Thought for 8s, read 3 files')
+  })
+
+  it('attributes a step\'s thinking forward, to the run it led to', () => {
+    // The model thinks, writes a sentence, and then goes looking: the sentence
+    // ends the run above it, and the thinking belongs to what came next.
+    const groups = groupsOf([
+      call('read', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }),
+      step('Now let me check the tests.', { step: 2, reasoning: 'where are they', thinkingMs: 6_000 }),
+      call('read', { file_path: '/workspace/c.ts' }),
+      call('read', { file_path: '/workspace/d.ts' }),
+    ])
+    assert.equal(groups.length, 2)
+    assert.equal(groups[0]?.thinkingMs, 0, 'the run that was already over claims none of it')
+    assert.equal(groups[1]?.thinkingMs, 6_000)
+  })
+
+  it('drops thinking that led to no collapsible run at all', () => {
+    const group = onlyGroup([
+      thought(9_000),
+      // The thinking led here, and this call keeps its own card.
+      call('edit', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }),
+      call('read', { file_path: '/workspace/c.ts' }),
+    ])
+    assert.equal(group.thinkingMs, 0)
+    assert.equal(collapsedSummary(group), 'Read 2 files')
+  })
+
+  it('says nothing about thinking for a run that opened with none', () => {
+    const group = onlyGroup([
+      call('grep', { pattern: 'TODO' }),
+      call('read', { file_path: '/workspace/a.ts' }),
+    ])
+    assert.equal(group.thinkingMs, 0)
+    assert.equal(group.thinkingSince, undefined)
+    assert.equal(collapsedSummary(group), 'Searched for 1 pattern, read 1 file')
+    // A sub-second pause is not a thought worth a clause either.
+    assert.equal(collapsedSummary(countsGroup({ readCount: 2, thinkingMs: 400 })), 'Read 2 files')
+  })
+
+  it('can carry the thinking clause alone, with nothing to count yet', () => {
+    // The wording holds for a group that has thought and done nothing else.
+    // No such row reaches the screen today — a run needs two member cards
+    // before it collapses at all, and until then the live thinking shows as the
+    // prompt's own `✻` glyph — but the sentence must not read as a stray comma
+    // or a bare ellipsis if it ever does.
+    const thinkingOnly = countsGroup({ thinkingMs: 5_000, active: true })
+    assert.equal(collapsedSummary(thinkingOnly), 'Thinking for 5s…')
+  })
+
+  it('counts an open span against the render clock, and keeps the row in progress', () => {
+    const group = onlyGroup([
+      thought(0, { since: START }),
+      // Both calls have settled: what is still going is the thinking.
+      call('read', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }),
+    ])
+    assert.equal(group.thinkingSince, START)
+    assert.equal(group.active, true, 'a group whose model is still thinking has not settled')
+    assert.equal(groupThinkingMs(group), 0, 'without a clock, only the closed spans count')
+    assert.equal(groupThinkingMs(group, START + 4_000), 4_000)
+    assert.equal(collapsedSummary(group, START + 4_000), 'Thinking for 4s, reading 2 files…')
+    assert.equal(collapsedSummary(group, START + 12_000), 'Thinking for 12s, reading 2 files…')
+  })
+
+  it('is present-tense while the run is open and past-tense after it', () => {
+    const running = onlyGroup([
+      thought(8_000),
+      call('read', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }, { status: 'running' }),
+    ])
+    assert.equal(collapsedSummary(running), 'Thinking for 8s, reading 2 files…')
+    const settled = onlyGroup([
+      thought(8_000),
+      call('read', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }),
+    ])
+    assert.equal(collapsedSummary(settled), 'Thought for 8s, read 2 files')
+  })
+
+  it('words the thinking clause in the active locale', () => {
+    const group = onlyGroup([
+      thought(8_000),
+      call('read', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }),
+    ])
+    setLocale('zh')
+    try {
+      assert.equal(collapsedSummary(group), '思考了 8s，读取了 2 个文件')
+    } finally {
+      setLocale('en')
+    }
+  })
+
+  it('shows the latest thinking line until the first operation names something', () => {
+    const thinking = onlyGroup([
+      thought(3_000, { reasoning: 'First I check the fold.\n\n  Then   the   reconciler.  ' }),
+      // Neither call names a file, a pattern or a command of its own.
+      call('mcp__docs__list_pages', {}, { id: 'm1' }),
+      call('mcp__docs__list_sections', {}, { id: 'm2' }),
+    ])
+    // The newest line, with its wrapped whitespace squeezed to single spaces.
+    assert.deepEqual(thinking.hint, { kind: 'thinking', value: 'Then the reconciler.' })
+    assert.equal(formatCollapseHint(thinking.hint!, path => path), 'Then the reconciler.')
+
+    // The first operation that names something takes the row over…
+    const named = onlyGroup([
+      thought(3_000, { reasoning: 'First I check the fold.' }),
+      call('mcp__docs__list_pages', {}, { id: 'm1' }),
+      call('read', { file_path: '/workspace/src/a.ts' }),
+    ])
+    assert.deepEqual(named.hint, { kind: 'path', value: '/workspace/src/a.ts' })
+
+    // …and thinking later in the same run does not take it back: a row that
+    // went from the file it is reading to the model's prose would read as the
+    // group going backwards.
+    const again = onlyGroup([
+      thought(3_000, { reasoning: 'First I check the fold.' }),
+      call('mcp__docs__list_pages', {}, { id: 'm1' }),
+      call('read', { file_path: '/workspace/src/a.ts' }),
+      thought(0, { step: 2, reasoning: 'Now what?', since: START }),
+      call('read', { file_path: '/workspace/src/b.ts' }, { id: 'r2' }),
+    ])
+    assert.deepEqual(again.hint, { kind: 'path', value: '/workspace/src/b.ts' })
+  })
+
+  it('caps a long thinking line like every other hint', () => {
+    const group = onlyGroup([
+      thought(3_000, { reasoning: 'x'.repeat(MAX_HINT_CHARS * 2) }),
+      call('mcp__docs__list_pages', {}, { id: 'm1' }),
+      call('mcp__docs__list_sections', {}, { id: 'm2' }),
+    ])
+    const rendered = formatCollapseHint(group.hint!, path => path)
+    assert.equal(rendered.length, MAX_HINT_CHARS)
+    assert.ok(rendered.endsWith('…'), rendered)
+  })
+
+  it('renders the live counter and the thinking line on the collapsed row', () => {
+    const { reconciler, rows } = mountReconciler('collapsed')
+    reconciler.reconcile([
+      // The mounted clock is exactly START, so a span opened 4s before it has
+      // run for 4s — no sleeping, and no flaky wall time.
+      thought(0, { reasoning: 'Checking how the fold measures this.', since: START - 4_000 }),
+      call('mcp__docs__list_pages', {}, { id: 'm1' }),
+      call('mcp__docs__list_sections', {}, { id: 'm2' }),
+    ])
+    const rendered = rows().join('\n')
+    assert.match(rendered, /Thinking for 4s, querying docs 2 times…/, rendered)
+    assert.match(rendered, /⎿ {2}Checking how the fold measures this\./, rendered)
   })
 })

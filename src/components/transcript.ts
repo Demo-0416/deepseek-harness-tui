@@ -29,6 +29,7 @@ import type {
 import type { FileDiff } from '@deepseek-ai/dsh-tools'
 import {
   formatCollapseHint,
+  groupThinkingMs,
   type CollapsedGroup,
 } from '../core/collapse.ts'
 import { plural, t } from '../i18n/index.ts'
@@ -1412,24 +1413,47 @@ function opener(text: string, first: boolean): string {
 }
 
 /**
+ * Thinking a group has to have absorbed before its row says so.
+ *
+ * Under a second there is nothing to report: the duration prints as `0s`, and
+ * `Thought for 0s, read 2 files` spends a clause on a pause the user could not
+ * have noticed. The same floor applies while the thinking runs, so the fragment
+ * appears when the counter has something to count rather than flickering in at
+ * zero.
+ */
+export const COLLAPSE_THINKING_MIN_MS = 1_000
+
+/**
  * Word one collapsed group's summary row.
  *
- * Present tense while the group runs (`Searching for 2 patterns, reading 1
- * file…`), past tense once it settles (`Searched for 2 patterns, read 1 file`).
- * The first fragment opens with a capital, later ones do not, and each fragment
- * agrees with its own count.
+ * Present tense while the group runs (`Thinking for 4s, reading 1 file…`), past
+ * tense once it settles (`Thought for 8s, searched for 2 patterns, read 1
+ * file`). The first fragment opens with a capital, later ones do not, and each
+ * fragment agrees with its own count.
+ *
+ * The thinking the run opened with leads the sentence, because that is the
+ * order it happened in: the model thought, then it went looking. A group that
+ * absorbed no thinking prints no such fragment and reads exactly as before.
+ * While the thinking is still open the row is in progress by definition, so
+ * `now` is what makes its counter move between two events — the group carries
+ * the span's start, not its length (see `groupThinkingMs`).
  *
  * Each fragment is one message rather than a verb and a noun joined here, so a
  * locale can move the count, drop the plural, or reorder the clause; the
  * capitalization is a no-op in a script without letter case.
  * @param group - The planned group.
+ * @param now - Render clock, for a group whose thinking is still running.
  * @returns The row's text, without the expand hint.
  */
-export function collapsedSummary(group: CollapsedGroup): string {
+export function collapsedSummary(group: CollapsedGroup, now?: number): string {
   const parts: string[] = []
   const phase = group.active ? 'active' : 'settled'
   const fragment = (kind: 'search' | 'read' | 'list', count: number): void => {
     parts.push(opener(plural(count, `collapse.${kind}.${phase}`), parts.length === 0))
+  }
+  const thinking = groupThinkingMs(group, now)
+  if (thinking >= COLLAPSE_THINKING_MIN_MS) {
+    parts.push(opener(t(`collapse.thinking.${phase}`, { duration: formatTurnDuration(thinking) }), true))
   }
   if (group.searchCount > 0) fragment('search', group.searchCount)
   if (group.readCount > 0) fragment('read', group.readCount)
@@ -1461,6 +1485,12 @@ export function collapsedSummary(group: CollapsedGroup): string {
  * its bullet, in the error color, after it settles. A collapsed row is the only
  * thing on screen for those calls, and a failure that leaves no mark at all is
  * a failure the user never learns about.
+ *
+ * The row also opens with the thinking that led to the run (`Thought for 8s,
+ * read 2 files`), which is where this transcript states a thinking duration at
+ * all — the thinking block itself keeps its own rule and disappears with the
+ * step. While that thinking is still open the row re-renders per frame, so its
+ * counter moves with the clock rather than with the next event.
  */
 export class CollapsedGroupComponent extends CachedCardComponent {
   /**
@@ -1471,12 +1501,17 @@ export class CollapsedGroupComponent extends CachedCardComponent {
    *   read per render: `app.tools.cycle` is rebindable, and a row that named
    *   the default key after a deployment moved it would send every reader to a
    *   key that does nothing.
+   * @param now - Render clock, read per render so a group still thinking counts
+   *   up; a group whose thinking has closed never consults it. Injected rather
+   *   than defaulted to `Date.now`, like every other clock in this bundle: a
+   *   row that reads the process clock cannot be rendered from a test.
    */
   constructor(
     private group: CollapsedGroup,
     private readonly palette: Palette,
     private readonly displayPath: (path: string) => string,
     private readonly expandKey: () => string,
+    private readonly now: () => number,
   ) {
     super()
   }
@@ -1493,7 +1528,7 @@ export class CollapsedGroupComponent extends CachedCardComponent {
 
   protected renderLines(width: number): string[] {
     const group = this.group
-    const summary = collapsedSummary(group)
+    const summary = collapsedSummary(group, this.now())
     // A settled group renders no bullet at all: upstream reserves the gutter
     // (`<Box minWidth={2} />`) and lets the sentence recede into the margin.
     const bullet = group.active
@@ -1512,8 +1547,9 @@ export class CollapsedGroupComponent extends CachedCardComponent {
       rows.push(first ? `${GUTTER}${bullet} ${row}` : `${GUTTER_INDENT}${row}`)
       first = false
     }
-    // The hint names the call in flight, so it belongs only to a running group:
-    // a settled one has nothing left to report but its counts.
+    // The hint names whatever is in flight — the call, or the thinking that has
+    // not reached one yet — so it belongs only to a group still in progress: a
+    // settled one has nothing left to report but its counts.
     if (group.active && group.hint !== undefined) {
       const inner = Math.max(20, width - RESULT_PREFIX_WIDTH)
       const hint = formatCollapseHint(group.hint, this.displayPath)
