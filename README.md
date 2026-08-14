@@ -95,6 +95,8 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/model [[provider/]model]` | switch the model and save it as your default; without an argument it opens the picker, which can also pick for this session only |
 | `/preset [<preset> \| copy <preset> <new-id>]` | show, switch, or copy this session's agent preset |
 | `/details [collapsed\|expanded\|hidden] [reasoning [on\|off]]` | tool-card visibility and reasoning display; without arguments it opens the selector |
+| `/login [provider]` | give a provider an API key: pick a configured route or one the adapter offers, paste the key, and it is checked against the endpoint before being stored. The key goes to the credential store; settings record only the variable name |
+| `/provider [add]` | list configured providers and the ones `/login` can configure; `add` walks through name, endpoint, protocol, key, and the models the endpoint reports |
 | `/copy` | copy the last answer to the system clipboard |
 | `/new` | start a blank session in this workspace; the current one keeps its history and stays resumable |
 | `/clear` | clear the transcript view; the session log is unchanged |
