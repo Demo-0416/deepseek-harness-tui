@@ -147,6 +147,8 @@ import { ScrollablePanel } from './components/panel.ts'
 import { HistorySearchPanel, type HistorySearchOutcome } from './components/history-search.ts'
 import { RewindPanel } from './components/rewind.ts'
 import { forkSeedLength, hasRewindTarget, rewindTargets, type RewindTarget } from './chat/rewind.ts'
+import { TranscriptSearchPanel } from './components/transcript-search.ts'
+import { transcriptEntries } from './chat/transcript-search.ts'
 import {
   APP_KEYBINDINGS,
   installKeybindings,
@@ -449,8 +451,9 @@ function keyboardShortcuts(manager: KeybindingsManager): string[] {
   return [
     'Enter send • Shift/Alt+Enter newline • Up/Down prompt history • Tab accept a completion',
     '@ reference a file • / run a command • /skill:<name> load a skill • ? this list',
-    `${key('app.history.search')} search prompt history backwards • ${key('app.todos.toggle')} expand or collapse the plan`,
-    `${key('app.tools.cycle')} cycle tool cards (preview/full/hidden) • ${key('app.message.copy')} copy the last answer • ${key('app.screen.redraw')} redraw`,
+    `${key('app.history.search')} search prompt history backwards • ${key('app.transcript.search')} search this session's messages`,
+    `${key('app.todos.toggle')} expand or collapse the plan • ${key('app.tools.cycle')} cycle tool cards (preview/full/hidden)`,
+    `${key('app.message.copy')} copy the last answer • ${key('app.screen.redraw')} redraw`,
     `${key('app.cancel')} cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind`,
     `${key('app.exit')} exit on an empty prompt • Shift+Ctrl+D session debug panel`,
     'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
@@ -1896,6 +1899,37 @@ export function createTuiChat(
     requestRender()
   }
 
+  /**
+   * Search this session's own messages (`/search`, the transcript-search key).
+   *
+   * The entries are flattened from the store's current snapshot rather than
+   * kept as an index: the panel is opened by a keypress, the snapshot it reads
+   * is the one on screen, and an index maintained beside the fold would be one
+   * more thing that can disagree with the transcript. A session with nothing to
+   * search still opens the panel, which says so — a keypress that appears to do
+   * nothing teaches the wrong thing about the key.
+   * @param query - the `/search` argument, prefilled into the panel's query box.
+   */
+  const showTranscriptSearch = (query: string): void => {
+    const entries = transcriptEntries(store.getSnapshot().nodes)
+    void panelOverlay?.close()
+    const session = overlayManager.open({
+      create: () => new TranscriptSearchPanel(
+        entries,
+        query,
+        panelRows,
+        palette,
+        () => { void session.close() },
+      ),
+      dismissable: true,
+    }, 'inline')
+    panelOverlay = session
+    void session.closed.then(() => {
+      if (panelOverlay === session) panelOverlay = undefined
+    })
+    requestRender()
+  }
+
   const showStatus = async (signal: AbortSignal): Promise<void> => {
     // Assembling the system prompt runs every registered section, some of which
     // read files or ask a service; on a cold cache that is long enough for the
@@ -2340,6 +2374,15 @@ export function createTuiChat(
         handler: () => { runReload(); return { kind: 'success' } },
       })
     }
+    commandCtx.commands.register({
+      name: 'search',
+      description: 'Search this session\'s messages',
+      // The argument only fills the panel's query box: the transcript is in the
+      // terminal's scrollback, so there is no "jump to the first hit" to do
+      // without a panel to show the hits in.
+      input: { hint: '[query]' },
+      handler: ({ rawInput }) => { showTranscriptSearch(rawInput.trim()); return { kind: 'success' } },
+    })
     commandCtx.commands.register({
       name: 'rewind',
       description: 'Go back to an earlier prompt in this session (files are never restored)',
@@ -2885,6 +2928,10 @@ export function createTuiChat(
     }
     if (keybindings.matches(data, 'app.history.search')) {
       if (press) showHistorySearch()
+      return { consume: true }
+    }
+    if (keybindings.matches(data, 'app.transcript.search')) {
+      if (press) showTranscriptSearch('')
       return { consume: true }
     }
     if (keybindings.matches(data, 'app.todos.toggle')) {

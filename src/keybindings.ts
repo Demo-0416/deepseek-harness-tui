@@ -27,6 +27,7 @@ import {
 export interface AppKeybindings {
   'app.tools.cycle': true
   'app.history.search': true
+  'app.transcript.search': true
   'app.todos.toggle': true
   'app.message.copy': true
   'app.screen.redraw': true
@@ -50,6 +51,13 @@ export type AppKeybinding = keyof AppKeybindings
 export const APP_KEYBINDINGS = {
   'app.tools.cycle': { defaultKeys: 'ctrl+o', description: 'Cycle tool cards: preview, full, hidden' },
   'app.history.search': { defaultKeys: 'ctrl+r', description: 'Search prompt history backwards' },
+  // Not Ctrl+F, the key a reader expects for "find": pi-tui binds it as the
+  // editor's forward-char (`tui.editor.cursorRight`), and an app binding is
+  // answered before the editor sees the key, so taking it would silently break
+  // an emacs habit the editor already serves. Ctrl+G is bound by nothing here
+  // or in pi-tui, and reaches the process on every terminal — unlike Ctrl+S,
+  // which a multiplexer or an ssh line may still swallow as flow control.
+  'app.transcript.search': { defaultKeys: 'ctrl+g', description: 'Search this session\'s messages' },
   'app.todos.toggle': { defaultKeys: 'ctrl+t', description: 'Expand or collapse the plan' },
   'app.message.copy': { defaultKeys: 'ctrl+x', description: 'Copy the last answer' },
   'app.screen.redraw': { defaultKeys: 'ctrl+l', description: 'Redraw the screen' },

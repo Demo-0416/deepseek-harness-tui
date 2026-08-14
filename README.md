@@ -60,6 +60,7 @@ all three.
 | `/` | run a command; `/skill:<name>` loads a skill |
 | `?` | shortcut help, on an empty prompt; never typed into the draft |
 | Ctrl+R | search the prompt history backwards |
+| Ctrl+G | search this session's messages; Ctrl+F stays the editor's forward-char |
 | Ctrl+T | expand or collapse the plan |
 | Ctrl+O | cycle tool cards: preview, full, hidden |
 | Ctrl+X | copy the last answer |
@@ -77,6 +78,7 @@ all three.
 | Question | Up/Down move · Space toggle (multi-select) · Tab/c custom answer, Esc back to the options · PgUp/PgDn page long detail · Enter submit · Esc or Ctrl+C cancel |
 | Permission prompt | Up/Down move · 1-4 answer straight away · Enter confirm · Esc or Ctrl+C deny |
 | History search (Ctrl+R) | type to match · Ctrl+R steps to an older match · Tab or Esc accepts into the editor · Enter sends it · Ctrl+C or an emptied query restores the draft |
+| Session search (`/search`, Ctrl+G) | type to filter · Up/Down move · PgUp/PgDn page · Enter opens the message · Esc leaves the message, then clears the query, then closes |
 | Model picker (`/model`) | type to filter · Up/Down move · Left/Right or Shift+Tab adjust reasoning effort · Enter save as default · Ctrl+S use for this session only · Esc clears the filter, then closes |
 | Resume picker (`/resume`) | type to search · Up/Down move · PgUp/PgDn page · Tab switches between this workspace and all · Enter resume · Esc clears the search, then closes |
 | Rewind (`/rewind`) | Up/Down move · PgUp/PgDn page · Home/End first or last · Enter go back to that prompt · Esc close |
@@ -101,6 +103,7 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/palette` | every color and attribute role this terminal renders |
 | `/export [path]` | write this session's log to a file and report the path; an existing file is replaced only after you confirm |
 | `/plugins` | search and inspect the Loader's plugin entries |
+| `/search [query]` | search this session's messages; an argument fills the panel's query box |
 | `/rewind` | go back to an earlier prompt in this session |
 | `/resume [session]` | list this workspace's resumable sessions; an argument fills the picker's search box |
 | `/status` | session diagnostics, system prompt, registered tools |
@@ -137,6 +140,11 @@ recent sessions.
   the editor alone. Files are never restored — dsh keeps no file checkpoints.
 - **Resume** — `/resume [session]`: pick and resume a past session, in this
   workspace or (Tab) in all of them.
+- **Session search** — `/search [query]`, or Ctrl+G: every message this session
+  holds, filtered as you type, with the hit shown in place and the whole message
+  one Enter away. It is a panel rather than a jump because the transcript above
+  the prompt belongs to the terminal's scrollback, which no program can scroll
+  for you.
 - **Plugins** — `/plugins`: search and inspect the Loader's entries.
 - **Status** — `/status`: session diagnostics, system prompt, registered tools.
 - **Help** — `/help`: keys and slash commands.
