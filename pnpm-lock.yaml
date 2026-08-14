@@ -8,25 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@earendil-works/pi-tui':
-        specifier: ^0.84.1
-        version: 0.84.1
-      commander:
-        specifier: ^15.0.0
-        version: 15.0.0
-      diff:
-        specifier: ^9.0.0
-        version: 9.0.0
-      marked:
-        specifier: ^18.0.9
-        version: 18.0.9
-      saxes:
-        specifier: 6.0.0
-        version: 6.0.0
-    devDependencies:
-      '@deepseek-ai/cordis':
-        specifier: ^4.0.1
-        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
       '@deepseek-ai/dsh-agent':
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(b0514d7a320728b6d8f5a31eb3960e10)
@@ -34,7 +15,7 @@ importers:
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(db22cad5b0daedec4301b8f186ddd2da)
       '@deepseek-ai/dsh-agent-presets':
-        specifier: 0.1.0-rc.6
+        specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(4c20af7d23bdb1bbe92fd5e1e7ddef5d)
       '@deepseek-ai/dsh-cmdline':
         specifier: ^0.1.0-rc.6
@@ -51,9 +32,6 @@ importers:
       '@deepseek-ai/dsh-host-plugin-inventory':
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(@deepseek-ai/cordis-plugin-loader@1.0.2)(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-typert-protocol@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))
-      '@deepseek-ai/dsh-invariants':
-        specifier: ^0.1.0-rc.6
-        version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)
       '@deepseek-ai/dsh-llm':
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-attachment@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-timeout@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))
@@ -66,9 +44,6 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(6fd26f59436a18b115f326d6060415e6)
-      '@deepseek-ai/dsh-session-log-export':
-        specifier: ^0.1.0-rc.6
-        version: 0.1.0-rc.6(c051b4e9b8e0783df038e6f1e9581d38)
       '@deepseek-ai/dsh-session-persistence':
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-session@0.1.0-rc.6(6fd26f59436a18b115f326d6060415e6))(@deepseek-ai/dsh-timeout@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)))
@@ -114,6 +89,31 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.1
+      '@earendil-works/pi-tui':
+        specifier: ^0.84.1
+        version: 0.84.1
+      commander:
+        specifier: ^15.0.0
+        version: 15.0.0
+      diff:
+        specifier: ^9.0.0
+        version: 9.0.0
+      marked:
+        specifier: ^18.0.9
+        version: 18.0.9
+      saxes:
+        specifier: 6.0.0
+        version: 6.0.0
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.1
+        version: 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
+      '@deepseek-ai/dsh-invariants':
+        specifier: ^0.1.0-rc.6
+        version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)
+      '@deepseek-ai/dsh-session-log-export':
+        specifier: ^0.1.0-rc.6
+        version: 0.1.0-rc.6(c051b4e9b8e0783df038e6f1e9581d38)
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
