@@ -80,7 +80,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 // same optional store service through one typed handle.
 import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import type { SkillRegistry } from '@deepseek-ai/dsh-skill'
+import type { SkillRegistry, SkillSummary, SkillViewOptions } from '@deepseek-ai/dsh-skill'
 // Type import declaration-merges the `userQuestions` service onto `Context`;
 // the ask-user-question queue is registered by ./chat/questions.
 import type {} from '@deepseek-ai/dsh-user-questions'
@@ -157,6 +157,10 @@ import {
   PluginsPanel,
   type PluginInventoryReader,
 } from './components/plugins-panel.ts'
+import {
+  SkillsPanel,
+  SKILLS_UNAVAILABLE,
+} from './components/skills-panel.ts'
 import {
   compactTargetLabel,
   CUSTOM_ANSWER_KEYS,
@@ -1965,6 +1969,87 @@ export function createTuiChat(
     requestRender()
   }
 
+  /**
+   * The skill catalog behind `/skills`, scanned per open.
+   *
+   * Every read goes through {@link skillRegistry}, so the panel lists what this
+   * agent composes right now — a `/preset` switch changes the answer, and a
+   * catalog captured at mount would name skills `/skill:` refuses. Both the
+   * listing and one skill's body are provider reads that can be slow or fail:
+   * the panel opens first and is filled as they land, and a body that arrives
+   * after its overlay closed is dropped by the aborted scan.
+   */
+  const showSkills = (): void => {
+    const registry = skillRegistry()
+    if (registry === undefined) {
+      appendNotice(SKILLS_UNAVAILABLE, 'warning')
+      return
+    }
+    void panelOverlay?.close()
+    const scan = new AbortController()
+    // The overlay's slot can still be held by a closing predecessor, so `create`
+    // runs late; a catalog that settled before then is handed to the
+    // constructor instead of stranding the panel on its loading line.
+    let panel: SkillsPanel | undefined
+    let scanned: readonly SkillSummary[] | undefined
+    const lookup = (): SkillViewOptions => ({ cwd, scope: agent, signal: scan.signal })
+    const session = overlayManager.open({
+      create: () => {
+        panel = new SkillsPanel(
+          scanned,
+          panelRows,
+          palette,
+          (name) => {
+            void registry.get(name, lookup()).then(
+              (skill) => {
+                if (disposed || scan.signal.aborted) return
+                panel?.setDetail(name, skill === undefined
+                  ? { kind: 'failed', message: `Unknown skill: ${name}` }
+                  : { kind: 'ready', skill })
+                requestRender()
+              },
+              (error: unknown) => {
+                if (disposed || scan.signal.aborted) return
+                panel?.setDetail(name, {
+                  kind: 'failed',
+                  message: `Skill "${name}" failed to load: ${errorChain(error)}`,
+                })
+                requestRender()
+              },
+            )
+          },
+          () => { void session.close() },
+        )
+        return panel
+      },
+      // A catalog the user reads, like `/plugins`: an arriving permission
+      // prompt or question takes the slot rather than queueing behind it.
+      dismissable: true,
+    }, 'inline')
+    panelOverlay = session
+    void session.closed.then(() => {
+      // A closed panel's provider reads are nobody's answer any more.
+      scan.abort()
+      if (panelOverlay === session) panelOverlay = undefined
+    })
+    requestRender()
+    void registry.list(lookup()).then(
+      (summaries) => {
+        if (disposed || scan.signal.aborted) return
+        // Alphabetical, like the Web skill list and Claude Code's own menu:
+        // registry order is provider-registration order, which reads as random.
+        scanned = [...summaries].sort((a, b) => a.name.localeCompare(b.name))
+        panel?.setSkills(scanned)
+        requestRender()
+      },
+      (error: unknown) => {
+        if (disposed || scan.signal.aborted) return
+        void session.close()
+        appendNotice(`Skill scan failed: ${errorChain(error)}`, 'error')
+      },
+    )
+  }
+
   const showStatus = async (signal: AbortSignal): Promise<void> => {
     // Assembling the system prompt runs every registered section, some of which
     // read files or ask a service; on a cold cache that is long enough for the
@@ -2477,6 +2562,11 @@ export function createTuiChat(
       handler: ({ rawInput }) => { resume.showResume(rawInput.trim()); return { kind: 'success' } },
     })
     commandCtx.commands.register({
+      name: 'skills',
+      description: 'Search this session\'s skills and read one in full',
+      handler: () => { showSkills(); return { kind: 'success' } },
+    })
+    commandCtx.commands.register({
       name: 'status',
       description: 'Show session diagnostics, system prompt, and registered tools',
       handler: async ({ signal }) => { await showStatus(signal); return { kind: 'success' } },
@@ -2588,7 +2678,7 @@ export function createTuiChat(
     // agent does have.
     const skills = skillRegistry()
     if (skills === undefined) {
-      appendNotice('Skills are not available in this session.', 'warning')
+      appendNotice(SKILLS_UNAVAILABLE, 'warning')
       return Promise.resolve()
     }
     const lookup = { cwd, scope: agent, signal: skillAbort.signal }
