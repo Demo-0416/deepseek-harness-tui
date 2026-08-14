@@ -20,16 +20,32 @@ const palette = createPalette(false)
 /** Banner width used by the fixed-shape cases, wide enough for the identity rows. */
 const WIDE = 60
 
-/** The two rows every banner opens with, before any optional section. */
-const IDENTITY_ROWS = [' DEEPSEEK HARNESS v0.1.0', ' deepseek-v4-flash · /workspace/project']
+/**
+ * The boxed identity block every wide banner opens with: the whale art beside
+ * the wordmark, route, and workspace, inside a rounded frame that hugs its
+ * widest line (the 23-column wordmark, plus 16 interior chrome columns).
+ */
+const IDENTITY_ROWS = [
+  ` ╭${'─'.repeat(39)}╮`,
+  ' │  ▄███▄  █▄█▄  DEEPSEEK HARNESS v0.1.0 │',
+  ' │ ▐▀▀██▙▟▙▄▀▀   deepseek-v4-flash       │',
+  ' │ ▜▖  ▝█▙█▛     /workspace/project      │',
+  ' │  ▀▙▟█▄▛▀                              │',
+  ` ╰${'─'.repeat(39)}╯`,
+]
 
 /**
- * Render the banner, with or without a skill list.
+ * Render the banner, with or without a skill or plugin list.
  * @param skills - Skill names, or `undefined` for an entry that supplies none.
  * @param width - Render width in columns.
+ * @param plugins - Plugin module names, or `undefined` for none.
  * @returns The rendered rows, right-trimmed.
  */
-function bannerRows(skills: readonly string[] | undefined, width = WIDE): string[] {
+function bannerRows(
+  skills: readonly string[] | undefined,
+  width = WIDE,
+  plugins?: readonly string[],
+): string[] {
   const info: HeaderInfo = {
     version: '0.1.0',
     model: () => 'deepseek-v4-flash',
@@ -37,6 +53,7 @@ function bannerRows(skills: readonly string[] | undefined, width = WIDE): string
     resumed: undefined,
     title: () => undefined,
     ...skills === undefined ? {} : { skills },
+    ...plugins === undefined ? {} : { plugins: () => plugins },
   }
   return new HeaderComponent(info, palette, false).render(width).map(row => row.trimEnd())
 }
@@ -114,6 +131,19 @@ describe('startup banner', () => {
     }
   })
 
+  it('lists plugins in their own section under the skills', () => {
+    assert.deepEqual(bannerRows(['lark-doc'], WIDE, ['pi-subagents', 'plan-mode']).slice(IDENTITY_ROWS.length), [
+      '',
+      ' [Skills]',
+      ' lark-doc',
+      '',
+      ' [Plugins]',
+      ' pi-subagents, plan-mode',
+    ])
+    // An inventory that has not answered yet (or answered empty) spends no rows.
+    assert.deepEqual(bannerRows(undefined, WIDE, []), IDENTITY_ROWS)
+  })
+
   it('reads the list at render time, so late discovery reaches the banner', () => {
     // The entry mounts before skill discovery finishes and fills the array it
     // handed the header in place; a banner that captured the list at
@@ -131,6 +161,39 @@ describe('startup banner', () => {
 
     skills.push('lark-doc')
     assert.deepEqual(header.render(WIDE).map(row => row.trimEnd()), [...IDENTITY_ROWS, '', ' [Skills]', ' lark-doc'])
+  })
+})
+
+describe('full welcome box', () => {
+  it('splits into two columns with the wordmark riding the top border', () => {
+    const rows = bannerRows(['lark-doc', 'lark-base'], 100)
+    assert.match(rows[0] ?? '', /^ ╭─ DEEPSEEK HARNESS v0\.1\.0 ─+╮$/u, `titled border:\n${rows.join('\n')}`)
+    assert.match(rows.at(-1) ?? '', /^ ╰─+┴─+╯$/u, `the bottom border closes both panels:\n${rows.join('\n')}`)
+    // Every interior row is three-walled: the outer borders and the panel split.
+    for (const row of rows.slice(1, -1)) {
+      assert.equal([...row].filter(ch => ch === '│').length, 3, `three walls: "${row}"`)
+    }
+    // Identity in the left panel, the skill section in the right.
+    assert.ok(rows.some(row => /│ +deepseek-v4-flash +│/u.test(row)), `route:\n${rows.join('\n')}`)
+    assert.ok(rows.some(row => /│ \[Skills\] +│$/u.test(row)), `skills header:\n${rows.join('\n')}`)
+    assert.ok(rows.some(row => /lark-doc, lark-base/u.test(row)), `skill names:\n${rows.join('\n')}`)
+    for (const row of rows) {
+      assert.ok(visibleWidth(row) <= 100, `no row overflows the banner: "${row}"`)
+    }
+  })
+
+  it('gives the plugins their own right-panel section', () => {
+    const rows = bannerRows(['lark-doc'], 100, ['pi-subagents', 'plan-mode'])
+    assert.ok(rows.some(row => /│ \[Plugins\] +│$/u.test(row)), `plugins header:\n${rows.join('\n')}`)
+    assert.ok(rows.some(row => /pi-subagents, plan-mode/u.test(row)), `plugin names:\n${rows.join('\n')}`)
+  })
+
+  it('keeps the badge shape when the entry supplies no skill list', () => {
+    // With nothing to spend a right panel on, the two-column frame says the
+    // same thing in three times the rows; the badge is the honest size.
+    const rows = bannerRows(undefined, 100)
+    assert.match(rows[0] ?? '', /^ ╭─+╮$/u, `plain badge border:\n${rows.join('\n')}`)
+    assert.ok(!rows.some(row => row.includes('┴')), `no panel split:\n${rows.join('\n')}`)
   })
 })
 

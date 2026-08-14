@@ -49,7 +49,8 @@ import type {} from '@deepseek-ai/dsh-agent-loop'
 // see ./chat/preset-command.ts for why nothing imports its values.
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-token-meter'
-import type { CommandResult } from '@deepseek-ai/dsh-commands'
+import { parseCommand, type CommandResult } from '@deepseek-ai/dsh-commands'
+import type { PlanModeController } from '@deepseek-ai/dsh-plan-mode'
 import { createUserMessage, errorChain } from '@deepseek-ai/dsh-llm'
 import type { CallId, ContentBlock, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm-retry'
@@ -80,7 +81,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 // same optional store service through one typed handle.
 import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import type { SkillRegistry } from '@deepseek-ai/dsh-skill'
+import { renderSkillContent, type SkillDefinition, type SkillRegistry } from '@deepseek-ai/dsh-skill'
 // Type import declaration-merges the `userQuestions` service onto `Context`;
 // the ask-user-question queue is registered by ./chat/questions.
 import type {} from '@deepseek-ai/dsh-user-questions'
@@ -159,7 +160,7 @@ import {
 } from './components/plugins-panel.ts'
 import {
   compactTargetLabel,
-  CUSTOM_ANSWER_HINT,
+  CUSTOM_ANSWER_LABEL,
   DetailsDialog,
   diagnosticMeter,
   formatDiagnosticCount,
@@ -175,7 +176,7 @@ import {
 } from './components/dialogs.ts'
 import {
   parseSkillCommand,
-  renderSkillInvocation,
+  renderSkillEcho,
   SKILL_COMMAND_PREFIX,
 } from './chat/skill-invocation.ts'
 import { ReferenceAutocompleteProvider } from './chat/autocomplete.ts'
@@ -234,7 +235,7 @@ import {
 import type { TuiStartupValues } from './startup.ts'
 
 export { TuiPromptService } from './prompt.ts'
-export { renderSkillInvocation } from './chat/skill-invocation.ts'
+export { renderSkillEcho } from './chat/skill-invocation.ts'
 export type { TuiForkRequest, TuiResumeHost, TuiRuntime } from './runtime.ts'
 export {
   resolveTuiConfig,
@@ -460,7 +461,7 @@ function keyboardShortcuts(manager: KeybindingsManager): string[] {
     'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
     'Ctrl+C again on a turn that will not cancel exits without waiting for it',
     'In a panel: ↑/↓ scroll • PgUp/PgDn page • g/G top or bottom • Esc close',
-    `In a question: ↑/↓ move • Space multi-select • ${CUSTOM_ANSWER_HINT} • Enter confirm • Esc cancel`,
+    `In a question: ↑/↓ move • 1-9 answer straight away • Space multi-select • "${CUSTOM_ANSWER_LABEL}" row for a custom answer • Enter confirm • Esc cancel`,
     'In an approval: ↑/↓ move • 1-4 answer straight away • Enter confirm • Esc deny',
   ]
 }
@@ -850,6 +851,14 @@ export function createTuiChat(
   // header holds this exact array and reads whatever it contains at render
   // time; a scan replaces its contents in place rather than the binding.
   const headerSkills: string[] = []
+  /**
+   * The banner's `[Plugins]` list, read from the Loader inventory on first
+   * successful render and cached: the plugin set is the deployment's
+   * cordis.yml, which does not change within a session, but `pluginInventory`
+   * is a host mount that may resolve only after the banner is on screen — so
+   * an unanswered read retries next frame rather than pinning "no plugins".
+   */
+  let headerPlugins: readonly string[] | undefined
   const headerInfo = {
     version: packageVersion(),
     // Read per render, like the prompt's model fragment: the route resolves
@@ -865,6 +874,20 @@ export function createTuiChat(
     title: () => sessionTitle,
     ...config.welcome === undefined ? {} : { welcome: config.welcome },
     skills: headerSkills,
+    plugins: (): readonly string[] | undefined => {
+      if (headerPlugins === undefined) {
+        const inventory = ctx.get('pluginInventory') as PluginInventoryReader | undefined
+        const entries = inventory?.list().entries
+        if (entries !== undefined) {
+          // Enabled entries only, one row per module: the banner is a menu of
+          // what is live, not the Loader tree `/plugins` inspects.
+          headerPlugins = [...new Set(
+            entries.filter(entry => entry.enabled).map(entry => entry.moduleName),
+          )].sort((left, right) => left.localeCompare(right))
+        }
+      }
+      return headerPlugins
+    },
   } satisfies HeaderInfo
   const header = new HeaderComponent(
     headerInfo,
@@ -990,8 +1013,11 @@ export function createTuiChat(
   ui.addChild(todoContainer)
   ui.addChild(statusLine)
   ui.addChild(planContainer)
-  ui.addChild(promptContext)
   ui.addChild(editor)
+  // The cwd/model/token/context line renders BELOW the input frame, the slot
+  // Claude Code keeps it in (`PromptInputFooterLeftSide`): the input is the
+  // last thing the eye hunts for, and the session vitals sit under it.
+  ui.addChild(promptContext)
   // The inline surfaces (a question, an approval, `/model`, a panel) open BELOW
   // the input, not above it. Claude Code renders them in the slot the prompt
   // itself occupies — a local-JSX command hides the input entirely and takes
@@ -1375,10 +1401,29 @@ export function createTuiChat(
    * scheme are current — a color-scheme change goes through here on the same
    * snapshot every other row is remounted from.
    * @param active - Whether the session is in plan mode.
+   * @param pending - Whether plan mode was selected during a running turn and
+   *   commits at the next accepted pre-step (no `plan/mode` event yet).
    */
-  const applyPlanMode = (active: boolean): void => {
+  const applyPlanMode = (active: boolean, pending = false): void => {
     planContainer.clear()
-    if (active) planContainer.addChild(new Text(planModeRow(palette, currentScheme), 0, 0))
+    if (active || pending) planContainer.addChild(new Text(planModeRow(palette, currentScheme, pending), 0, 0))
+  }
+
+  /**
+   * Read the live plan-mode state — folded plus any pending selection — and
+   * mount or drop the badge. The folded state arrives through snapshots, but a
+   * `/plan` typed during a running turn writes no event until the next
+   * pre-step, so the pending half is read from the service on demand: after
+   * every command, and on every snapshot. When the service is absent (a
+   * minimal deployment), the folded snapshot is the only state there is.
+   */
+  const refreshPlanMode = (): void => {
+    const planMode = ctx.get('planMode') as PlanModeController | undefined
+    const state = planMode?.get(agent)
+    applyPlanMode(
+      state?.active ?? store.getSnapshot().planMode,
+      state?.pending ?? false,
+    )
   }
 
   /**
@@ -1389,7 +1434,7 @@ export function createTuiChat(
   const applySnapshot = (snapshot: SessionSnapshot): void => {
     transcript.reconcile(snapshot.nodes)
     todo.update(snapshot.todos ?? [])
-    applyPlanMode(snapshot.planMode)
+    refreshPlanMode()
     if (snapshot.title !== sessionTitle) {
       sessionTitle = snapshot.title
       header.invalidate()
@@ -2435,6 +2480,9 @@ export function createTuiChat(
         } else if (execution.result.text !== undefined && execution.result.text !== '') {
           appendNotice(execution.result.text, execution.result.kind === 'error' ? 'error' : 'info')
         }
+        // A `/plan` selection writes no event while a turn is open, so the
+        // snapshot path cannot see it: refresh the badge from the service.
+        refreshPlanMode()
       },
       (error: unknown) => {
         if (!disposed) {
@@ -2481,14 +2529,27 @@ export function createTuiChat(
     agent.followup(message)
   }
 
-  /** Deliver a user turn to the agent: steer while running, send while idle, or report a disposed agent. */
-  const deliver = (payload: string): void => {
-    dispatchMessage([{ type: 'text', text: payload }])
+  /**
+   * Deliver a loaded skill the way Claude Code presents a slash-command skill:
+   * the visible user turn is the command line itself, and the skill body rides
+   * an injected context message beside it — model-visible, but rendered as a
+   * context card the transcript only mounts in the expanded Ctrl+O phase,
+   * never as user prose. The body is dsh-skill's canonical `<skill_content>`
+   * render, so the model sees one shape whether it loaded the skill itself or
+   * the user invoked it, and the injection carries the durable
+   * `skill-invocation` source dsh-skill declares for exactly this boundary.
+   */
+  const deliverSkill = (skill: SkillDefinition, instructions: string): void => {
+    const context = createUserMessage({
+      content: [{ type: 'text', text: renderSkillContent(skill) }],
+      source: { kind: 'skill-invocation', name: skill.name, form: 'instructions' },
+    })
+    dispatchMessage([{ type: 'text', text: renderSkillEcho(skill.name, instructions) }], context)
   }
 
   /**
-   * Load a manually invoked skill and deliver its rendered body as a user turn,
-   * reporting lookup outcomes as notices.
+   * Load a manually invoked skill and deliver it — command-line echo as the
+   * user turn, body as injected context — reporting lookup outcomes as notices.
    *
    * The returned promise settles when the invocation is over — delivered,
    * refused, or failed — which is what the launcher-seeded first turn waits on
@@ -2536,7 +2597,7 @@ export function createTuiChat(
               appendNotice(`Skill "${name}" is not available for user invocation.`, 'warning')
               return
             }
-            deliver(renderSkillInvocation(skill, instructions))
+            deliverSkill(skill, instructions)
           },
           reportFailure,
         )
@@ -2613,8 +2674,11 @@ export function createTuiChat(
     // Every routing decision below reads the trimmed line, because a leading
     // space is a typo, not an intent: " /help" used to miss the command branch
     // and be sent to the model as a chat message, which the user paid for and
-    // could not undo.
-    const command = text.startsWith('/')
+    // could not undo. The line counts as a command only when it parses as one:
+    // a pasted absolute path (/Users/..., /var/folders/...) also starts with
+    // '/' but fails the command-name grammar, and used to be answered with
+    // "Unknown command" instead of reaching the model.
+    const command = parseCommand(text) !== undefined
     // A launcher-seeded skill owns the first turn of the session it seeded, and
     // its registry lookup is asynchronous: a prompt submitted inside that window
     // used to reach the model first, so the model answered a question whose
@@ -3140,11 +3204,11 @@ export function createTuiChat(
     modelController.detach()
   }
 
-  // Sweep reveal of the wordmark: it wipes in left-to-right over
-  // ~BANNER_REVEAL_STEPS frames (started after `ui.start()` succeeds). Only that
-  // row sweeps — the lines under it say where this session runs, and animating
-  // them moved the whole screen at startup. A configured welcome line skips the
-  // sweep so deployments (and snapshot fixtures) stay frame-deterministic.
+  // Sweep reveal of the banner: the welcome box and its whale art wipe in
+  // left-to-right over ~BANNER_REVEAL_STEPS frames (started after `ui.start()`
+  // succeeds). The clip changes no row count, so the screen holds still while
+  // the sweep runs. A configured welcome line skips the sweep so deployments
+  // (and snapshot fixtures) stay frame-deterministic.
   let revealTimer: ReturnType<typeof setInterval> | undefined
   const stopBannerReveal = (): void => {
     if (revealTimer === undefined) return

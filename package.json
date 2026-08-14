@@ -1,9 +1,28 @@
 {
-  "name": "dsh-tui",
+  "name": "deepseek-harness-tui",
   "version": "0.1.0",
   "description": "Interactive terminal UI for deepseek-harness, installed as a dsh profile bundle",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Demo-0416/deepseek-harness-tui.git"
+  },
+  "homepage": "https://github.com/Demo-0416/deepseek-harness-tui#readme",
+  "bugs": {
+    "url": "https://github.com/Demo-0416/deepseek-harness-tui/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "tui",
+    "terminal",
+    "cli",
+    "agent",
+    "ai"
+  ],
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
   "exports": {
@@ -34,7 +53,8 @@
   "scripts": {
     "build": "tsc --emitDeclarationOnly --outDir lib/types && tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/unit/*.test.ts"
+    "test": "node --import tsx --test tests/unit/*.test.ts",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.84.1",

@@ -222,12 +222,16 @@ describe('skills after a preset switch', { skip: skipWithoutEntry }, () => {
       await delay(SETTLE_MS)
       // The lookup, not just the menu: a stale registry answers this with
       // "Unknown skill" for a skill the running preset does supply.
-      const delivered = harness.agent.followups.map(message => message.content
-        .map(block => block.type === 'text' ? block.text : '')
-        .join(''))
+      const text = (messages: readonly { content: readonly { type: string; text?: string }[] }[]): string[] =>
+        messages.map(message => message.content
+          .map(block => block.type === 'text' ? block.text ?? '' : '')
+          .join(''))
+      const delivered = text(harness.agent.followups)
       assert.equal(delivered.length, 1, `the skill was delivered as a turn:\n${harness.terminal.text()}`)
-      assert.match(delivered[0] ?? '', /<skill name="code-only">/u)
-      assert.match(delivered[0] ?? '', /body of code-only/u)
+      assert.equal(delivered[0], '/skill:code-only', 'the turn is the command-line echo')
+      const injected = text(harness.agent.injected)
+      assert.match(injected[0] ?? '', /<skill_content name="code-only">/u)
+      assert.match(injected[0] ?? '', /body of code-only/u)
     } finally {
       await disposeTuiTestHarness(harness)
       await harness.terminal.dispose()

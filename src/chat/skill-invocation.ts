@@ -1,11 +1,11 @@
 /**
- * Manual `/skill:<name> [instructions]` parsing and model-visible rendering for
- * the terminal front door.
+ * Manual `/skill:<name> [instructions]` parsing and echo rendering for the
+ * terminal front door: the command line becomes the visible user turn, and the
+ * skill body rides beside it as injected context (Claude Code's breadcrumb +
+ * hidden content split). The body itself is rendered by dsh-skill's
+ * `renderSkillContent`, shared with the model-facing `skill` tool.
  * @module @deepseek-ai/dsh-tui/chat/skill-invocation
  */
-
-import { assertNever } from '@deepseek-ai/dsh-llm'
-import type { SkillDefinition, SkillResourceBase } from '@deepseek-ai/dsh-skill'
 
 /** Prefix that marks an editor submission as a manual skill invocation. */
 export const SKILL_COMMAND_PREFIX = '/skill:'
@@ -30,38 +30,18 @@ export function parseSkillCommand(text: string): ParsedSkillCommand {
   return { name: rest.slice(0, spaceIndex), instructions: rest.slice(spaceIndex + 1).trim() }
 }
 
-/** Model-visible line locating a manually invoked skill's relative resources, or `undefined` when the provider has no base. */
-function skillResourceReference(base: SkillResourceBase | undefined): string | undefined {
-  if (base === undefined) return undefined
-  switch (base.kind) {
-    case 'directory':
-      return `References in this skill are relative to ${base.path}.`
-    case 'url':
-      return `References in this skill are relative to ${base.url}.`
-    case 'opaque':
-      return base.description
-    default:
-      return assertNever(base, 'SkillResourceBase.kind')
-  }
-}
-
 /**
- * Render a manually invoked skill into the model-visible user-message text. The
- * `<skill>` block carries the body and, when the provider supplies one, its
- * resource base; the trimmed `instructions` follow the block as the user's
- * request for this turn. The name is registry-validated kebab-case
- * (the skill registry rejects any other) and the resource base is trusted
- * same-process provider prose, so — unlike the model-facing `dsh-tool-skill`
- * result, which escapes for a tool channel — this user turn is assembled raw.
- * @param skill - the loaded skill definition.
+ * The visible user turn of a `/skill:` invocation: the command line itself.
+ *
+ * This is both what the transcript echoes and what the model receives as the
+ * turn — the skill body arrives beside it as injected context, so the turn
+ * only has to name the skill and carry the user's request. A launcher-seeded
+ * skill has no typed line, so the echo is reconstructed rather than captured.
+ * @param name - the invoked skill's name.
  * @param instructions - trimmed text typed after `/skill:<name>`; empty when absent.
- * @returns the user-message text delivered to the agent.
+ * @returns the user-message text delivered and echoed for this turn.
  */
-export function renderSkillInvocation(skill: SkillDefinition, instructions: string): string {
-  const lines = [`<skill name="${skill.name}">`]
-  const reference = skillResourceReference(skill.resourceBase)
-  if (reference !== undefined) lines.push(reference, '')
-  lines.push(skill.content, '</skill>')
-  const block = lines.join('\n')
-  return instructions === '' ? block : `${block}\n\n${instructions}`
+export function renderSkillEcho(name: string, instructions: string): string {
+  const line = `${SKILL_COMMAND_PREFIX}${name}`
+  return instructions === '' ? line : `${line} ${instructions}`
 }

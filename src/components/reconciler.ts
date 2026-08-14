@@ -28,6 +28,7 @@ import type {
 import type { StepTimingTracker } from '../chat/timing.ts'
 import { displayText } from './text.ts'
 import type { Palette } from './theme.ts'
+import { withTuiPresenters } from './tool-presenters.ts'
 import {
   ContextCardComponent,
   StreamingAssistantComponent,
@@ -566,7 +567,7 @@ export class TranscriptReconciler {
     const component = new ToolCardComponent(
       node.name,
       node.args,
-      this.deps.toolDefinition(node.name),
+      withTuiPresenters(node.name, this.deps.toolDefinition(node.name)),
       this.deps.maxToolOutputLines,
       this.deps.maxDiffEditLength,
       this.deps.palette,

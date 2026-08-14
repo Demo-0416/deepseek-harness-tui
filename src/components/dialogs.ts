@@ -237,7 +237,7 @@ export class StatusCardComponent implements Component {
   }
 }
 
-/** The left/right template line rendered above the editor. */
+/** The left/right template line rendered below the editor. */
 export class PromptContextComponent implements Component {
   constructor(
     private readonly leftTemplate: readonly TuiPromptTemplateToken[],
@@ -259,20 +259,12 @@ export class PromptContextComponent implements Component {
 }
 
 /**
- * How the two keys that open a question's custom answer are named, wherever
- * they are named.
- *
- * Both keys are bound — `Tab` and `c` — and neither belongs to the keybinding
- * registry, so nothing generated from the registry can spell them: the dialog
- * footer, the dialog's own "nothing selected" refusal, the shortcut list
- * `/help`, `/hotkeys` and `?` print, and the README's question row are four
- * hand-written places that have to agree. Three of them read this constant;
- * the README is held to it by the docs suite.
+ * The custom-answer row's label, as the dialog renders it and every other
+ * surface names it: the row is an ordinary numbered option at the end of the
+ * list, so there is no dedicated key to document — arrows or its number reach
+ * it like any other option.
  */
-export const CUSTOM_ANSWER_KEYS = 'Tab/c'
-
-/** The custom-answer row as the question dialog's footer and the shortcut list both print it. */
-export const CUSTOM_ANSWER_HINT = `${CUSTOM_ANSWER_KEYS} custom answer`
+export const CUSTOM_ANSWER_LABEL = 'Type something.'
 
 /** A user's answer to one question: chosen option labels and an optional custom answer. */
 export interface QuestionSelection {
@@ -1104,13 +1096,17 @@ interface SelectedBlockPage {
   maxOffset: number
 }
 
-/** Inline dialog for one user question with option or custom-answer modes. */
+/**
+ * Inline dialog for one user question. The option list carries a trailing
+ * "Type something." row — the custom answer is a numbered list item that turns
+ * into a one-line editor when focused, the way Claude Code renders its
+ * "Other" option, rather than a separate mode that trades the list away.
+ */
 export class QuestionDialog implements Component, Focusable {
   private selectedIndex = 0
   private selected = new Set<number>()
   private headerPage: SelectedBlockPage = { offset: 0, size: 1, maxOffset: 0 }
   private selectedBlockPage: SelectedBlockPage = { offset: 0, size: 1, maxOffset: 0 }
-  private mode: 'options' | 'custom'
   private error = ''
   private readonly input = new Input()
   private readonly options: NonNullable<AskUserQuestionItem['options']>
@@ -1128,20 +1124,24 @@ export class QuestionDialog implements Component, Focusable {
     private readonly cancel: () => void,
   ) {
     this.options = question.options ?? []
-    this.mode = this.options.length > 0 ? 'options' : 'custom'
     this.input.onSubmit = (value) => { this.submitCustom(value) }
-    this.input.onEscape = () => {
-      if (this.options.length > 0) {
-        this.mode = 'options'
-        this.error = ''
-      } else {
-        this.cancel()
-      }
-    }
+    this.input.onEscape = () => { this.cancel() }
+  }
+
+  /** Index of the trailing custom-answer row, one past the last option. */
+  private get inputIndex(): number {
+    return this.options.length
   }
 
   invalidate(): void {
     this.input.invalidate()
+  }
+
+  /** Move the focus row by `delta`, wrapping over options plus the input row. */
+  private moveSelection(delta: number): void {
+    const count = this.inputIndex + 1
+    this.selectedBlockPage = { offset: 0, size: 1, maxOffset: 0 }
+    this.selectedIndex = (this.selectedIndex + delta + count) % count
   }
 
   handleInput(data: string): void {
@@ -1154,59 +1154,77 @@ export class QuestionDialog implements Component, Focusable {
       this.pageForward()
       return
     }
-    // Interrupt before the mode branch, so it works in the custom editor too.
-    // `Esc` there is the editor's own "back to the options" (see `onEscape`),
-    // which left the dialog with no way out at all once the option list had
-    // been traded for the box: every key the editor does not claim is a
-    // character it types.
+    // Interrupt before the input row's branch, so it works there too: every
+    // key the editor does not claim is a character it types.
     if (matchesKey(data, Key.ctrl('c'))) {
       this.cancel()
       return
     }
-    if (this.mode === 'custom') {
+    // Arrows leave the input row like any other; only the remaining keys are
+    // the editor's to type.
+    if (matchesKey(data, Key.up)) {
+      this.moveSelection(-1)
+      return
+    }
+    if (matchesKey(data, Key.down)) {
+      this.moveSelection(1)
+      return
+    }
+    if (this.selectedIndex === this.inputIndex) {
       this.input.focused = this.focused
       this.input.handleInput(data)
       return
     }
     const options = this.options
-    if (matchesKey(data, Key.up)) {
-      this.selectedBlockPage = { offset: 0, size: 1, maxOffset: 0 }
-      this.selectedIndex = this.selectedIndex === 0 ? options.length - 1 : this.selectedIndex - 1
-    } else if (matchesKey(data, Key.down)) {
-      this.selectedBlockPage = { offset: 0, size: 1, maxOffset: 0 }
-      this.selectedIndex = this.selectedIndex === options.length - 1 ? 0 : this.selectedIndex + 1
-    } else if (matchesKey(data, Key.space) && this.question.multiSelect) {
-      if (this.selected.has(this.selectedIndex)) this.selected.delete(this.selectedIndex)
-      else this.selected.add(this.selectedIndex)
+    if (matchesKey(data, Key.space) && this.question.multiSelect) {
+      this.toggleOption(this.selectedIndex)
     } else if (matchesKey(data, Key.enter)) {
-      const selected = this.question.multiSelect
-        ? this.selectedOptionLabels()
-        : [options[this.selectedIndex]?.label].filter((label): label is string => label !== undefined)
-      const custom = this.question.multiSelect ? this.input.getValue().trim() : ''
-      if (selected.length === 0 && custom === '') {
-        this.error = `Select at least one option, or press ${CUSTOM_ANSWER_KEYS} for a custom answer.`
-        return
+      this.submitOption(this.selectedIndex)
+    } else if (/^[1-9]$/.test(data)) {
+      // Number keys reach an answer directly, Claude Code style: an option
+      // number answers (or toggles, multi-select); the input row's number only
+      // moves the focus there, so a stray digit cannot submit an empty answer.
+      const index = Number(data) - 1
+      if (index < options.length) {
+        if (this.question.multiSelect) this.toggleOption(index)
+        else this.submitOption(index)
+      } else if (index === this.inputIndex) {
+        this.selectedIndex = index
+        this.error = ''
       }
-      this.done({ selected, ...(custom === '' ? {} : { custom }) })
-    } else if (matchesKey(data, Key.tab) || data.toLowerCase() === 'c') {
-      this.mode = 'custom'
-      this.selectedBlockPage = { offset: 0, size: 1, maxOffset: 0 }
-      this.error = ''
     } else if (matchesKey(data, Key.escape)) {
       this.cancel()
     }
   }
 
+  /** Toggle one option's multi-select mark and land the focus on it. */
+  private toggleOption(index: number): void {
+    this.selectedIndex = index
+    if (this.selected.has(index)) this.selected.delete(index)
+    else this.selected.add(index)
+  }
+
+  /** Answer from an option row: the row itself, or every mark plus the typed text. */
+  private submitOption(index: number): void {
+    const selected = this.question.multiSelect
+      ? this.selectedOptionLabels()
+      : [this.options[index]?.label].filter((label): label is string => label !== undefined)
+    const custom = this.question.multiSelect ? this.input.getValue().trim() : ''
+    if (selected.length === 0 && custom === '') {
+      this.error = `Select at least one option, or answer on the "${CUSTOM_ANSWER_LABEL}" row.`
+      return
+    }
+    this.done({ selected, ...(custom === '' ? {} : { custom }) })
+  }
+
   private submitCustom(value: string): void {
     const custom = value.trim()
-    if (custom === '') {
+    const selected = this.question.multiSelect ? this.selectedOptionLabels() : []
+    if (custom === '' && selected.length === 0) {
       this.error = 'Enter an answer before submitting.'
       return
     }
-    this.done({
-      selected: this.question.multiSelect ? this.selectedOptionLabels() : [],
-      custom,
-    })
+    this.done({ selected, ...(custom === '' ? {} : { custom }) })
   }
 
   private selectedOptionLabels(): string[] {
@@ -1218,7 +1236,7 @@ export class QuestionDialog implements Component, Focusable {
 
   /** Page backward through an oversized option, then through question detail. */
   private pageBackward(): void {
-    if (this.mode === 'options' && this.selectedBlockPage.offset > 0) {
+    if (this.selectedBlockPage.offset > 0) {
       this.selectedBlockPage = {
         ...this.selectedBlockPage,
         offset: Math.max(0, this.selectedBlockPage.offset - this.selectedBlockPage.size),
@@ -1243,7 +1261,6 @@ export class QuestionDialog implements Component, Focusable {
       }
       return
     }
-    if (this.mode === 'custom') return
     this.selectedBlockPage = {
       ...this.selectedBlockPage,
       offset: Math.min(
@@ -1254,17 +1271,23 @@ export class QuestionDialog implements Component, Focusable {
   }
 
   render(width: number): string[] {
-    this.input.focused = this.focused
+    this.input.focused = this.focused && this.selectedIndex === this.inputIndex
     const horizontalPadding = Math.min(2, Math.max(0, Math.floor((width - 1) / 2)))
     const innerWidth = Math.max(1, width - horizontalPadding * 2)
-    const header = `Question ${this.position}/${this.total} (${this.unanswered} unanswered)${this.question.header === undefined ? '' : ` · ${displayText(this.question.header)}`}`
+    // The header chip names the question the way Claude Code's navigation bar
+    // does: an unanswered checkbox and the question's short label, highlighted
+    // as the active tab. The `x/y` progress only appears when a queue exists.
+    const chip = this.palette.selected(` ☐ ${displayText(this.question.header ?? `Q${this.position}`)} `)
+    const progress = this.total > 1
+      ? this.palette.dim(`  Question ${this.position}/${this.total} · ${this.unanswered} unanswered`)
+      : ''
     const questionLines = wrapTextWithAnsi(
-      this.palette.text(displayText(this.question.question)),
+      this.palette.bold(this.palette.text(displayText(this.question.question))),
       innerWidth,
     )
     const contentLines = [...questionLines]
     const headerLines: string[] = [
-      ...wrapTextWithAnsi(this.palette.dim(header), innerWidth),
+      ...wrapTextWithAnsi(`${chip}${progress}`, innerWidth),
       ...questionLines,
     ]
     // Supporting detail (e.g. the full plan under review) renders between the
@@ -1279,35 +1302,20 @@ export class QuestionDialog implements Component, Focusable {
     }
     headerLines.push('')
 
-    const customControls = [
-      ...(this.options.length > 0 && this.question.multiSelect ? [`${this.selected.size} selected`] : []),
-      'Enter submit',
-      this.options.length > 0 ? 'Esc options' : 'Esc cancel',
+    const controls = [
+      'Enter to select',
+      ...(this.inputIndex > 0 ? ['↑/↓ to navigate'] : []),
+      ...(this.question.multiSelect ? ['Space to toggle'] : []),
+      'Esc to cancel',
     ]
-    const customHint = this.palette.dim(customControls.join(' • '))
+    const hint = this.palette.dim(controls.join(' · '))
     const footerLines: string[] = []
-    if (this.mode === 'custom') {
-      for (const line of this.input.render(innerWidth)) footerLines.push(line)
-      for (const line of wrapTextWithAnsi(customHint, innerWidth)) footerLines.push(line)
-    } else {
-      const controls = [
-        // Both keys are named because both are bound: `c` is the one a hand
-        // already on the option list reaches for, and a shortcut nobody is
-        // told about is a shortcut nobody uses.
-        CUSTOM_ANSWER_HINT,
-        ...(this.options.length > 1 ? ['↑/↓ navigate'] : []),
-        ...(this.question.multiSelect ? ['Space toggle'] : []),
-        'Enter submit',
-        'Esc interrupt',
-      ]
-      const hint = this.palette.dim(controls.join(' • '))
-      for (const line of wrapTextWithAnsi(hint, innerWidth)) footerLines.push(line)
-    }
+    for (const line of wrapTextWithAnsi(hint, innerWidth)) footerLines.push(line)
     if (this.error) {
       for (const line of wrapTextWithAnsi(this.palette.error(this.error), innerWidth)) footerLines.push(line)
     }
-    const positionLines = this.mode === 'options' && this.options.length > this.maxVisible
-      ? [this.palette.dim(`${this.selectedIndex + 1}/${this.options.length}`)]
+    const positionLines = this.options.length > this.maxVisible
+      ? [this.palette.dim(`${this.selectedIndex + 1}/${this.inputIndex + 1}`)]
       : []
 
     // Options receive only the rows left after fixed chrome and outer padding.
@@ -1315,31 +1323,30 @@ export class QuestionDialog implements Component, Focusable {
     const paddingRows = 2
     const maxHeight = this.maxHeight()
     const availableForOptions = Math.max(
-      this.mode === 'options' ? 4 : 1,
+      4,
       maxHeight - paddingRows - headerLines.length - positionLines.length - footerLines.length,
     )
 
     const body: string[] = [...headerLines]
     const optionLines: string[] = []
-    if (this.mode === 'custom') {
-      for (const line of footerLines) body.push(line)
-    } else {
-      const optionBlocks = this.options.map((option, index) => this.renderOptionBlock(option, index, innerWidth))
-      const { visibleBlocks, hiddenBefore, hiddenAfter } = this.windowBlocks(optionBlocks, availableForOptions, innerWidth)
-      if (hiddenBefore > 0) optionLines.push(this.palette.dim(`↑ ${hiddenBefore} more`))
-      for (const block of visibleBlocks) {
-        for (const line of block) optionLines.push(line)
-      }
-      if (hiddenAfter > 0) optionLines.push(this.palette.dim(`↓ ${hiddenAfter} more`))
-      for (const line of optionLines) body.push(line)
-      for (const line of positionLines) body.push(line)
-      for (const line of footerLines) body.push(line)
+    const optionBlocks = [
+      ...this.options.map((option, index) => this.renderOptionBlock(option, index, innerWidth)),
+      this.renderInputBlock(innerWidth),
+    ]
+    const { visibleBlocks, hiddenBefore, hiddenAfter } = this.windowBlocks(optionBlocks, availableForOptions, innerWidth)
+    if (hiddenBefore > 0) optionLines.push(this.palette.dim(`↑ ${hiddenBefore} more`))
+    for (const block of visibleBlocks) {
+      for (const line of block) optionLines.push(line)
     }
+    if (hiddenAfter > 0) optionLines.push(this.palette.dim(`↓ ${hiddenAfter} more`))
+    for (const line of optionLines) body.push(line)
+    for (const line of positionLines) body.push(line)
+    for (const line of footerLines) body.push(line)
 
     const rows = ['', ...body, '']
     let visibleRows = rows
     if (rows.length <= maxHeight) this.headerPage = { offset: 0, size: 1, maxOffset: 0 }
-    if (rows.length > maxHeight && this.mode === 'options' && maxHeight >= 6) {
+    if (rows.length > maxHeight && maxHeight >= 6) {
       const headerBudget = Math.max(
         0,
         maxHeight - optionLines.length - (this.error === '' ? 1 : 2),
@@ -1355,29 +1362,6 @@ export class QuestionDialog implements Component, Focusable {
       ]
       const compactHeader = this.compactQuestionHeader(contentLines, headerBudget, innerWidth)
       visibleRows = [...compactHeader, ...optionLines, ...compactFooter]
-    } else if (rows.length > maxHeight && this.mode === 'custom' && maxHeight >= 2) {
-      const compactFooterSource = [
-        ...this.input.render(innerWidth),
-        this.compactCustomControls(innerWidth),
-        ...this.error === ''
-          ? []
-          : [truncateToWidth(this.palette.error(this.error), innerWidth, '…')],
-      ]
-      const footerBudget = Math.max(1, maxHeight - 1)
-      const compactFooter = compactFooterSource.length <= footerBudget
-        ? compactFooterSource
-        : footerBudget === 1
-          ? compactFooterSource.slice(0, 1)
-          : [
-            ...compactFooterSource.slice(0, 1),
-            ...compactFooterSource.slice(-(footerBudget - 1)),
-          ]
-      const compactHeader = this.compactQuestionHeader(
-        contentLines,
-        Math.max(0, maxHeight - compactFooter.length),
-        innerWidth,
-      )
-      visibleRows = [...compactHeader, ...compactFooter]
     }
     if (visibleRows.length > maxHeight) {
       visibleRows = maxHeight === 1
@@ -1395,27 +1379,39 @@ export class QuestionDialog implements Component, Focusable {
     })
   }
 
+  /**
+   * The `❯ 1. ` lead-in for one answer row, plain for width math and styled
+   * for display: the pointer carries the accent, the number stays dim, and a
+   * multi-select mark turns success once checked — so only the label itself
+   * reads at full strength, the way Claude Code's option rows are toned.
+   */
+  private rowPrefix(index: number, mark: '' | 'checkbox'): { plain: string; styled: string } {
+    const focusedRow = index === this.selectedIndex
+    const number = `${index + 1}. `
+    const markPlain = mark === '' ? '' : this.selected.has(index) ? '[✔] ' : '[ ] '
+    const markStyled = mark !== '' && this.selected.has(index) ? this.palette.success(markPlain) : markPlain
+    return {
+      plain: ` ${focusedRow ? '❯' : ' '} ${number}${markPlain}`,
+      styled: ` ${focusedRow ? this.palette.accent('❯') : ' '} ${this.palette.dim(number)}${markStyled}`,
+    }
+  }
+
   /** Render one option as wrapped label and indented description lines. */
   private renderOptionBlock(
     option: NonNullable<AskUserQuestionItem['options']>[number],
     index: number,
     innerWidth: number,
   ): string[] {
-    const cursor = index === this.selectedIndex ? '›' : ' '
-    const number = `${index + 1}. `
-    const mark = this.question.multiSelect
-      ? this.selected.has(index) ? '[x] ' : '[ ] '
-      : ''
-    const labelPrefixPlain = ` ${cursor} ${number}${mark}`
-    const labelPrefixWidth = visibleWidth(labelPrefixPlain)
+    const focusedRow = index === this.selectedIndex
+    const prefix = this.rowPrefix(index, this.question.multiSelect ? 'checkbox' : '')
+    const labelPrefixWidth = visibleWidth(prefix.plain)
     const labelBodyWidth = Math.max(1, innerWidth - labelPrefixWidth)
     const labelLines = wrapTextWithAnsi(displayText(option.label), labelBodyWidth)
     const continuation = ' '.repeat(labelPrefixWidth)
     const lines: string[] = []
     for (const [lineIndex, labelLine] of labelLines.entries()) {
-      const prefix = lineIndex === 0 ? labelPrefixPlain : continuation
-      const composed = `${prefix}${labelLine}`
-      lines.push(index === this.selectedIndex ? this.palette.bold(this.palette.accent(composed)) : composed)
+      const label = focusedRow ? this.palette.bold(this.palette.accent(labelLine)) : labelLine
+      lines.push(lineIndex === 0 ? `${prefix.styled}${label}` : `${continuation}${label}`)
     }
     if (option.description !== undefined) {
       const descIndent = ' '.repeat(labelPrefixWidth)
@@ -1424,6 +1420,26 @@ export class QuestionDialog implements Component, Focusable {
       for (const descLine of descLines) lines.push(`${descIndent}${this.palette.dim(descLine)}`)
     }
     return lines
+  }
+
+  /**
+   * Render the trailing custom-answer row: a numbered "Type something." item
+   * that becomes the one-line editor while focused and keeps showing whatever
+   * was typed after the focus moves on.
+   */
+  private renderInputBlock(innerWidth: number): string[] {
+    const index = this.inputIndex
+    const prefix = this.rowPrefix(index, '')
+    const bodyWidth = Math.max(1, innerWidth - visibleWidth(prefix.plain))
+    if (this.focused && index === this.selectedIndex) {
+      const [inputLine = ''] = this.input.render(bodyWidth)
+      return [`${prefix.styled}${inputLine}`]
+    }
+    const value = this.input.getValue()
+    const body = value === ''
+      ? this.palette.dim(this.question.multiSelect ? CUSTOM_ANSWER_LABEL.replace(/\.$/, '') : CUSTOM_ANSWER_LABEL)
+      : truncateToWidth(displayText(value), bodyWidth, '…')
+    return [`${prefix.styled}${body}`]
   }
 
   /** Keep the question visible when fixed chrome must be compacted. */
@@ -1463,30 +1479,19 @@ export class QuestionDialog implements Component, Focusable {
     ))
   }
 
-  /** Render custom-mode controls on one row when the header must compact. */
-  private compactCustomControls(innerWidth: number): string {
-    const controls = this.options.length > 0
-      ? 'Enter submit • Esc options'
-      : 'Enter submit • Esc cancel'
-    const fallback = this.options.length > 0 ? '↵ Esc options' : 'Enter Esc cancel'
-    const line = visibleWidth(controls) <= innerWidth ? controls : fallback
-    return this.palette.dim(truncateToWidth(line, innerWidth, '…'))
-  }
-
-  /** Render a one-row option footer that retains every mode-specific control. */
+  /** Render a one-row footer that retains every control when height compacts. */
   private compactOptionControls(innerWidth: number, showPager = false): string {
     const controls = [
-      ...(this.options.length > 1 ? ['↑/↓'] : []),
-      'Tab custom',
+      ...(this.inputIndex > 0 ? ['↑/↓'] : []),
       ...(this.question.multiSelect ? ['Space toggle'] : []),
       'Enter',
-      'Esc interrupt',
+      'Esc cancel',
       ...(showPager ? ['PgUp/PgDn'] : []),
-    ].join(' • ')
-    const optionNavigation = this.options.length > 1 ? '↑↓ ' : ''
+    ].join(' · ')
+    const optionNavigation = this.inputIndex > 0 ? '↑↓ ' : ''
     const fallback = showPager
-      ? `P↑↓ ${optionNavigation}Tab${this.question.multiSelect ? ' S' : ''}↵Esc`
-      : this.question.multiSelect ? `${optionNavigation}Tab Sp ↵Esc` : `${optionNavigation}Tab ↵ Esc`
+      ? `P↑↓ ${optionNavigation}${this.question.multiSelect ? 'S ' : ''}↵Esc`
+      : this.question.multiSelect ? `${optionNavigation}Sp ↵Esc` : `${optionNavigation}↵ Esc`
     const line = visibleWidth(controls) <= innerWidth ? controls : fallback
     return this.palette.dim(truncateToWidth(line, innerWidth, '…'))
   }

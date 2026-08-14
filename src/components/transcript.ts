@@ -29,7 +29,7 @@ import type {
 import type { FileDiff } from '@deepseek-ai/dsh-tools'
 import { renderUnknownXml } from './xml-tool-output.ts'
 import { displayInlineText, displayText } from './text.ts'
-import { gradientText, type Palette } from './theme.ts'
+import { brandText, gradientText, type Palette } from './theme.ts'
 import { contentText, type ParsedArguments } from './content.ts'
 import {
   diffLanguage,
@@ -43,8 +43,8 @@ import { buildPreviewText } from '../render/preview.ts'
 import { renderMarkdownAnsi, type MarkdownAnsiTheme } from '../render/markdown.ts'
 import {
   bg as paintBg,
-  claudeSchemeColors,
-  CLAUDE_COLORS,
+  brandSchemeColors,
+  BRAND_COLORS,
   fg as paintFg,
   type Rgb,
 } from '../render/palette.ts'
@@ -93,7 +93,7 @@ function colorEnabled(palette: Palette): boolean {
 }
 
 /**
- * Paint text in one of Claude Code's fixed brand colors, or leave it bare when
+ * Paint text in one of the brand's fixed colors, or leave it bare when
  * the palette has color disabled.
  */
 function accent(palette: Palette, color: Rgb, text: string): string {
@@ -279,12 +279,15 @@ class PrefixedComponent implements Component {
 /** Label above the banner's skill summary. */
 const SKILLS_LABEL = '[Skills]'
 
+/** Label above the banner's plugin summary. */
+const PLUGINS_LABEL = '[Plugins]'
+
 /** Rows of skill names the banner spends before it summarizes the rest. */
 const SKILLS_MAX_ROWS = 4
 
 /**
  * Pack skill names into comma-joined rows of at most `width` columns, spending
- * at most {@link SKILLS_MAX_ROWS} of them.
+ * at most `maxRows` of them.
  *
  * What does not fit is counted into a trailing `+N more`, and the marker is
  * packed onto the last row like any other item: names are dropped from that row
@@ -294,9 +297,10 @@ const SKILLS_MAX_ROWS = 4
  * itself off the part a truncation would clip.
  * @param names - Skill names, in the order the entry supplied them.
  * @param width - Columns one row may occupy.
+ * @param maxRows - Rows the summary may spend before it counts the remainder.
  * @returns The rows to render, without styling.
  */
-function packSkillNames(names: readonly string[], width: number): string[] {
+function packSkillNames(names: readonly string[], width: number, maxRows = SKILLS_MAX_ROWS): string[] {
   if (names.length === 0) return []
   const joined = (parts: readonly string[]): string => parts.join(', ')
   const rows: string[] = []
@@ -310,7 +314,7 @@ function packSkillNames(names: readonly string[], width: number): string[] {
       placed += 1
       continue
     }
-    if (rows.length + 1 === SKILLS_MAX_ROWS) break
+    if (rows.length + 1 === maxRows) break
     rows.push(joined(row))
     row = [name]
     placed += 1
@@ -347,37 +351,105 @@ export interface HeaderInfo {
    * skills must not spend a banner row saying so.
    */
   readonly skills?: readonly string[]
+  /**
+   * Plugin module names mounted into this session, rendered as the banner's
+   * `[Plugins]` summary. Read per render, like the model: the Loader keeps
+   * mounting entries after the banner is on screen, and the inventory service
+   * itself is a host mount that may resolve late. Absent (or an empty read)
+   * renders no section.
+   */
+  readonly plugins?: () => readonly string[] | undefined
 }
 
 /**
- * Borderless startup banner, in Claude Code's shape: the wordmark and version on
- * one line, what this session is running as on the next, and then the input.
+ * The DeepSeek whale mark as quadrant-block pixel art. Traced from the official
+ * logo onto a 24x8 pixel grid and hand-cleaned; each character cell carries a
+ * 2x2 block of pixels, and a terminal cell is about twice as tall as it is
+ * wide, so the grid is drawn at 2:1 to keep the whale round on screen. Head and
+ * eye at the left, the white belly swoosh carved out underneath, the two tail
+ * flukes raised to the upper right.
+ */
+const WHALE_ART = [
+  ' ▄███▄  █▄█▄',
+  '▐▀▀██▙▟▙▄▀▀ ',
+  '▜▖  ▝█▙█▛   ',
+  ' ▀▙▟█▄▛▀    ',
+] as const
+
+/** Columns every {@link WHALE_ART} row occupies. */
+const WHALE_WIDTH = 12
+
+/**
+ * The whale at welcome size, from the same trace on a 30x10 pixel grid: what
+ * the two-column welcome box centers in its left panel, as Claude Code does its
+ * mascot.
+ */
+const WHALE_ART_LARGE = [
+  ' ▗▄▄▄██  █▄▜▙▖',
+  '▟████▙▟█▄▝█▛▀ ',
+  '█   ▀▜█▙▝██▘  ',
+  '▝▙▖ ▗▖▀███▘   ',
+  ' ▝▀███▙▟▀▀▘   ',
+] as const
+
+/** Columns every {@link WHALE_ART_LARGE} row occupies. */
+const WHALE_LARGE_WIDTH = 14
+
+/** Interior box columns beside the text column: pad, art, gap, pad. */
+const BOX_INNER_CHROME = 1 + WHALE_WIDTH + 2 + 1
+
+/** Columns a boxed banner row spends beyond its text: indent, borders, chrome. */
+const BOX_OVERHEAD = BOX_INNER_CHROME + 3
+
+/** Below this render width the banner falls back to the borderless stack. */
+const MIN_BOXED_WIDTH = 40
+
+/** From this render width up, a session with a skill list gets the two-column welcome box. */
+const FULL_MIN_WIDTH = 76
+
+/** Columns the welcome box's left panel may grow to, margins included. */
+const FULL_LEFT_MAX = 44
+
+/** Columns the welcome box's right panel must keep for the skill summary. */
+const FULL_RIGHT_MIN = 24
+
+/**
+ * Startup banner in the shape of Claude Code's welcome box, at three widths.
+ * On a wide terminal ({@link FULL_MIN_WIDTH}+) a session with a skill list gets
+ * the two-column frame {@link renderFull} draws — mascot and identity on the
+ * left, skills on the right, wordmark in the border. Under that, the badge
+ * shape below: a dim rounded border around the brand mark and the session's
+ * identity lines, with the skill summary as a borderless section under it.
  *
  * ```text
- *  DEEPSEEK HARNESS v0.1.0
- *  deepseek-v4-pro · ~/src/project
- *  resumed 85d19568 · fix the ordering bug
+ *  ╭───────────────────────────────────────────╮
+ *  │  ▄███▄  █▄█▄   DEEPSEEK HARNESS v0.1.0    │
+ *  │ ▐▀▀██▙▟▙▄▀▀    deepseek-v4-pro            │
+ *  │ ▜▖  ▝█▙█▛      ~/src/project              │
+ *  │  ▀▙▟█▄▛▀       resumed 85d19568 · a title │
+ *  ╰───────────────────────────────────────────╯
  *
  *  [Skills]
  *  lark-doc, lark-base, meego-tech-story, +12 more
  * ```
  *
- * The session id is on the resumed line only. A fresh session's id is a uuid the
- * user did not choose and cannot act on, and printing it (as this banner did)
- * spent the first thing on screen saying nothing; a resumed one is exactly what
- * `--resume` takes back, so it is worth its line — with the logged title beside
- * it, which is why the title is no longer a transcript row of its own. Each line
- * renders as plain left-padded text, matching transcript notices, so it reads on
- * any theme.
+ * The box hugs its widest identity line rather than the terminal: it is a
+ * badge, not a layout region. The session id is on the resumed line only. A
+ * fresh session's id is a uuid the user did not choose and cannot act on, and
+ * printing it (as this banner once did) spent the first thing on screen saying
+ * nothing; a resumed one is exactly what `--resume` takes back, so it is worth
+ * its line — with the logged title beside it, which is why the title is not a
+ * transcript row of its own.
  *
- * The skill summary is a section rather than another identity line, so it goes
- * last, under a blank row: which session this is (route, workspace, resume) is
- * one block, and what it can do is another. On a fresh session — the common
- * case, with no resume and no configured welcome — that puts it directly under
- * the workspace row.
+ * The skill summary stays outside the border, under a blank row: the box says
+ * which session this is (mark, route, workspace, resume), and the section
+ * under it says what the session can do. A configured welcome line renders
+ * between them, as plain left-padded text matching transcript notices. Under
+ * {@link MIN_BOXED_WIDTH} columns the whole banner degrades to that plain
+ * stack — a box that cannot fit its own art has nothing left to frame.
  */
 export class HeaderComponent implements Component {
-  /** Columns of the wordmark currently revealed; `undefined` renders it whole. */
+  /** Columns of the banner currently revealed; `undefined` renders it whole. */
   private revealWidth: number | undefined
 
   constructor(
@@ -387,11 +459,11 @@ export class HeaderComponent implements Component {
   ) {}
 
   /**
-   * Clip the wordmark to `width` columns (the sweep reveal); `undefined` restores it.
-   *
-   * Only the wordmark sweeps. The lines under it state where the session is
-   * running, and wiping those in as well made the whole screen move at startup.
-   * @param width - Revealed wordmark width in columns, or `undefined` for the whole row.
+   * Clip every banner row to `width` columns (the sweep reveal); `undefined`
+   * restores the full banner. The clip changes no row count, so the screen
+   * does not move while the sweep runs — the box and its art wipe in
+   * left-to-right over a frame that already has its final height.
+   * @param width - Revealed width in columns, or `undefined` for the whole banner.
    */
   setRevealWidth(width: number | undefined): void {
     this.revealWidth = width
@@ -400,50 +472,248 @@ export class HeaderComponent implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    const usable = Math.max(1, width - 2)
+    const rows = width < MIN_BOXED_WIDTH
+      ? this.renderPlain(width)
+      : (width >= FULL_MIN_WIDTH ? this.renderFull(width) : undefined) ?? this.renderBoxed(width)
+    const reveal = this.revealWidth
+    if (reveal === undefined) return rows
+    return rows.map(row => truncateToWidth(row, reveal, ''))
+  }
+
+  /** The wordmark fragment: gradient brand name, bold product name, dim version. */
+  private wordmark(): string {
     const name = this.gradient
       ? this.palette.bold(gradientText('DEEPSEEK'))
       : this.palette.bold(this.palette.accent('DEEPSEEK'))
     const version = this.info.version
-    const wordmark = `${name} ${this.palette.bold('HARNESS')}`
+    return `${name} ${this.palette.bold('HARNESS')}`
       + (version === undefined ? '' : ` ${this.palette.dim(`v${displayText(version)}`)}`)
-    const model = this.info.model()
+  }
+
+  /** The `resumed <id> · <title>` line, or `undefined` on a fresh session. */
+  private resumedLine(): string | undefined {
+    if (this.info.resumed === undefined) return undefined
     const title = this.info.title()
-    const welcome = this.info.welcome
+    return `resumed ${displayText(this.info.resumed)}${title === undefined ? '' : ` · ${displayText(title)}`}`
+  }
+
+  /**
+   * The two-column welcome box, in the shape of Claude Code's full startup
+   * frame: the wordmark spliced into the top border, the left panel centering
+   * the welcome line, the large whale, and the identity lines, and the right
+   * panel spending the box's height on the skill summary.
+   *
+   * ```text
+   *  ╭─ DEEPSEEK HARNESS v0.1.0 ────────────────────────────────╮
+   *  │                          │ [Skills]                      │
+   *  │      ▗▄▄▄██  █▄▜▙▖       │ lark-doc, lark-base, hotcli   │
+   *  │     ▟████▙▟█▄▝█▛▀        │ meego-tech-story, +12 more    │
+   *  │     █   ▀▜█▙▝██▘         │                               │
+   *  │     ▝▙▖ ▗▖▀███▘          │                               │
+   *  │      ▝▀███▙▟▀▀▘          │                               │
+   *  │                          │                               │
+   *  │   deepseek-v4-pro        │                               │
+   *  │   ~/src/project          │                               │
+   *  ╰──────────────────────────┴───────────────────────────────╯
+   * ```
+   *
+   * @param width - Render width in columns.
+   * @returns Every banner row, or `undefined` when the entry supplied no skill
+   * list — with nothing to spend the right panel on, the badge box says the
+   * same thing in a third of the rows.
+   */
+  private renderFull(width: number): string[] | undefined {
+    if (this.info.skills === undefined) return undefined
+    const dim = (text: string): string => this.palette.dim(text)
+    const inner = width - 3
+    const model = this.info.model()
+    const resumed = this.resumedLine()
+    const identity = [
+      ...model === undefined ? [] : [displayText(model)],
+      displayText(this.info.cwd),
+      ...resumed === undefined ? [] : [resumed],
+    ]
+    const welcome = this.info.welcome === undefined ? undefined : displayText(this.info.welcome)
+    const leftWidth = Math.min(
+      Math.max(
+        WHALE_LARGE_WIDTH + 6,
+        ...[...identity, ...welcome === undefined ? [] : [welcome]].map(line => visibleWidth(line) + 4),
+      ),
+      FULL_LEFT_MAX,
+      inner - FULL_RIGHT_MIN - 1,
+    )
+    const rightWidth = inner - leftWidth - 1
+    // A panel too narrow for its own art means the box has no room to be a
+    // two-column layout at all.
+    if (leftWidth < WHALE_LARGE_WIDTH + 2) return undefined
+    const centered = (text: string): string => {
+      const clipped = truncateToWidth(text, leftWidth - 2, '')
+      const lead = Math.floor((leftWidth - visibleWidth(clipped)) / 2)
+      return `${' '.repeat(lead)}${clipped}`
+    }
+    // The identity lines center as one left-aligned block, not line by line:
+    // lines of very different length centered individually give the panel a
+    // ragged left edge that reads as misalignment, where a shared edge under
+    // the centered mascot reads as a column.
+    const identityLead = ' '.repeat(Math.max(
+      1,
+      Math.floor((leftWidth - Math.min(Math.max(...identity.map(line => visibleWidth(line))), leftWidth - 2)) / 2),
+    ))
+    const left = [
+      '',
+      ...welcome === undefined ? [] : [centered(this.palette.bold(welcome)), ''],
+      ...WHALE_ART_LARGE.map(row => centered(this.gradient ? brandText(row) : this.palette.brand(row))),
+      '',
+      ...identity.map(line => `${identityLead}${dim(truncateToWidth(line, leftWidth - 2, ''))}`),
+    ]
+    // One packed panel section: accent header, then the names on the section's
+    // usual four-row budget.
+    const section = (label: string, names: readonly string[]): string[] => names.length === 0 ? [] : [
+      ` ${this.palette.bold(this.palette.accent(label))}`,
+      ...packSkillNames(names, rightWidth - 2).map(row => ` ${dim(row)}`),
+    ]
+    const skillsSection = section(SKILLS_LABEL, this.skillNames())
+    const pluginsSection = section(PLUGINS_LABEL, this.pluginNames())
+    // The panel breathes on both ends: without the closing blank row the last
+    // packed line sits flush against the bottom border.
+    const right = [
+      '',
+      ...skillsSection,
+      ...skillsSection.length > 0 && pluginsSection.length > 0 ? [''] : [],
+      ...pluginsSection,
+      '',
+    ]
+    const cell = (text: string, cellWidth: number): string => {
+      const clipped = truncateToWidth(text, cellWidth, '')
+      return `${clipped}${' '.repeat(Math.max(0, cellWidth - visibleWidth(clipped)))}`
+    }
+    const wordmark = this.wordmark()
+    const rule = inner - visibleWidth(wordmark) - 3
+    const rows = [
+      // The wordmark rides the top border, as Claude Code's title does; a box
+      // too narrow to hold it there closes the border over it instead.
+      rule < 1
+        ? ` ${dim(`╭${'─'.repeat(inner)}╮`)}`
+        : ` ${dim('╭─')} ${wordmark} ${dim(`${'─'.repeat(rule)}╮`)}`,
+    ]
+    const height = Math.max(left.length, right.length)
+    // The left block centers vertically in whatever height the right panel
+    // sets: a taller skill summary used to leave the mascot and identity
+    // hanging at the top of the frame over a well of blank rows.
+    const drop = Math.floor((height - left.length) / 2)
+    for (let index = 0; index < height; index += 1) {
+      rows.push(` ${dim('│')}${cell(left[index - drop] ?? '', leftWidth)}${dim('│')}${cell(right[index] ?? '', rightWidth)}${dim('│')}`)
+    }
+    rows.push(` ${dim(`╰${'─'.repeat(leftWidth)}┴${'─'.repeat(rightWidth)}╯`)}`)
+    return rows
+  }
+
+  /**
+   * The bordered banner: whale art beside the identity lines inside a dim
+   * rounded frame, then the welcome line and skill section below it.
+   * @param width - Render width in columns.
+   * @returns Every banner row, already indented.
+   */
+  private renderBoxed(width: number): string[] {
+    const model = this.info.model()
+    const resumed = this.resumedLine()
+    const lines = [
+      this.wordmark(),
+      ...model === undefined ? [] : [this.palette.dim(displayText(model))],
+      this.palette.dim(displayText(this.info.cwd)),
+      ...resumed === undefined ? [] : [this.palette.dim(resumed)],
+    ]
+    const textWidth = Math.min(
+      Math.max(...lines.map(line => visibleWidth(line))),
+      width - BOX_OVERHEAD,
+    )
+    const rule = '─'.repeat(BOX_INNER_CHROME + textWidth)
+    const rows = [` ${this.palette.dim(`╭${rule}╮`)}`]
+    for (let index = 0; index < WHALE_ART.length || index < lines.length; index += 1) {
+      const art = WHALE_ART[index] ?? ' '.repeat(WHALE_WIDTH)
+      const text = truncateToWidth(lines[index] ?? '', textWidth, '')
+      const pad = ' '.repeat(Math.max(0, textWidth - visibleWidth(text)))
+      rows.push(
+        ` ${this.palette.dim('│')} ${this.gradient ? brandText(art) : this.palette.brand(art)}  ${text}${pad} ${this.palette.dim('│')}`,
+      )
+    }
+    rows.push(` ${this.palette.dim(`╰${rule}╯`)}`)
+    return [...rows, ...this.trailer(width)]
+  }
+
+  /**
+   * The borderless narrow-terminal banner: the same lines the box carries,
+   * stacked as plain left-padded text with no art.
+   * @param width - Render width in columns.
+   * @returns Every banner row, already indented.
+   */
+  private renderPlain(width: number): string[] {
+    const usable = Math.max(1, width - 2)
+    const model = this.info.model()
     const cwd = displayText(this.info.cwd)
+    const resumed = this.resumedLine()
     // One dim detail row, wrapped to the usable width.
     const detail = (text: string): string[] =>
       wrapTextWithAnsi(this.palette.dim(text), usable).map(line => truncateToWidth(line, usable, ''))
     const lines = [
-      // Only the wordmark is clipped by the reveal; the rest states where this
-      // session runs and stays still.
-      truncateToWidth(wordmark, this.revealWidth ?? usable, ''),
+      truncateToWidth(this.wordmark(), usable, ''),
       ...detail(model === undefined ? cwd : `${displayText(model)} · ${cwd}`),
-      ...this.info.resumed === undefined ? [] : detail(
-        `resumed ${displayText(this.info.resumed)}${title === undefined ? '' : ` · ${displayText(title)}`}`,
-      ),
-      ...welcome === undefined ? [] : detail(displayText(welcome)),
-      ...this.skillRows(usable),
+      ...resumed === undefined ? [] : detail(resumed),
     ]
     // A blank separator row keeps no padding: a row of spaces would be copied
     // out of the banner as stray whitespace.
+    return [
+      ...lines.map(line => line === '' ? '' : ` ${line}`),
+      ...this.trailer(width),
+    ]
+  }
+
+  /**
+   * What renders under the identity block in either shape: the configured
+   * welcome line, then the skill section.
+   * @param width - Render width in columns.
+   * @returns The trailing rows, already indented.
+   */
+  private trailer(width: number): string[] {
+    const usable = Math.max(1, width - 2)
+    const welcome = this.info.welcome
+    const lines = [
+      ...welcome === undefined
+        ? []
+        : wrapTextWithAnsi(this.palette.dim(displayText(welcome)), usable)
+          .map(line => truncateToWidth(line, usable, '')),
+      ...this.sectionRows(usable, SKILLS_LABEL, this.skillNames()),
+      ...this.sectionRows(usable, PLUGINS_LABEL, this.pluginNames()),
+    ]
     return lines.map(line => line === '' ? '' : ` ${line}`)
   }
 
   /**
-   * The `[Skills]` section: its label row and the packed name rows, or nothing
-   * when the entry supplied no skills.
+   * The skill names with something to show: a blank entry would render as a
+   * stray `, ,` in either summary shape.
+   */
+  private skillNames(): string[] {
+    return (this.info.skills ?? []).map(name => displayText(name).trim()).filter(name => name !== '')
+  }
+
+  /** The plugin module names with something to show, read fresh per render. */
+  private pluginNames(): string[] {
+    return (this.info.plugins?.() ?? []).map(name => displayText(name).trim()).filter(name => name !== '')
+  }
+
+  /**
+   * One borderless summary section (`[Skills]`, `[Plugins]`): its label row and
+   * the packed name rows, or nothing when there is nothing to list.
    * @param usable - Columns a banner row may occupy.
+   * @param label - The section's bracket label.
+   * @param names - The names to pack, in the order the entry supplied them.
    * @returns The section's rows, led by the blank row that separates it.
    */
-  private skillRows(usable: number): string[] {
-    // A blank entry would render as a stray `, ,` in the list, so the section is
-    // built from the names that have something to show.
-    const names = (this.info.skills ?? []).map(name => displayText(name).trim()).filter(name => name !== '')
+  private sectionRows(usable: number, label: string, names: readonly string[]): string[] {
     if (names.length === 0) return []
     return [
       '',
-      this.palette.bold(this.palette.dim(SKILLS_LABEL)),
+      this.palette.bold(this.palette.dim(label)),
       ...packSkillNames(names, usable).map(row => truncateToWidth(this.palette.dim(row), usable, '')),
     ]
   }
@@ -521,7 +791,7 @@ export class UserMessageComponent implements Component {
     // dark one white — and that is exactly what the fill above is chosen
     // against. The pointer is the one recessed span.
     this.text = `${palette.dim(PROMPT_POINTER)} ${palette.text(displayText(clipPrompt(text)))}`
-    this.fill = claudeSchemeColors(scheme).userMessageBg
+    this.fill = brandSchemeColors(scheme).userMessageBg
   }
 
   invalidate(): void {
@@ -561,8 +831,8 @@ const THINKING_INDENT = GUTTER_INDENT
 
 /**
  * Children of a settled assistant message: the optional thinking block then the
- * response text. The response is a Markdown document behind Claude Code's
- * orange ` ● ` bullet, so the message needs no role header at all: the bullet IS
+ * response text. The response is a Markdown document behind the brand blue
+ * ` ● ` bullet, so the message needs no role header at all: the bullet IS
  * the marker. The thinking block is the product's own two-part shape — the
  * `∴ Thinking…` title, a blank row, and the indented dim body — so an aside
  * never reads as a second voice answering.
@@ -606,7 +876,7 @@ function assistantMessageChildren(
     const document = new MarkdownBodyComponent(text, palette, mdTheme, markdown)
     children.push(new PrefixedComponent(
       document,
-      `${GUTTER}${accent(palette, CLAUDE_COLORS.claude, '●')} `,
+      `${GUTTER}${accent(palette, BRAND_COLORS.brand, '●')} `,
       GUTTER_INDENT,
     ))
   }
@@ -637,10 +907,16 @@ const PLAN_MODE_ICON = '⏸'
  * than no hint.
  * @param palette - Active role palette; decides whether the tone is emitted.
  * @param scheme - Terminal color scheme, which picks the plan tone.
+ * @param pending - True when the mode was selected during a running turn and
+ *   commits at the next accepted pre-step (no `plan/mode` event yet). The badge
+ *   says so rather than pretending the mode is already in force.
  * @returns The badge row, ready to render above the prompt.
  */
-export function planModeRow(palette: Palette, scheme: TerminalColorScheme = 'dark'): string {
-  return accent(palette, claudeSchemeColors(scheme).planMode, `${GUTTER}${PLAN_MODE_ICON} plan mode on`)
+export function planModeRow(palette: Palette, scheme: TerminalColorScheme = 'dark', pending = false): string {
+  const label = pending
+    ? `${GUTTER}${PLAN_MODE_ICON} plan mode on (next step)`
+    : `${GUTTER}${PLAN_MODE_ICON} plan mode on`
+  return accent(palette, brandSchemeColors(scheme).planMode, label)
 }
 
 /**
@@ -1134,7 +1410,7 @@ export class ToolCardComponent extends CachedCardComponent {
 
   /**
    * The card's one header row: `⏺ <tool>(<summary>)`. The bullet carries the
-   * call's state as color (Claude Code's orange while the call is in flight,
+   * call's state as color (the brand blue while the call is in flight,
    * green settled, red failed) and the tool name is bold, so a transcript scans
    * as a list of what ran; the parenthesized summary is the call's own one-line
    * detail (a command, an edited path) in the recessed tone.
@@ -1142,8 +1418,8 @@ export class ToolCardComponent extends CachedCardComponent {
   private headerRow(width: number): string {
     const isError = this.result?.isError ?? false
     const status = this.result === undefined
-      ? CLAUDE_COLORS.claude
-      : isError ? CLAUDE_COLORS.error : CLAUDE_COLORS.success
+      ? BRAND_COLORS.brand
+      : isError ? BRAND_COLORS.error : BRAND_COLORS.success
     const bullet = this.palette.bold(accent(this.palette, status, TOOL_BULLET))
     const name = this.palette.bold(displayText(this.name))
     const summary = this.headerSummary()
@@ -1535,13 +1811,13 @@ export class TodoComponent implements Component {
 
   /** One item as its icon and text, already truncated to the width. */
   private renderItem(todo: TodoItem, width: number): string {
-    // Claude Code's three-state box: a checked item, a filled box for the one
-    // in flight (in the brand orange, the same accent the assistant bullet
+    // The three-state box: a checked item, a filled box for the one
+    // in flight (in the brand blue, the same accent the assistant bullet
     // uses), and a hollow box for what is still queued.
     const icon = todo.status === 'completed'
-      ? accent(this.palette, CLAUDE_COLORS.success, '✔')
+      ? accent(this.palette, BRAND_COLORS.success, '✔')
       : todo.status === 'in_progress'
-        ? accent(this.palette, CLAUDE_COLORS.claude, '◼')
+        ? accent(this.palette, BRAND_COLORS.brand, '◼')
         : this.palette.dim('◻')
     const content = displayText(todo.content)
     // A finished item is struck through as well as recessed, and the one in

@@ -1,17 +1,26 @@
-# dsh-tui
+# deepseek-harness-tui
 
 Interactive terminal UI for [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness),
 installed as a dsh profile bundle. It renders into the terminal's main screen —
 no alternate screen, so the conversation stays in the scrollback after you leave
 — and runs in the same process as the agent it drives.
 
+## Prerequisite
+
+The [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) must be installed
+first — this package is a dsh plugin, not a standalone program:
+
+```sh
+npm install -g @deepseek-ai/dsh
+```
+
 ## Install
 
 ```sh
-dsh plugin --profile tui add dsh-tui
+dsh plugin --profile tui add deepseek-harness-tui
 ```
 
-This installs the package into a new `tui` profile (dsh-base + dsh-tui) and
+This installs the package into a new `tui` profile (dsh-base + deepseek-harness-tui) and
 activates it on next launch.
 
 ## Usage
@@ -74,7 +83,7 @@ all three.
 | Surface | Keys |
 |---|---|
 | Panel (`/help`, `/hotkeys`, `/palette`, `/status`) | Up/Down scroll · PgUp/PgDn page · g/G or Home/End top or bottom · Esc or Ctrl+C close |
-| Question | Up/Down move · Space toggle (multi-select) · Tab/c custom answer, Esc back to the options · PgUp/PgDn page long detail · Enter submit · Esc or Ctrl+C cancel |
+| Question | Up/Down move · 1-9 answer straight away · Space toggle (multi-select) · "Type something." row for a custom answer · PgUp/PgDn page long detail · Enter submit · Esc or Ctrl+C cancel |
 | Permission prompt | Up/Down move · 1-4 answer straight away · Enter confirm · Esc or Ctrl+C deny |
 | History search (Ctrl+R) | type to match · Ctrl+R steps to an older match · Tab or Esc accepts into the editor · Enter sends it · Ctrl+C or an emptied query restores the draft |
 | Model picker (`/model`) | type to filter · Up/Down move · Left/Right or Shift+Tab adjust reasoning effort · Enter save as default · Ctrl+S use for this session only · Esc clears the filter, then closes |

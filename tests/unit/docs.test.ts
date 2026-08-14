@@ -20,7 +20,7 @@ import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { KeybindingsManager } from '@earendil-works/pi-tui'
 import { Config } from '../../src/config.ts'
-import { CUSTOM_ANSWER_HINT } from '../../src/components/dialogs.ts'
+import { CUSTOM_ANSWER_LABEL } from '../../src/components/dialogs.ts'
 import { APP_KEYBINDINGS, KEYBINDINGS, formatKeyId, type AppKeybinding } from '../../src/keybindings.ts'
 import { startupRefusal } from '../../src/index.ts'
 import type { TuiStartupValues } from '../../src/startup.ts'
@@ -270,22 +270,21 @@ describe('one shortcut table, three surfaces', { skip: skipWithoutEntry }, () =>
     }
   })
 
-  it('names the question dialog\'s own two keys the way the dialog names them', async () => {
-    // `c` belongs to no registry action, so the case above cannot see it: the
-    // key is bound inside the question dialog and spelled out by hand in four
-    // places. Three of them read one constant; this holds the fourth, the
-    // README, to the same words, which is what "one shortcut table" has to mean
-    // for a key the registry does not own.
+  it('names the question dialog\'s custom-answer row the way the dialog labels it', async () => {
+    // The custom answer is not a key but a list row, so the registry-driven
+    // case above cannot see it: the row's label is spelled out by hand in the
+    // dialog, the shortcut list, and the README. The first two read one
+    // constant; this holds the third, the README, to the same words.
     const surfaces = await shortcutSurfaces()
     for (const [surface, text] of Object.entries(surfaces)) {
-      assert.ok(text.includes(CUSTOM_ANSWER_HINT), `${surface} names ${CUSTOM_ANSWER_HINT}:\n${text}`)
+      assert.ok(text.includes(CUSTOM_ANSWER_LABEL), `${surface} names ${CUSTOM_ANSWER_LABEL}:\n${text}`)
     }
     const questionRow = tableUnder('While a surface holds the keyboard')
       .find(row => (row[0] ?? '') === 'Question')
     assert.ok(questionRow !== undefined, 'the README documents the question surface')
     assert.ok(
-      (questionRow[1] ?? '').includes(CUSTOM_ANSWER_HINT),
-      `the README's question row names "${CUSTOM_ANSWER_HINT}": ${questionRow[1] ?? ''}`,
+      (questionRow[1] ?? '').includes(CUSTOM_ANSWER_LABEL),
+      `the README's question row names "${CUSTOM_ANSWER_LABEL}": ${questionRow[1] ?? ''}`,
     )
   })
 

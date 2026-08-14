@@ -1,11 +1,12 @@
 /**
- * Ask-user-question dialog at the terminal boundary: how a user leaves it, and
- * whether the screen tells them how to reach the answer they want to type.
+ * Ask-user-question dialog at the terminal boundary: the Claude-Code-style
+ * answer surface (numbered options with a trailing "Type something." row) and
+ * how a user leaves it.
  *
- * Both cases are about the custom-answer mode, which trades the option list for
- * a one-line editor: an editor that claims every key it is handed can strand the
- * turn behind a question nobody can withdraw, and a mode nobody is told about is
- * one nobody enters.
+ * The custom answer is a list row that becomes a one-line editor when focused:
+ * an editor that claims every key it is handed can strand the turn behind a
+ * question nobody can withdraw, so the interrupt and the number-key shortcuts
+ * are asserted on the mounted terminal, where the keys actually arrive.
  * @module dsh-tui/tests/unit/questions
  */
 
@@ -70,19 +71,51 @@ async function ask(harness: QuestionHarness): Promise<{ answer: Promise<unknown>
 }
 
 describe('TUI questions', { skip: skipWithoutEntry }, () => {
-  it('cancels from the custom editor on Ctrl+C', async () => {
+  it('renders numbered options with the trailing custom-answer row', async () => {
+    const harness = await mount()
+    try {
+      const { answer } = await ask(harness)
+      const text = harness.terminal.text()
+      assert.match(text, /❯ 1\. main/, 'the focused option carries the pointer')
+      assert.match(text, /2\. staging/)
+      assert.match(text, /3\. Type something\./, 'the custom answer is a numbered list row')
+      assert.match(text, /Enter to select · ↑\/↓ to navigate · Esc to cancel/)
+
+      harness.terminal.send('\x1b')
+      await assert.rejects(answer, /interrupted before the user answered/)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('answers straight away from a number key', async () => {
+    const harness = await mount()
+    try {
+      const { answer } = await ask(harness)
+      const closed = harness.terminal.frames
+      harness.terminal.send('2')
+      assert.deepEqual(await answer, { answers: [{ id: 'q1', selected: ['staging'] }] })
+      await harness.terminal.waitForFrame(closed)
+      assert.doesNotMatch(harness.terminal.text(), /Which branch\?/)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('cancels from the custom-answer row on Ctrl+C', async () => {
     const harness = await mount()
     try {
       const { answer } = await ask(harness)
 
       const custom = harness.terminal.frames
-      harness.terminal.send('c')
+      harness.terminal.send('3')
+      harness.terminal.send('zz')
       await harness.terminal.waitForFrame(custom)
-      assert.match(harness.terminal.text(), /Enter submit/, 'the editor has replaced the option list')
+      assert.match(harness.terminal.text(), /zz/, 'the focused row types like an editor')
 
       // Without this the editor typed the control character and the question
-      // stayed on screen: `Esc` there only walks back to the options, so the
-      // dialog had no exit at all once custom mode was entered.
+      // stayed on screen: every key the editor does not claim is a character
+      // it types, so the interrupt has to be handled before the editor is.
       const closed = harness.terminal.frames
       harness.terminal.send('\x03')
       await assert.rejects(answer, /interrupted before the user answered/)
@@ -93,21 +126,14 @@ describe('TUI questions', { skip: skipWithoutEntry }, () => {
     }
   })
 
-  it('advertises both keys that open the custom editor', async () => {
+  it('submits the typed row as the custom answer', async () => {
     const harness = await mount()
     try {
       const { answer } = await ask(harness)
-      // `c` has been bound as long as `Tab` has; only the footer was silent
-      // about it, which made it a shortcut for readers of the source.
-      assert.match(harness.terminal.text(), /Tab\/c custom answer/)
-
-      const custom = harness.terminal.frames
-      harness.terminal.send('c')
-      await harness.terminal.waitForFrame(custom)
-      assert.match(harness.terminal.text(), /Esc options/, 'the advertised key really opens the editor')
-
-      harness.terminal.send('\x03')
-      await assert.rejects(answer, /interrupted before the user answered/)
+      harness.terminal.send('3')
+      harness.terminal.send('release-2.4')
+      harness.terminal.send('\r')
+      assert.deepEqual(await answer, { answers: [{ id: 'q1', selected: [], custom: 'release-2.4' }] })
     } finally {
       await unmount(harness)
     }
