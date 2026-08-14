@@ -5,7 +5,8 @@
  *
  * They exist because the fold's unit tests cannot see placement: a card that is
  * folded correctly can still land in the wrong place, survive a `/clear`, or
- * ignore the Ctrl+O cycle.
+ * ignore the Ctrl+O cycle. The one exception is the phase notice, which is a
+ * pure function of the phase and is asserted directly.
  * @module dsh-tui/tests/unit/transcript
  */
 
@@ -24,6 +25,7 @@ import {
   type TuiHarness,
 } from '../harness.ts'
 import { HeadlessTerminal } from '../headless-terminal.ts'
+import { cardPhaseNotice } from '../../src/components/reconciler.ts'
 
 /** `src/index.ts` is landed by a separate port; without it this suite cannot run. */
 const entryAvailable = await tuiEntryAvailable()
@@ -97,6 +99,17 @@ function appendToolTail(session: Session, position: { turn: number; step: number
   session.append('step/end', position)
 }
 
+describe('Ctrl+O phase notice', () => {
+  it('names what each phase leaves on screen, and claims context only where it renders', () => {
+    // The collapsed phase no longer shows context cards, so the sentence it
+    // flashes cannot keep saying it does; the other two already matched what
+    // the reconciler does with each kind of card.
+    assert.equal(cardPhaseNotice('collapsed'), 'Tool cards collapsed; context hidden.')
+    assert.equal(cardPhaseNotice('expanded'), 'Tool and context cards expanded.')
+    assert.equal(cardPhaseNotice('hidden'), 'Tool cards hidden.')
+  })
+})
+
 describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
   it('renders a live turn and trails the step timing under its tool card', async () => {
     const harness = await mount()
@@ -121,7 +134,7 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
     }
   })
 
-  it('renders a turn in the order its log recorded it, with context above the answer', async () => {
+  it('keeps injected context off the transcript until Ctrl+O expands it, in log order', async () => {
     // Replay of session-85d19568 (`how are you doing`): the terminal echoes the
     // prompt, and only then does the agent log `step/start`, the claimed prompt,
     // the two context snapshots the request was assembled from, and the answer.
@@ -173,32 +186,54 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       const rows = terminal.text().split('\n').map(row => row.trimEnd())
       const at = (needle: string): number => rows.findIndex(row => row.includes(needle))
       const prompt = at('how are you doing')
-      const runtimeCard = at('Context · dsh-system-prompt')
-      const skillCard = at('Context · skill-catalog')
       const answer = at('ANSWER-TEXT')
       const timing = at('Completed ')
-      assert.ok(prompt >= 0, `the prompt is on screen:\n${rows.join('\n')}`)
-      assert.ok(runtimeCard > prompt, `context follows the prompt it was sent with:\n${rows.join('\n')}`)
-      assert.ok(skillCard > runtimeCard, `and keeps the log's order between cards:\n${rows.join('\n')}`)
-      assert.ok(answer > skillCard, `the answer follows the context, not the other way round:\n${rows.join('\n')}`)
-      assert.ok(timing > answer, `and its timing footer trails it:\n${rows.join('\n')}`)
-
-      // Collapsed is the default: one dim row per card, naming the toggle.
       const frame = rows.join('\n')
-      assert.ok(frame.includes('Context · skill-catalog (ctrl+o)'), `a collapsed card names its toggle:\n${frame}`)
-      assert.ok(!frame.includes('SANDBOX-POLICY'), `and shows none of its body:\n${frame}`)
+      assert.ok(prompt >= 0, `the prompt is on screen:\n${frame}`)
+      // Collapsed is the default phase every session opens on, and injected
+      // context is traffic between the harness and the model rather than part of
+      // the conversation: neither card is on screen at all — no body, and no
+      // one-row placeholder standing in for one either.
+      assert.ok(!frame.includes('Context ·'), `no context card renders by default:\n${frame}`)
+      assert.ok(!frame.includes('SANDBOX-POLICY'), `and none of its body:\n${frame}`)
       assert.ok(!frame.includes('SKILL-CATALOG-BODY'), `for either card:\n${frame}`)
+      assert.ok(answer > prompt, `the answer follows the prompt with nothing between them:\n${frame}`)
+      assert.ok(timing > answer, `and its timing footer trails it:\n${frame}`)
 
-      // Ctrl+O opens them where they stand.
+      // Ctrl+O (expanded) is where a user goes to see what the model was sent,
+      // and there the cards open where the log recorded them: after the prompt
+      // they were sent with, in log order, above the answer they produced.
       terminal.send('\x0f')
       await delay(SETTLE_MS)
       const expanded = terminal.text().split('\n').map(row => row.trimEnd())
-      const body = expanded.findIndex(row => row.includes('SANDBOX-POLICY'))
-      assert.ok(body > expanded.findIndex(row => row.includes('how are you doing')),
+      const opened = (needle: string): number => expanded.findIndex(row => row.includes(needle))
+      const runtimeCard = opened('Context · dsh-system-prompt')
+      const skillCard = opened('Context · skill-catalog')
+      assert.ok(runtimeCard > opened('how are you doing'),
         `an expanded card opens under its prompt:\n${expanded.join('\n')}`)
-      assert.ok(expanded.findIndex(row => row.includes('SKILL-CATALOG-BODY'))
-        < expanded.findIndex(row => row.includes('ANSWER-TEXT')),
-      `and still above the answer:\n${expanded.join('\n')}`)
+      assert.ok(skillCard > runtimeCard, `and keeps the log's order between cards:\n${expanded.join('\n')}`)
+      assert.ok(opened('SANDBOX-POLICY') > runtimeCard,
+        `each body renders under its own header:\n${expanded.join('\n')}`)
+      const skillBody = opened('SKILL-CATALOG-BODY')
+      assert.ok(skillBody > skillCard && skillBody < opened('ANSWER-TEXT'),
+        `and still above the answer:\n${expanded.join('\n')}`)
+
+      // Ctrl+O again (hidden) takes context back off with the tool traffic.
+      terminal.send('\x0f')
+      await delay(SETTLE_MS)
+      const hidden = terminal.text()
+      assert.ok(!hidden.includes('Context ·'), `the hidden phase drops context too:\n${hidden}`)
+      assert.ok(!hidden.includes('SANDBOX-POLICY'), `body and all:\n${hidden}`)
+      assert.ok(hidden.includes('ANSWER-TEXT'), `while the conversation stays:\n${hidden}`)
+
+      // And once more (collapsed) returns to the phase it opened on, where the
+      // cards are still absent rather than folded to a row.
+      terminal.send('\x0f')
+      await delay(SETTLE_MS)
+      const restored = terminal.text()
+      assert.ok(!restored.includes('Context ·'), `collapsed shows no context card:\n${restored}`)
+      assert.ok(!restored.includes('SKILL-CATALOG-BODY'), `and no body:\n${restored}`)
+      assert.ok(restored.includes('how are you doing'), `the conversation is untouched:\n${restored}`)
     } finally {
       await disposeTuiTestHarness(harness)
       await terminal.dispose()
@@ -450,6 +485,26 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       assert.ok(!settled.includes('Tool and context cards'), `the confirmation is transient:\n${settled}`)
       assert.match(settled, /list the files/)
       assert.equal(settled, before, `and adds no transcript row:\n${settled}`)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('flashes the notice the reconciler defines, for every phase of the cycle', async () => {
+    const harness = await mount()
+    try {
+      appendUser(harness.session, 'list the files')
+      appendToolStep(harness.session, 'call-kitty', 'ls', 'README.md')
+      await delay(SETTLE_MS)
+      // One sentence per phase, and it is the reconciler's — an entry point
+      // holding its own copy is how the collapsed phase came to keep announcing
+      // context cards it had stopped rendering.
+      for (const phase of ['expanded', 'hidden', 'collapsed'] as const) {
+        harness.terminal.send('\x0f')
+        await delay(SETTLE_MS)
+        const frame = harness.terminal.text()
+        assert.ok(frame.includes(cardPhaseNotice(phase)), `the ${phase} phase flashes its own notice:\n${frame}`)
+      }
     } finally {
       await unmount(harness)
     }

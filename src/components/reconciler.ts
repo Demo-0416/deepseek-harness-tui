@@ -22,7 +22,6 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {
   AssistantNode,
   ChatNode,
-  ContextCardNode,
   ToolCallNode,
   UserMessageNode,
 } from '../core/types.ts'
@@ -34,6 +33,7 @@ import {
   StreamingAssistantComponent,
   ToolCardComponent,
   UserMessageComponent,
+  type MarkdownPolicy,
   type ToolCardVisibility,
 } from './transcript.ts'
 
@@ -47,12 +47,31 @@ export const COMPACTION_MARKER = '… earlier context was compacted …'
 /** Label above a prompt that was submitted into a running turn. */
 export const STEERING_BADGE = 'Steering'
 
+/**
+ * The status line one Ctrl+O phase reports.
+ *
+ * Only the expanded phase renders injected context at all (see
+ * {@link TranscriptReconciler.reconcile}), so the collapsed sentence no longer
+ * claims to be showing context cards: it names what each kind of card actually
+ * does in that phase. The hidden and expanded sentences are unchanged, because
+ * what they said was already true.
+ * @param visibility - The phase the cycle just entered.
+ * @returns One sentence naming what that phase leaves on screen.
+ */
+export function cardPhaseNotice(visibility: ToolCardVisibility): string {
+  if (visibility === 'hidden') return 'Tool cards hidden.'
+  if (visibility === 'expanded') return 'Tool and context cards expanded.'
+  return 'Tool cards collapsed; context hidden.'
+}
+
 /** Everything the reconciler needs to build a component for a node. */
 export interface TranscriptDeps {
   /** Active palette; mutated in place by a color-scheme change. */
   readonly palette: Palette
   /** Active Markdown theme, likewise mutated in place. */
   readonly mdTheme: MarkdownTheme
+  /** Preferred assistant-body renderer and its one-shot failure report. */
+  readonly markdown: MarkdownPolicy
   /** Collapsed-preview budget for card bodies. */
   readonly maxToolOutputLines: number
   /** Edit-distance budget before a diff falls back to whole-side rows. */
@@ -71,7 +90,6 @@ export interface TranscriptDeps {
 type NodeView =
   | { kind: 'assistant'; version: number; component: StreamingAssistantComponent }
   | { kind: 'tool'; version: number; component: ToolCardComponent; argsRaw: string }
-  | { kind: 'context'; version: number; component: Component; card: ContextCardComponent }
   | { kind: 'plain'; version: number; component: Component }
 
 /** A leading blank row plus the row itself, the transcript's block spacing. */
@@ -175,15 +193,17 @@ export class TranscriptReconciler {
           children.push(this.plainView(node.key, node.version, () =>
             block(new Text(this.deps.palette.dim(COMPACTION_MARKER), 0, 0))))
           break
-        case 'context': {
-          // The hidden phase drops injected context exactly as it drops tool
-          // cards: both are traffic between the harness and the model, and the
-          // phase exists to leave nothing but the conversation on screen.
-          if (this.visibility === 'hidden') break
+        case 'context':
+          // Injected context is traffic between the harness and the model, not
+          // part of the conversation, so it is off the transcript in both
+          // default phases — collapsed as well as hidden — and no component is
+          // built for it. Only the expanded phase, which is where a user goes
+          // to see what the model was actually sent, renders the card.
+          if (this.visibility !== 'expanded') break
           seen.add(node.key)
-          children.push(this.contextView(node))
+          children.push(this.plainView(node.key, node.version, () =>
+            block(new ContextCardComponent(node.label, node.text, this.deps.palette))))
           break
-        }
         case 'reference':
           seen.add(node.key)
           children.push(this.plainView(node.key, node.version, () => block(new Text(
@@ -268,15 +288,16 @@ export class TranscriptReconciler {
 
   /**
    * Set the Ctrl+O card visibility on every mounted card.
+   *
+   * Only tool cards carry the phase: a context card has no collapsed form, so
+   * the reconcile below is what mounts it on the expanded phase and drops it
+   * again on the other two.
    * @param visibility - hidden, collapsed preview, or full body.
    */
   setVisibility(visibility: ToolCardVisibility): void {
     this.visibility = visibility
     for (const view of this.views.values()) {
       if (view.kind === 'tool') view.component.setVisibility(visibility)
-      // A context card has two states, not three: the hidden phase drops it in
-      // `reconcile` instead, so only expanded/collapsed reaches the card.
-      else if (view.kind === 'context') view.card.setExpanded(visibility === 'expanded')
     }
     this.reconcile(this.nodes)
   }
@@ -345,19 +366,6 @@ export class TranscriptReconciler {
     return container
   }
 
-  /** Mount or update one injected-context card. */
-  private contextView(node: ContextCardNode): Component {
-    const existing = this.views.get(node.key)
-    if (existing !== undefined && existing.kind === 'context' && existing.version === node.version) {
-      return existing.component
-    }
-    const card = new ContextCardComponent(node.label, node.text, this.deps.palette)
-    card.setExpanded(this.visibility === 'expanded')
-    const component = block(card)
-    this.views.set(node.key, { kind: 'context', version: node.version, component, card })
-    return component
-  }
-
   /** Mount or update one assistant step, keeping its streamed buffer in sync. */
   private assistantView(node: AssistantNode): StreamingAssistantComponent {
     const existing = this.views.get(node.key)
@@ -377,6 +385,7 @@ export class TranscriptReconciler {
       this.showReasoning,
       this.deps.palette,
       this.deps.mdTheme,
+      this.deps.markdown,
     )
     component.setFoldedText(node.text, node.reasoning, node.settled)
     if (node.completedAt !== undefined) component.complete(node.completedAt)

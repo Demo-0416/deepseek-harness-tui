@@ -30,9 +30,11 @@
       config:
         maxNoteBytes: 8192
 
-    # `/export` command; the session-log ZIP writer works without the web download dialog.
-    - id: session-log-download
-      name: '@deepseek-ai/dsh-session-log-export'
+    # `@deepseek-ai/dsh-session-log-export` is deliberately NOT mounted: its host
+    # half only returns "Session log download requested." and the ZIP comes from
+    # the ApiProxy endpoint a browser plugin fetches, neither of which exists in
+    # a terminal. The TUI registers its own `/export`, which writes the log to a
+    # file; two `/export` registrations in one profile fail the second one loud.
 
     - id: session-projection-cache
       name: '@deepseek-ai/dsh-session-projection-cache'

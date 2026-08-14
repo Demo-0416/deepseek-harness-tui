@@ -28,10 +28,23 @@ export interface TuiThemeConfig {
   inputPlaceholder?: string
 }
 
+/**
+ * Which pipeline renders an assistant response body.
+ *
+ * `claude` is {@link ../render/markdown.ts | renderMarkdownAnsi} under
+ * {@link ../render/markdown.ts | claudeMarkdownTheme}; `pi` is pi-tui's own
+ * `Markdown` component. A `claude` render that throws falls back to `pi` for
+ * the rest of the process, so this setting selects the preferred path rather
+ * than the only one.
+ */
+export type MarkdownRendererId = 'claude' | 'pi'
+
 /** Interaction and presentation settings for the pi-tui terminal mode. */
 export interface TuiConfig {
   /** Render model reasoning blocks. */
   showReasoning?: boolean
+  /** Pipeline that renders assistant response bodies. */
+  markdownRenderer?: MarkdownRendererId
   /** Maximum tool-card body lines retained in its collapsed head/tail preview. */
   maxToolOutputLines?: number
   /** Maximum added and removed lines explored while deriving an exact line diff. */
@@ -69,6 +82,7 @@ export interface TuiConfig {
 }
 
 const showReasoningSchema = z.boolean().default(true)
+const markdownRendererSchema: z<MarkdownRendererId> = z.union(['claude', 'pi'] as const).default('claude')
 const maxToolOutputLinesSchema = z.number().step(1).min(1).default(6)
 const maxDiffEditLengthSchema = z.number().step(1).min(1).default(1000)
 const maxQuestionOptionsSchema = z.number().step(1).min(1).default(8)
@@ -103,6 +117,7 @@ const titleSchema = z.string().default('DeepSeek Harness')
 
 const tuiConfigSchemaFields = {
   showReasoning: showReasoningSchema,
+  markdownRenderer: markdownRendererSchema,
   maxToolOutputLines: maxToolOutputLinesSchema,
   maxDiffEditLength: maxDiffEditLengthSchema,
   maxQuestionOptions: maxQuestionOptionsSchema,
@@ -146,6 +161,7 @@ export const Config: z<Config> = z.object({
   sessionId: z.string().default('main'),
   initialSkill: z.string(),
   showReasoning: tuiConfigSchemaFields.showReasoning,
+  markdownRenderer: tuiConfigSchemaFields.markdownRenderer,
   maxToolOutputLines: tuiConfigSchemaFields.maxToolOutputLines,
   maxDiffEditLength: tuiConfigSchemaFields.maxDiffEditLength,
   maxQuestionOptions: tuiConfigSchemaFields.maxQuestionOptions,
@@ -177,6 +193,7 @@ export interface ResolvedTuiThemeConfig {
 /** Fully defaulted TUI presentation settings. */
 export interface ResolvedTuiConfig {
   showReasoning: boolean
+  markdownRenderer: MarkdownRendererId
   maxToolOutputLines: number
   maxDiffEditLength: number
   maxQuestionOptions: number
@@ -205,6 +222,7 @@ export interface ResolvedTuiConfig {
 export function resolveTuiConfig(config: TuiConfig | undefined): ResolvedTuiConfig {
   return {
     showReasoning: config?.showReasoning ?? true,
+    markdownRenderer: config?.markdownRenderer ?? 'claude',
     maxToolOutputLines: config?.maxToolOutputLines ?? 6,
     maxDiffEditLength: config?.maxDiffEditLength ?? 1000,
     maxQuestionOptions: config?.maxQuestionOptions ?? 8,

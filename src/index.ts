@@ -55,7 +55,12 @@ import {
   type SessionHeader,
   type UserMessage,
 } from '@deepseek-ai/dsh-session'
-import { foldGoal } from '@deepseek-ai/dsh-goal'
+import { foldGoal, type FoldedGoal } from '@deepseek-ai/dsh-goal'
+// Type-only: declaration-merges `sessionStats` onto the projection value table
+// so the `/status` panel reads the unit by name rather than by cast. The
+// plugin itself is a deployment choice the TUI never requires.
+import type {} from '@deepseek-ai/dsh-session-stats'
+import type {} from '@deepseek-ai/dsh-session-projection'
 import { parseSessionReferenceText } from '@deepseek-ai/dsh-session-reference'
 // Type import declaration-merges the `session/title` event onto the session
 // event map, which the store folds into the snapshot's title.
@@ -89,7 +94,7 @@ import type {
 import { ApprovalDialog } from './components/approval.ts'
 import { displayInlineText, displayText } from './components/text.ts'
 import { brandText, createPalette, markdownTheme, renderPalette, selectTheme } from './components/theme.ts'
-import { TranscriptReconciler } from './components/reconciler.ts'
+import { cardPhaseNotice, TranscriptReconciler } from './components/reconciler.ts'
 import { SessionStore } from './core/session-store.ts'
 import type { SessionSnapshot } from './core/types.ts'
 import {
@@ -116,10 +121,19 @@ import {
   type Config,
 } from './config.ts'
 import {
+  type HeaderInfo,
+  type MarkdownPolicy,
   type ToolCardVisibility,
   HeaderComponent,
   TodoComponent,
 } from './components/transcript.ts'
+import { claudeMarkdownTheme } from './render/markdown.ts'
+import { ScrollablePanel } from './components/panel.ts'
+import {
+  PLUGINS_PANEL_TITLE,
+  renderPluginInventory,
+  type PluginInventoryReader,
+} from './components/plugins-panel.ts'
 import {
   compactTargetLabel,
   DetailsDialog,
@@ -154,6 +168,16 @@ import {
   type ModelController,
 } from './chat/model-command.ts'
 import { createQuestionQueue } from './chat/questions.ts'
+import {
+  exportSessionLog,
+  type SessionArtifactReader,
+  type SessionFlusher,
+} from './chat/export.ts'
+import {
+  formatGoalPrompt,
+  formatSessionStats,
+  goalStatusRows,
+} from './chat/session-summary.ts'
 import { createResumeController } from './chat/resume.ts'
 import type { TuiResumeHost, TuiRuntime } from './runtime.ts'
 import { WorkspaceFileSearch } from './chat/file-autocomplete.ts'
@@ -312,6 +336,28 @@ function lastActivityTime(session: Session): number | undefined {
  * was showing.
  */
 const STATUS_FLASH_MS = 1_500
+
+/**
+ * Most user-invocable skill names the opening banner lists. A workspace can
+ * register hundreds; past this many the banner stops being an opening line and
+ * becomes a catalog, so the rest are dropped rather than wrapped onto screen.
+ */
+const MAX_HEADER_SKILLS = 60
+
+/**
+ * Smallest panel a short terminal still gets: three rows of chrome (the
+ * separating blank, the title, the hint) and two of content. A panel squeezed
+ * below this shows nothing it was opened for, which is worse than one that
+ * crowds the prompt.
+ */
+const MIN_PANEL_ROWS = 5
+
+/** Every key the terminal binds, as `/hotkeys` and `/help` both list them. */
+const KEYBOARD_SHORTCUTS: readonly string[] = [
+  'Enter send • Shift/Alt+Enter newline • Up/Down prompt history',
+  'Esc cancel turn • Ctrl+O cycle cards (collapse/expand/hide) • Ctrl+R toggle reasoning • Ctrl+L redraw',
+  'Ctrl+C cancel while running; clear input or exit while idle • Ctrl+D exit',
+]
 
 /**
  * Read the live default model selection, when a default-model service is
@@ -525,9 +571,22 @@ export function createTuiChat(
   // terminal owns no per-event view state, only the process-local presentation
   // below (running status, live compaction clock, pending steering).
   const store = new SessionStore(ctx, agent.session, agent)
+  // The claude pipeline is the default and the pi component the safety net: a
+  // render that throws demotes every body for the rest of the process and says
+  // so once, so a document the port mishandles costs styling, not the answer.
+  const markdown: MarkdownPolicy = {
+    mode: resolved.markdownRenderer,
+    theme: claudeMarkdownTheme,
+    onError: (error: unknown) => {
+      ctx.logger.warn(
+        `dsh-tui: claude markdown renderer failed; falling back to pi for this process: ${errorChain(error)}`,
+      )
+    },
+  }
   const transcript = new TranscriptReconciler(chat, {
     palette,
     mdTheme,
+    markdown,
     maxToolOutputLines: resolved.maxToolOutputLines,
     maxDiffEditLength: resolved.maxDiffEditLength,
     events: () => agent.session.events,
@@ -545,40 +604,63 @@ export function createTuiChat(
   const resumedSessionId = agent.session.events.some(event => event.type === 'user/message')
     ? shortSessionId(agent.session.id)
     : undefined
-  const header = new HeaderComponent(
-    {
-      version: packageVersion(),
-      // Read per render, like the prompt's model fragment: the route resolves
-      // through the live default, which an asynchronous settings load fills in
-      // after mount. Until one resolves the line is just the workspace — an
-      // unresolved route is a startup state, not an error to report.
-      model: () => {
-        const current = target.current
-        return current === undefined ? undefined : compactTargetLabel(current)
-      },
-      cwd: formattedCwd,
-      resumed: resumedSessionId,
-      title: () => sessionTitle,
-      ...config.welcome === undefined ? {} : { welcome: config.welcome },
+  // The user-invocable skill names the banner lists, filled by the same skill
+  // scan that feeds slash-command autocomplete (see refreshSkillCommands).
+  // Discovery is asynchronous while the banner renders from mount, so the
+  // header holds this exact array and reads whatever it contains at render
+  // time; a scan replaces its contents in place rather than the binding.
+  const headerSkills: string[] = []
+  const headerInfo = {
+    version: packageVersion(),
+    // Read per render, like the prompt's model fragment: the route resolves
+    // through the live default, which an asynchronous settings load fills in
+    // after mount. Until one resolves the line is just the workspace — an
+    // unresolved route is a startup state, not an error to report.
+    model: () => {
+      const current = target.current
+      return current === undefined ? undefined : compactTargetLabel(current)
     },
+    cwd: formattedCwd,
+    resumed: resumedSessionId,
+    title: () => sessionTitle,
+    ...config.welcome === undefined ? {} : { welcome: config.welcome },
+    skills: headerSkills,
+  } satisfies HeaderInfo
+  const header = new HeaderComponent(
+    headerInfo,
     palette,
     resolved.theme.color && resolved.theme.truecolor,
   )
   const branch = runtime.gitBranch?.(cwd) ?? gitBranch(cwd)
+  /**
+   * The session's current goal, refolded only when a `goal/change` lands.
+   *
+   * `updatePromptValues` runs on every animation frame, so it must not fold the
+   * whole log; a goal changes at most once per mutation, which is where the
+   * refold belongs.
+   */
+  let goalState: FoldedGoal = foldGoal(agent.session.events)
   const promptValues: TuiPromptValueHandle[] = [
     ctx.tuiPrompt.register('cwd', palette.bold(palette.accent(formattedCwd))),
     ctx.tuiPrompt.register('git/worktree', branch === undefined ? undefined : palette.dim(` (${displayText(branch)})`)),
     ctx.tuiPrompt.register('token_meter/cache_hit_rate'),
     ctx.tuiPrompt.register('model'),
     ctx.tuiPrompt.register('context'),
+    // Registered unconditionally, absent from the default templates: a goal is
+    // opt-in on the prompt row (a deployment that runs goals adds `${goal}` to
+    // `theme.leftPrompt`), while `/status` shows it whether the row does or not.
+    ctx.tuiPrompt.register('goal'),
     ctx.tuiPrompt.register('queued'),
     ctx.tuiPrompt.register('symbol', palette.bold(palette.accent('dsh'))),
     ctx.tuiPrompt.register('indicator', palette.dim('> ')),
   ]
-  const [cwdValue, gitValue, tokenValue, modelValue, contextValue, queuedValue, symbolValue, indicatorValue] = promptValues
+  const [
+    cwdValue, gitValue, tokenValue, modelValue, contextValue, goalValue, queuedValue, symbolValue, indicatorValue,
+  ] = promptValues
   /* v8 ignore next -- the fixed built-in registration list always supplies each handle. */
   if (cwdValue === undefined || gitValue === undefined || tokenValue === undefined || modelValue === undefined
-    || contextValue === undefined || queuedValue === undefined || symbolValue === undefined || indicatorValue === undefined) {
+    || contextValue === undefined || goalValue === undefined || queuedValue === undefined
+    || symbolValue === undefined || indicatorValue === undefined) {
     throw new Error('TUI prompt built-ins failed to initialize')
   }
   const updatePromptValues = (): void => {
@@ -593,6 +675,8 @@ export function createTuiChat(
     contextValue.set(contextWindow === undefined ? undefined : `  ${palette.dim(
       `${Math.min(100, Math.round(ctx.tokenMeter.measure(agent.session).totalTokens / contextWindow * 100))}% context`,
     )}`)
+    const goalFragment = formatGoalPrompt(goalState.goal)
+    goalValue.set(goalFragment === undefined ? undefined : `  ${palette.dim(goalFragment)}`)
     const queued = runningStatus === undefined ? undefined : formatQueuedStatus(pendingSteering.size)
     queuedValue.set(queued === undefined ? undefined : palette.dim(queued))
     symbolValue.set(palette.bold(palette.accent('dsh')))
@@ -742,10 +826,14 @@ export function createTuiChat(
               : {},
           })
       }
+      // A dialog that draws its own frame states the width that frame was
+      // designed for; without this the inline slot stretched every box across
+      // the terminal. Percentages are an overlay-only unit, so a request that
+      // uses one falls back to the slot's own bounds.
       const modal = new InlineModalComponent(
         component,
-        resolved.questionDialogWidth,
-        resolved.questionDialogMaxHeight,
+        typeof options?.width === 'number' ? options.width : resolved.questionDialogWidth,
+        typeof options?.maxHeight === 'number' ? options.maxHeight : resolved.questionDialogMaxHeight,
       )
       questionContainer.clear()
       questionContainer.addChild(modal)
@@ -1035,9 +1123,11 @@ export function createTuiChat(
 
   const setToolsVisibility = (next: ToolCardVisibility): void => {
     toolsVisibility = next
-    // The reconciler owns card visibility, so one call re-places every card.
+    // The reconciler owns card visibility, so one call re-places every card,
+    // and it also owns the sentence naming what the phase leaves on screen —
+    // the collapsed phase renders no context card, so it must not say it does.
     transcript.setVisibility(toolsVisibility)
-    flashStatus(toolsVisibility === 'hidden' ? 'Tool cards hidden.' : `Tool and context cards ${toolsVisibility}.`)
+    flashStatus(cardPhaseNotice(toolsVisibility))
   }
 
   const toggleTools = (): void => {
@@ -1074,8 +1164,10 @@ export function createTuiChat(
         },
         () => { void session.close() },
       ),
-      options: { width: resolved.detailsDialogWidth, anchor: 'center', margin: 1 },
-    })
+      options: { width: resolved.detailsDialogWidth },
+      // Under the conversation, in the editor slot, like every other
+      // interactive surface — not floating over the transcript it previews.
+    }, 'inline')
     detailsOverlay = session
     void session.closed.then(() => {
       if (detailsOverlay === session) detailsOverlay = undefined
@@ -1113,32 +1205,83 @@ export function createTuiChat(
     return { kind: 'success' }
   }
 
+  /**
+   * The row budget one panel may occupy, read per render so a resize applies.
+   * Bounded by the inline slot's own clip, which is what actually decides how
+   * much of a component the terminal shows.
+   */
+  const panelRows = (): number => {
+    const editorRows = editor.render(runtime.terminal.columns).length
+    return Math.max(
+      MIN_PANEL_ROWS,
+      Math.min(resolved.questionDialogMaxHeight, runtime.terminal.rows - editorRows),
+    )
+  }
+  // One panel at a time, in the same editor slot the question, approval, model,
+  // and details surfaces use; opening another replaces it.
+  let panelOverlay: TuiOverlaySession | undefined
+  /**
+   * Show one page of pre-rendered lines over the editor.
+   *
+   * These commands answer a question about the session — its status, its
+   * palette, its keys — rather than adding to the conversation, so their output
+   * is a view that opens and closes. Dumping it into the transcript pushed the
+   * conversation off screen and left the answer stranded in the log above every
+   * later reply.
+   * @param title - the panel heading.
+   * @param lines - already-rendered content rows.
+   */
+  const showPanel = (title: string, lines: readonly string[]): void => {
+    void panelOverlay?.close()
+    const session = overlayManager.open({
+      create: () => new ScrollablePanel(
+        title,
+        lines,
+        panelRows,
+        palette,
+        () => { void session.close() },
+      ),
+    }, 'inline')
+    panelOverlay = session
+    void session.closed.then(() => {
+      if (panelOverlay === session) panelOverlay = undefined
+    })
+    requestRender()
+  }
+
+  // Every panel is titled with the command that opened it: the body already
+  // says what it is (the status card, the palette table), so the heading's job
+  // is naming the answer you are reading, and how to ask for it again.
+  const showHotkeys = (): void => {
+    showPanel('/hotkeys', KEYBOARD_SHORTCUTS.map(line => palette.dim(line)))
+  }
+
   const showHelp = (): void => {
     const commandLines = ctx.commands.list(agent).map((command) => {
       const input = command.input === undefined ? '' : ` ${command.input.hint}`
       return `/${command.name}${input} — ${command.description}`
     })
-    transcript.appendLocal(
-      new Spacer(1),
-      new Text(palette.bold(palette.accent('Keyboard shortcuts')), 0, 0),
-      new Text([
-        'Enter send • Shift/Alt+Enter newline • Up/Down prompt history',
-        'Esc cancel turn • Ctrl+O cycle cards (collapse/expand/hide) • Ctrl+R toggle reasoning • Ctrl+L redraw',
-        'Ctrl+C cancel while running; clear input or exit while idle • Ctrl+D exit',
-        '',
-        ...commandLines,
-        '/skill:<name> [instructions] — load a skill into the conversation',
-      ].map(line => palette.dim(line)).join('\n'), 0, 0),
-    )
-    requestRender()
+    showPanel('/help', [
+      ...KEYBOARD_SHORTCUTS,
+      '',
+      ...commandLines,
+      '/skill:<name> [instructions] — load a skill into the conversation',
+    ].map(line => palette.dim(line)))
   }
 
   const showPalette = (): void => {
-    transcript.appendLocal(
-      new Spacer(1),
-      new Text(renderPalette(palette, currentScheme, resolved.theme.color).join('\n'), 0, 0),
-    )
-    requestRender()
+    showPanel('/palette', renderPalette(palette, currentScheme, resolved.theme.color))
+  }
+
+  /**
+   * The Loader inventory, read fresh on every `/plugins`.
+   *
+   * `pluginInventory` is a host mount the TUI never requires, so this is a
+   * `ctx.get` rather than an injection, and the panel explains its own absence.
+   */
+  const showPlugins = (): void => {
+    const inventory = ctx.get('pluginInventory') as PluginInventoryReader | undefined
+    showPanel(PLUGINS_PANEL_TITLE, renderPluginInventory(inventory?.list(), palette))
   }
 
   const showStatus = async (signal: AbortSignal): Promise<void> => {
@@ -1167,12 +1310,18 @@ export function createTuiChat(
       : target.current.reasoningEffort === undefined
         ? 'default'
         : displayText(target.current.reasoningEffort)
+    // Whole-log figures the in-memory counts above cannot give: `sessionStats`
+    // folds every turn, step, and wall time from the durable log, so paging and
+    // compaction cannot move them. The unit is a deployment choice, so its row
+    // is present only when the projection is.
+    const stats = ctx.get('sessionProjections')?.snapshot(agent.session).values.sessionStats
     const groups: readonly (readonly StatusCardRow[])[] = [
       [
         ['Session', displayText(agent.session.id)],
         ['Title', displayText(sessionTitle ?? 'untitled')],
         ['Directory', displayText(cwd)],
         ['Model', `${model} ${palette.dim(`(effort ${effort}; reasoning blocks ${showReasoning ? 'shown' : 'hidden'})`)}`],
+        ...goalStatusRows(goalState.goal, goalState.roundsStarted),
       ],
       [
         ['Agent', [
@@ -1182,6 +1331,7 @@ export function createTuiChat(
           formatDiagnosticCount(steps, 'step'),
           formatDiagnosticCount(toolCalls, 'tool call'),
         ].join(' · ')],
+        ...stats === undefined ? [] : [['Session totals', formatSessionStats(stats)] as StatusCardRow],
       ],
       [
         ['Tokens', `${formatDiagnosticNumber(tokens.input)} input + ${formatDiagnosticNumber(tokens.output)} output`],
@@ -1195,17 +1345,18 @@ export function createTuiChat(
         ['Active', formatDiagnosticTime(latestActivity)],
       ],
     ]
-    transcript.appendLocal(
-      new Spacer(1),
-      new StatusCardComponent(groups, palette),
-      new Spacer(1),
-      new Text(palette.bold(palette.accent('System prompt')), 0, 0),
-      new Text(systemPrompt, 0, 0),
-      new Spacer(1),
-      new Text(palette.bold(palette.accent('Registered tools')), 0, 0),
-      new Text(registeredTools, 0, 0),
-    )
-    requestRender()
+    // The card renders itself once, at the panel's own content width; the panel
+    // scrolls those rows rather than re-deriving them per frame.
+    const cardWidth = Math.max(8, runtime.terminal.columns - 2)
+    showPanel('/status', [
+      ...new StatusCardComponent(groups, palette).render(cardWidth),
+      '',
+      palette.bold(palette.accent('System prompt')),
+      ...systemPrompt.split('\n'),
+      '',
+      palette.bold(palette.accent('Registered tools')),
+      registeredTools,
+    ])
   }
 
   // Skill listing is async while `createTuiChat` is synchronous, so the TUI
@@ -1263,6 +1414,12 @@ export function createTuiChat(
           description: skill.description,
           argumentHint: skill.source.startsWith('project-') ? '(project)' : '(user)',
         }))
+        // Same scan, second reader: the banner names what this workspace can
+        // invoke. A long catalog is truncated rather than allowed to grow the
+        // opening screen without bound.
+        headerSkills.length = 0
+        headerSkills.push(...invocable.slice(0, MAX_HEADER_SKILLS).map(skill => skill.name))
+        header.invalidate()
         refreshCommandAutocomplete()
         refreshVisibleSlashAutocomplete()
         requestRender()
@@ -1288,6 +1445,11 @@ export function createTuiChat(
       handler: () => { showHelp(); return { kind: 'success' } },
     })
     commandCtx.commands.register({
+      name: 'hotkeys',
+      description: 'Show the keyboard shortcuts alone',
+      handler: () => { showHotkeys(); return { kind: 'success' } },
+    })
+    commandCtx.commands.register({
       name: 'model',
       description: 'Show or switch this session\'s model',
       input: { hint: '[[provider/]model]' },
@@ -1311,6 +1473,23 @@ export function createTuiChat(
       name: 'palette',
       description: 'Show every color and attribute role this terminal renders',
       handler: () => { showPalette(); return { kind: 'success' } },
+    })
+    commandCtx.commands.register({
+      name: 'export',
+      description: 'Write this session\'s log to a file and report the path',
+      input: { hint: '[path]' },
+      handler: ({ rawInput, signal }) => exportSessionLog({
+        // Both services are optional: without persistence the export
+        // re-serializes the in-memory log, which is the same conversation.
+        persistence: ctx.get('sessionPersistence') as SessionArtifactReader | undefined,
+        sessions: ctx.get('sessions') as SessionFlusher | undefined,
+        cwd,
+      }, agent.session, rawInput, signal),
+    })
+    commandCtx.commands.register({
+      name: 'plugins',
+      description: 'Show the Loader\'s plugin entries and their states',
+      handler: () => { showPlugins(); return { kind: 'success' } },
     })
     commandCtx.commands.register({
       name: 'reload',
@@ -1633,6 +1812,16 @@ export function createTuiChat(
   const disposeSessionEvents = ctx.on('session/event', (session, event) => {
     if (session !== agent.session) return
     if (event.type === 'tool/result') fileSearch.invalidate()
+    // `foldGoal` rejects a malformed change loudly, and this listener runs on
+    // the shared event bus: a throw here would take every other subscriber's
+    // notification with it, so a rejected refold keeps the last good goal.
+    if (event.type === 'goal/change') {
+      try {
+        goalState = foldGoal(agent.session.events)
+      } catch (error: unknown) {
+        ctx.logger.warn(`dsh-tui: goal fold rejected a change; keeping the last goal: ${errorChain(error)}`)
+      }
+    }
     recordEventUsage(tokens, event)
     if (event.type === 'turn/start' && runningStatus !== undefined) runningStatus.turn = event.data.turn
     // Live standalone compaction is process state on purpose: a resumed log may
@@ -1759,7 +1948,7 @@ export function createTuiChat(
   for (const node of initial.nodes) {
     if (node.kind === 'user-message' && node.source === 'user') editor.addToHistory(node.text)
   }
-  const restoredGoal = foldGoal(agent.session.events).goal
+  const restoredGoal = goalState.goal
   /* v8 ignore next -- goal replay coverage lives with the goal seam; the TUI only formats its startup notice. */
   if (restoredGoal !== undefined && restoredGoal.phase !== 'complete') {
     appendNotice(

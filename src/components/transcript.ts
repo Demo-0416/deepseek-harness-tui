@@ -39,6 +39,7 @@ import {
   type ParsedDiff,
 } from '../render/diff.ts'
 import { buildPreviewText } from '../render/preview.ts'
+import { renderMarkdownAnsi, type MarkdownAnsiTheme } from '../render/markdown.ts'
 import { bg as paintBg, CLAUDE_COLORS, fg as paintFg, type Rgb } from '../render/palette.ts'
 import {
   formatCompletionTime,
@@ -95,6 +96,116 @@ function accent(palette: Palette, color: Rgb, text: string): string {
 /** Drop every escape from `lines` when the palette has color disabled. */
 function plainIfNoColor(palette: Palette, lines: string[]): string[] {
   return colorEnabled(palette) ? lines : lines.map(line => stripTerminalSequences(line))
+}
+
+/**
+ * Which pipeline renders an assistant response body, plus the one-shot report
+ * of a failure in the preferred one.
+ *
+ * The object is shared and mutable — like {@link Palette} and `MarkdownTheme`,
+ * which a theme change also rewrites in place — so a single failing render
+ * moves every mounted and future body onto the pi path at once, rather than
+ * leaving the transcript split between two renderers.
+ */
+export interface MarkdownPolicy {
+  /** Preferred body renderer; set to `pi` for good after a `claude` render throws. */
+  mode: 'claude' | 'pi'
+  /**
+   * Styling for the claude pipeline, the counterpart of the `MarkdownTheme`
+   * every component already takes for the pi one. Production passes
+   * {@link ../render/markdown.ts | claudeMarkdownTheme}.
+   */
+  readonly theme: MarkdownAnsiTheme
+  /**
+   * Report the failure that demoted `claude` to `pi`. Invoked at most once per
+   * policy object, at the moment {@link MarkdownPolicy.mode} flips.
+   * @param error - the value the `claude` render threw.
+   */
+  readonly onError: (error: unknown) => void
+}
+
+/**
+ * A markdown body rendered by {@link ../render/markdown.ts | renderMarkdownAnsi}
+ * under Claude Code's own styling, with pi-tui's `Markdown` as the fallback.
+ *
+ * The rows come back already wrapped to the requested width, so the caller must
+ * not re-flow them (`PrefixedComponent` only prefixes, which is safe). A throw
+ * out of the claude path is contained here: the shared policy flips to `pi`,
+ * the failure is reported once, and this render returns the pi rows instead —
+ * and a throw out of *that* leaves the unparsed text on screen. A malformed
+ * document can degrade the styling but never blank the transcript, and never
+ * takes the frame down with it.
+ */
+export class MarkdownBodyComponent implements Component {
+  /** The pi-tui document, built on demand: the claude path never constructs one. */
+  private fallback: Markdown | undefined
+  /** The last claude render, with the width it was wrapped to. */
+  private cached: { width: number; rows: string[] } | undefined
+
+  /**
+   * @param text - the markdown source of one assistant response body.
+   * @param palette - active role palette; also decides whether escapes survive.
+   * @param mdTheme - pi-tui Markdown theme, used only on the fallback path.
+   * @param policy - shared renderer choice and failure report.
+   */
+  constructor(
+    private readonly text: string,
+    private readonly palette: Palette,
+    private readonly mdTheme: MarkdownTheme,
+    private readonly policy: MarkdownPolicy,
+  ) {}
+
+  invalidate(): void {
+    // The rows depend on state this component does not own — the palette and the
+    // markdown theme are both mutated in place by a color-scheme change — so an
+    // invalidation drops them alongside the pi document's own cache.
+    this.cached = undefined
+    this.fallback?.invalidate()
+  }
+
+  /** The pi-tui document for this text, built once and reused. */
+  private piDocument(): Markdown {
+    this.fallback ??= new Markdown(this.text, 0, 0, this.mdTheme, { color: value => this.palette.text(value) })
+    return this.fallback
+  }
+
+  /** The fallback's rows, or the bare words when even the fallback cannot parse them. */
+  private piRows(width: number): string[] {
+    try {
+      return this.piDocument().render(width)
+    } catch {
+      // pi's parser recurses once per nesting level and overflows the stack an
+      // order of magnitude sooner than this port does, so a document that
+      // demoted the renderer can be one the fallback cannot read either. Both
+      // parsers failing is still not a reason to drop an answer off the screen.
+      return wrapTextWithAnsi(this.text, Math.max(1, width))
+    }
+  }
+
+  render(width: number): string[] {
+    if (this.policy.mode === 'claude') {
+      // `text` is fixed for the life of one component — a changed body is a new
+      // component (see StreamingAssistantComponent.rebuild) — so the rows are a
+      // pure function of the width, and caching them is what keeps a frame from
+      // re-lexing every message in the transcript while one of them streams.
+      if (this.cached?.width === width) return this.cached.rows
+      try {
+        const rows = plainIfNoColor(this.palette, renderMarkdownAnsi(this.text, width, this.policy.theme, {
+          // OSC 8 is the only place a link's href survives, and the no-color
+          // path strips it: without this the URL would vanish and the link
+          // would read as its display text alone. Degrade to the bare URL
+          // instead, which is upstream's own fallback.
+          hyperlinks: colorEnabled(this.palette),
+        }))
+        this.cached = { width, rows }
+        return rows
+      } catch (error: unknown) {
+        this.policy.mode = 'pi'
+        this.policy.onError(error)
+      }
+    }
+    return this.piRows(width)
+  }
 }
 
 /**
@@ -169,6 +280,57 @@ class FilledBlockComponent implements Component {
   }
 }
 
+/** Label above the banner's skill summary. */
+const SKILLS_LABEL = '[Skills]'
+
+/** Rows of skill names the banner spends before it summarizes the rest. */
+const SKILLS_MAX_ROWS = 4
+
+/**
+ * Pack skill names into comma-joined rows of at most `width` columns, spending
+ * at most {@link SKILLS_MAX_ROWS} of them.
+ *
+ * What does not fit is counted into a trailing `+N more`, and the marker is
+ * packed onto the last row like any other item: names are dropped from that row
+ * until it fits, each dropped name raising the count the marker reports (on a
+ * narrow banner every one of them can go, leaving the marker alone on its row).
+ * That keeps the summary inside its budget at any width, and keeps the count
+ * itself off the part a truncation would clip.
+ * @param names - Skill names, in the order the entry supplied them.
+ * @param width - Columns one row may occupy.
+ * @returns The rows to render, without styling.
+ */
+function packSkillNames(names: readonly string[], width: number): string[] {
+  if (names.length === 0) return []
+  const joined = (parts: readonly string[]): string => parts.join(', ')
+  const rows: string[] = []
+  let row: string[] = []
+  let placed = 0
+  for (const name of names) {
+    // The first name of a row is placed regardless: a name wider than the row is
+    // still better rendered (and truncated) than dropped into the remainder.
+    if (row.length === 0 || visibleWidth(joined([...row, name])) <= width) {
+      row.push(name)
+      placed += 1
+      continue
+    }
+    if (rows.length + 1 === SKILLS_MAX_ROWS) break
+    rows.push(joined(row))
+    row = [name]
+    placed += 1
+  }
+  let hidden = names.length - placed
+  if (hidden > 0) {
+    while (row.length > 0 && visibleWidth(joined([...row, `+${hidden} more`])) > width) {
+      row.pop()
+      hidden += 1
+    }
+    row.push(`+${hidden} more`)
+  }
+  rows.push(joined(row))
+  return rows
+}
+
 /** What the startup banner reports about the session it opens. */
 export interface HeaderInfo {
   /** This bundle's version, rendered next to the wordmark; omitted when unknown. */
@@ -183,6 +345,12 @@ export interface HeaderInfo {
   readonly title: () => string | undefined
   /** Deployment-configured banner line; absent renders none. */
   readonly welcome?: string
+  /**
+   * Skill names available to this session, rendered as the banner's `[Skills]`
+   * summary. Absent (or empty) renders no section at all: a deployment with no
+   * skills must not spend a banner row saying so.
+   */
+  readonly skills?: readonly string[]
 }
 
 /**
@@ -193,6 +361,9 @@ export interface HeaderInfo {
  *  DEEPSEEK HARNESS v0.1.0
  *  deepseek-v4-pro · ~/src/project
  *  resumed 85d19568 · fix the ordering bug
+ *
+ *  [Skills]
+ *  lark-doc, lark-base, meego-tech-story, +12 more
  * ```
  *
  * The session id is on the resumed line only. A fresh session's id is a uuid the
@@ -202,6 +373,12 @@ export interface HeaderInfo {
  * it, which is why the title is no longer a transcript row of its own. Each line
  * renders as plain left-padded text, matching transcript notices, so it reads on
  * any theme.
+ *
+ * The skill summary is a section rather than another identity line, so it goes
+ * last, under a blank row: which session this is (route, workspace, resume) is
+ * one block, and what it can do is another. On a fresh session — the common
+ * case, with no resume and no configured welcome — that puts it directly under
+ * the workspace row.
  */
 export class HeaderComponent implements Component {
   /** Columns of the wordmark currently revealed; `undefined` renders it whole. */
@@ -250,8 +427,29 @@ export class HeaderComponent implements Component {
         `resumed ${displayText(this.info.resumed)}${title === undefined ? '' : ` · ${displayText(title)}`}`,
       ),
       ...welcome === undefined ? [] : detail(displayText(welcome)),
+      ...this.skillRows(usable),
     ]
-    return lines.map(line => ` ${line}`)
+    // A blank separator row keeps no padding: a row of spaces would be copied
+    // out of the banner as stray whitespace.
+    return lines.map(line => line === '' ? '' : ` ${line}`)
+  }
+
+  /**
+   * The `[Skills]` section: its label row and the packed name rows, or nothing
+   * when the entry supplied no skills.
+   * @param usable - Columns a banner row may occupy.
+   * @returns The section's rows, led by the blank row that separates it.
+   */
+  private skillRows(usable: number): string[] {
+    // A blank entry would render as a stray `, ,` in the list, so the section is
+    // built from the names that have something to show.
+    const names = (this.info.skills ?? []).map(name => displayText(name).trim()).filter(name => name !== '')
+    if (names.length === 0) return []
+    return [
+      '',
+      this.palette.bold(this.palette.dim(SKILLS_LABEL)),
+      ...packSkillNames(names, usable).map(row => truncateToWidth(this.palette.dim(row), usable, '')),
+    ]
   }
 }
 
@@ -291,6 +489,7 @@ function assistantMessageChildren(
   showReasoning: boolean,
   palette: Palette,
   mdTheme: MarkdownTheme,
+  markdown: MarkdownPolicy,
 ): Component[] {
   const reasoning = displayText(textBlocks(content, 'reasoning').trim())
   const text = displayText(textBlocks(content, 'text').trim())
@@ -306,7 +505,10 @@ function assistantMessageChildren(
     children.push(new PrefixedComponent(document, palette.dim(' ∴ '), '   '))
   }
   if (text !== '') {
-    const document = new Markdown(text, 0, 0, mdTheme, { color: value => palette.text(value) })
+    // Only the response body moves to the claude pipeline. The thinking block
+    // above stays a pi document under one recessed tone: its whole point is
+    // that it is NOT typeset like an answer.
+    const document = new MarkdownBodyComponent(text, palette, mdTheme, markdown)
     children.push(new PrefixedComponent(document, ` ${accent(palette, CLAUDE_COLORS.claude, '●')} `, '   '))
   }
   return children
@@ -379,6 +581,7 @@ export class StreamingAssistantComponent extends Container {
     private showReasoning: boolean,
     private readonly palette: Palette,
     private readonly mdTheme: MarkdownTheme,
+    private readonly markdown: MarkdownPolicy,
   ) {
     super()
     this.timing = new StepTimingComponent(position, events, tracker, now, palette)
@@ -458,6 +661,7 @@ export class StreamingAssistantComponent extends Container {
       this.showReasoning,
       this.palette,
       this.mdTheme,
+      this.markdown,
     )
     for (const child of children) this.addChild(child)
   }
@@ -917,16 +1121,18 @@ function stripReminderFrame(text: string): string {
 
 /**
  * Injected context (plugin/goal source, e.g. `workspace-context`), rendered as a
- * dim card that shares the tool-card `Ctrl+O` toggle.
+ * dim card under a `Context · <label>` header, with a surrounding reminder frame
+ * stripped because the source label already names the context.
  *
- * Collapsed — the default, and what every session opens with — it is one dim
- * row, `Context · <label> (ctrl+o)`, and nothing else. This text was never
+ * The card has one state, not two. It is mounted only by the expanded phase of
+ * the Ctrl+O cycle ({@link ToolCardVisibility}), because this text was never
  * written for the user: it is the runtime snapshot and skill catalog the
- * producers hand the model on every request, and previewing its first lines
- * spent most of a fresh screen on instructions nobody reads, exactly where
- * Claude Code shows a single line. Expanded, the whole body renders as dim
- * prose under a header without the toggle hint, with a surrounding reminder
- * frame stripped because the source label already names the context.
+ * producers hand the model on every request. Claude Code puts none of that in
+ * the conversation, and the one-row `Context · <label> (ctrl+o)` placeholder
+ * this card used to render collapsed still spent a row of every fresh screen —
+ * and one per request thereafter — on traffic nobody reads. Ctrl+O is where a
+ * user goes to see what the model was actually sent; until then the transcript
+ * is the conversation and nothing else.
  *
  * Injected context is prose, not markup, so this card does not parse it. The
  * `<system-reminder>` frame is a prompting convention no model is trained on
@@ -938,8 +1144,6 @@ function stripReminderFrame(text: string): string {
  * content-dependent.
  */
 export class ContextCardComponent extends CachedCardComponent {
-  private expanded = false
-
   constructor(
     private readonly label: string,
     private readonly text: string,
@@ -948,21 +1152,8 @@ export class ContextCardComponent extends CachedCardComponent {
     super()
   }
 
-  /**
-   * Expand or collapse the card body.
-   * @param expanded - Whether the full body is shown.
-   */
-  setExpanded(expanded: boolean): void {
-    this.expanded = expanded
-    this.dropLines()
-  }
-
   protected renderLines(width: number): string[] {
-    const title = `Context · ${displayText(this.label)}`
-    // The collapsed row names the toggle that opens it, the way a folded tool
-    // card's marker does; the expanded header drops the hint it just answered.
-    if (!this.expanded) return [this.palette.dim(`${title} (ctrl+o)`)]
-    const header = this.palette.dim(title)
+    const header = this.palette.dim(`Context · ${displayText(this.label)}`)
     // Emptiness is decided on the stripped text: styling a blank body would yield
     // one escape-only row, which reads as a stray blank line under the header.
     const stripped = stripReminderFrame(this.text)
