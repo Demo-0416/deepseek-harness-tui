@@ -1,8 +1,8 @@
 /**
  * pi-tui dialog and selector components for the terminal front door: the status
- * card, prompt-context line, model selector, agent-preset selector, resume
- * picker, and user-question dialog, plus the model-choice, preset-choice, and
- * resume-candidate data they present.
+ * card, prompt-context line, model selector, agent-preset selector, theme
+ * selector, resume picker, and user-question dialog, plus the model-choice,
+ * preset-choice, and resume-candidate data they present.
  * @module @deepseek-ai/dsh-tui/components/dialogs
  */
 
@@ -28,8 +28,14 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionRecord } from '@deepseek-ai/dsh-session-query'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START, displayText, sanitizePastedText } from './text.ts'
-import { dialogSelectTheme, type Palette } from './theme.ts'
-import type { ToolCardVisibility } from './transcript.ts'
+import {
+  dialogSelectTheme,
+  isThemePreference,
+  THEME_PREFERENCE_DESCRIPTIONS,
+  THEME_PREFERENCES,
+  type Palette,
+  type ThemePreferenceId,
+} from './theme.ts'
 import {
   renderTuiPromptTemplate,
   type TuiPromptTemplateToken,
@@ -714,56 +720,53 @@ export class PresetDialog implements Component {
   }
 }
 
-/** Both transcript-detail dimensions, applied immediately on each Tab. */
-export interface DetailsSelection {
-  readonly visibility: ToolCardVisibility
-  readonly showReasoning: boolean
-}
-
-const TOOL_CARD_PHASES: readonly ToolCardVisibility[] = ['collapsed', 'expanded', 'hidden']
-
 /**
- * Keyboard toggle over the two transcript-detail entries — tool-card
- * visibility and reasoning display. Tab cycles the highlighted entry's value
- * and applies it immediately, so the transcript behind the dialog is the live
- * preview; Enter, Esc, or Ctrl+C closes.
+ * Keyboard theme selector, shared by `/theme` and the `/config` panel's Theme
+ * row: one row per {@link ThemePreferenceId}, applied while the highlight moves
+ * so the screen behind the dialog is the preview, and committed on Enter.
+ *
+ * Esc puts the theme the dialog opened on back, because a preview the user
+ * scrolled past is not a choice they made — the same relation `/model`'s picker
+ * has to the route it opened on.
  */
-export class DetailsDialog implements Component {
+export class ThemeDialog implements Component {
   private readonly list: SelectList
-  private readonly toolsItem: SelectItem
-  private readonly reasoningItem: SelectItem
+  private preview: ThemePreferenceId
 
+  /**
+   * @param current - the theme in force when the dialog opened, restored on Esc.
+   * @param palette - active role palette.
+   * @param apply - paints one theme; called on every highlight move.
+   * @param commit - persists the chosen theme; called once, on Enter.
+   * @param close - closes the overlay.
+   */
   constructor(
-    private visibility: ToolCardVisibility,
-    private showReasoning: boolean,
+    private readonly current: ThemePreferenceId,
     private readonly palette: Palette,
-    private readonly apply: (selection: DetailsSelection) => void,
+    private readonly apply: (theme: ThemePreferenceId) => void,
+    private readonly commit: (theme: ThemePreferenceId) => void,
     private readonly close: () => void,
   ) {
-    this.toolsItem = { value: 'tools', label: 'Tool cards', description: visibility }
-    this.reasoningItem = { value: 'reasoning', label: 'Reasoning', description: this.reasoningLabel() }
-    this.list = new SelectList([this.toolsItem, this.reasoningItem], 2, dialogSelectTheme(palette))
-    this.list.onSelect = close
-  }
-
-  private reasoningLabel(): string {
-    return this.showReasoning ? 'shown' : 'hidden'
-  }
-
-  /** Cycle the highlighted entry one step and apply the new state. */
-  private cycle(): void {
-    const selected = this.list.getSelectedItem()
-    /* v8 ignore next -- the two-entry list always has a selection. */
-    if (selected === null) return
-    if (selected.value === 'tools') {
-      const index = TOOL_CARD_PHASES.indexOf(this.visibility)
-      this.visibility = TOOL_CARD_PHASES[(index + 1) % TOOL_CARD_PHASES.length] as ToolCardVisibility
-      this.toolsItem.description = this.visibility
-    } else {
-      this.showReasoning = !this.showReasoning
-      this.reasoningItem.description = this.reasoningLabel()
+    this.preview = current
+    const items: SelectItem[] = THEME_PREFERENCES.map(id => ({
+      value: id,
+      label: id,
+      description: THEME_PREFERENCE_DESCRIPTIONS[id],
+    }))
+    this.list = new SelectList(items, THEME_PREFERENCES.length, dialogSelectTheme(palette))
+    this.list.setSelectedIndex(Math.max(0, THEME_PREFERENCES.indexOf(current)))
+    this.list.onSelectionChange = (item) => {
+      /* v8 ignore next -- the list is built from THEME_PREFERENCES, so every value is one. */
+      if (!isThemePreference(item.value)) return
+      this.preview = item.value
+      this.apply(item.value)
     }
-    this.apply({ visibility: this.visibility, showReasoning: this.showReasoning })
+    this.list.onSelect = (item) => {
+      /* v8 ignore next -- as above. */
+      if (!isThemePreference(item.value)) return
+      this.commit(item.value)
+      this.close()
+    }
   }
 
   invalidate(): void {
@@ -771,18 +774,21 @@ export class DetailsDialog implements Component {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) this.close()
-    else if (matchesKey(data, Key.tab)) this.cycle()
-    else this.list.handleInput(data)
+    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
+      if (this.preview !== this.current) this.apply(this.current)
+      this.close()
+      return
+    }
+    this.list.handleInput(data)
     this.invalidate()
   }
 
   render(width: number): string[] {
     const innerWidth = Math.max(1, width - 4)
-    return renderDialog('Transcript details', [
+    return renderDialog('Select theme', [
       ...this.list.render(innerWidth),
       '',
-      this.palette.dim('↑/↓ move • Tab toggle • Enter/Esc close'),
+      this.palette.dim('↑/↓ preview • Enter select • Esc cancel'),
     ], width, this.palette)
   }
 }

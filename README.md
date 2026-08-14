@@ -81,7 +81,8 @@ all three.
 | Resume picker (`/resume`) | type to search · Up/Down move · PgUp/PgDn page · Tab switches between this workspace and all · Enter resume · Esc clears the search, then closes |
 | Rewind (`/rewind`) | Up/Down move · PgUp/PgDn page · Home/End first or last · Enter go back to that prompt · Esc close |
 | Plugins (`/plugins`) | type to filter · Up/Down move · PgUp/PgDn page · Enter expand one entry · Esc close |
-| Details (`/details`) | Tab cycles the highlighted setting, applied immediately · Esc close |
+| Settings (`/config`) | Up/Down move · Enter flips a switch, steps a choice, or opens a submenu · Left/Right step a choice · Esc close |
+| Theme picker (`/theme`) | Up/Down preview each theme on the screen behind it · Enter keep it · Esc restore the one you opened on |
 
 Ctrl+C is the one key that is never rebindable: it is how a terminal is always
 left. Every other binding is configurable — see `keybindings` below.
@@ -94,7 +95,8 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/hotkeys` | the keyboard shortcuts alone |
 | `/model [[provider/]model]` | switch the model and save it as your default; without an argument it opens the picker, which can also pick for this session only |
 | `/preset [<preset> \| copy <preset> <new-id>]` | show, switch, or copy this session's agent preset |
-| `/details [collapsed\|expanded\|hidden] [reasoning [on\|off]]` | tool-card visibility and reasoning display; without arguments it opens the selector |
+| `/config` | this terminal's own settings — thinking display, the tool-card phase a session opens on, theme — changed in place and saved for the next session |
+| `/theme [auto\|light\|dark\|no-color]` | the palette this terminal paints with; without an argument it opens the picker |
 | `/copy` | copy the last answer to the system clipboard |
 | `/new` | start a blank session in this workspace; the current one keeps its history and stays resumable |
 | `/clear` | clear the transcript view; the session log is unchanged |
@@ -123,9 +125,8 @@ name — `.git`, `node_modules`, `dist`, `build`, `out`, `coverage`, `.cache`,
 walker, and `fileSearchExcludedDirectories` to change what the walker skips.
 
 Commands complete their arguments too: `/model` offers every advertised
-`provider/model`, `/preset` the roster's presets and the `copy` verb, `/details`
-whichever of its two slots the cursor is in, and `/resume` this workspace's
-recent sessions.
+`provider/model`, `/preset` the roster's presets and the `copy` verb, `/theme`
+its four values, and `/resume` this workspace's recent sessions.
 
 ### Surfaces
 
@@ -152,7 +153,7 @@ Values on the bundle row (`tui-runner`), all optional.
 | `initialSkill` | — | skill auto-invoked as the session's first turn, as if `/skill:<name>` were typed; set by a launcher, not by a person |
 | `initialDraft` | — | text the editor opens with, unsent; set by a rewind handoff |
 | `experimentalCommands` | `false` | register the developer commands (`/reload` today) |
-| `showReasoning` | `true` | render model reasoning blocks |
+| `showReasoning` | `true` | render model reasoning blocks; the deployment's answer, which `/config` then overrides per user |
 | `markdownRenderer` | `claude` | `claude` (this bundle's renderer) or `pi` (pi-tui's `Markdown`); a `claude` render that throws falls back to `pi` for the rest of the process |
 | `maxToolOutputLines` | `6` | body lines kept in a collapsed tool card's head/tail preview |
 | `maxDiffEditLength` | `1000` | added and removed lines explored while deriving an exact line diff |
@@ -164,7 +165,7 @@ Values on the bundle row (`tui-runner`), all optional.
 | `questionDialogMaxHeight` | `20` | question panel maximum height in rows |
 | `modelDialogWidth` | `76` | model selector width in columns |
 | `modelDialogMaxHeight` | `20` | model selector maximum height in rows |
-| `detailsDialogWidth` | `72` | details selector width in columns |
+| `settingsDialogWidth` | `72` | `/theme` selector width in columns |
 | `fileSearchMaxResults` | `20` | fuzzy file candidates displayed for one `@` query |
 | `fileSearchMaxEntries` | `10000` | paths retained in one `@` workspace index |
 | `fileSearchExcludedDirectories` | see above | directory basenames the walker skips |

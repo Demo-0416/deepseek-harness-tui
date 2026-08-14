@@ -33,11 +33,11 @@ import {
 } from '../../src/chat/file-autocomplete.ts'
 import { ReferenceAutocompleteProvider } from '../../src/chat/autocomplete.ts'
 import {
-  detailsArgumentCompletions,
   memoizeListing,
   modelArgumentCompletions,
   presetArgumentCompletions,
   resumeArgumentCompletions,
+  themeArgumentCompletions,
   type CompletableModel,
   type CompletableSession,
 } from '../../src/chat/command-completions.ts'
@@ -256,20 +256,16 @@ describe('/model argument completions', () => {
   })
 })
 
-describe('/details argument completions', () => {
-  it('offers the slot the cursor is in and carries the settled tokens', () => {
-    const first = detailsArgumentCompletions('')
-    assert.deepEqual(first?.map(item => item.value), ['collapsed', 'expanded', 'hidden', 'reasoning'])
-    // pi replaces the whole argument text, so the value has to re-emit what
-    // the user already typed.
-    assert.deepEqual(detailsArgumentCompletions('collapsed reas')?.map(item => item.value), ['collapsed reasoning'])
-    assert.deepEqual(detailsArgumentCompletions('reasoning o')?.map(item => item.value), [
-      'reasoning on',
-      'reasoning off',
-    ])
-    // A visibility already chosen is not offered twice.
-    assert.deepEqual(detailsArgumentCompletions('hidden ')?.map(item => item.value), ['hidden reasoning'])
-    assert.equal(detailsArgumentCompletions('sideways'), null)
+describe('/theme argument completions', () => {
+  it('offers every theme, narrows to what was typed, and opens no empty menu', () => {
+    const first = themeArgumentCompletions('')
+    assert.deepEqual(first?.map(item => item.value), ['auto', 'light', 'dark', 'no-color'])
+    // The sentence beside each value is the selector's own, so the menu and the
+    // picker answer the same question the same way.
+    assert.equal(first?.[0]?.description, 'Follow the color scheme the terminal reports')
+    assert.deepEqual(themeArgumentCompletions('li')?.map(item => item.value), ['light'])
+    assert.deepEqual(themeArgumentCompletions('no')?.map(item => item.value), ['no-color'])
+    assert.equal(themeArgumentCompletions('solarized'), null)
   })
 })
 
@@ -345,18 +341,18 @@ describe('the mounted editor asks for argument completions', { skip: skipWithout
       // Typed byte by byte, because the trigger is a character insertion in a
       // slash context: pasting the whole line or typing the space alone opens
       // nothing, which is the wiring this case exists to catch.
-      for (const character of '/details c') {
+      for (const character of '/theme li') {
         terminal.send(character)
         await delay(SETTLE_MS)
       }
       await terminal.flush()
       const screen = terminal.text()
-      // The description, not the token: `collapsed` also appears in the
-      // command's own argument hint, so matching it alone would pass against a
-      // provider that was never given an argument source.
+      // The description, not the token: `light` also appears in the command's
+      // own argument hint, so matching it alone would pass against a provider
+      // that was never given an argument source.
       assert.ok(
-        screen.includes('Show tool cards collapsed'),
-        `the argument menu should offer the visibility tokens:\n${screen}`,
+        screen.includes('Always paint the light-background palette'),
+        `the argument menu should offer the theme values:\n${screen}`,
       )
     } finally {
       await disposeTuiTestHarness(harness)

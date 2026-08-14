@@ -26,6 +26,7 @@
 
 import type { AutocompleteItem } from '@earendil-works/pi-tui'
 import { displayInlineText } from '../components/text.ts'
+import { THEME_PREFERENCE_DESCRIPTIONS, THEME_PREFERENCES } from '../components/theme.ts'
 
 /** One advertised route, as the LLM service lists it. */
 export interface CompletableModel {
@@ -233,37 +234,21 @@ export async function presetArgumentCompletions(
   return menu(items)
 }
 
-/** Tokens `/details` accepts, in the order its usage line lists them. */
-const DETAILS_VISIBILITY = ['collapsed', 'expanded', 'hidden'] as const
-const DETAILS_REASONING = ['on', 'off'] as const
-
 /**
- * Complete `/details [collapsed|expanded|hidden] [reasoning [on|off]]`.
+ * Complete `/theme [auto|light|dark|no-color]`.
  *
- * The grammar is two independent slots, so the completion offers whichever
- * slot the cursor is in and carries the already-typed tokens through the value
- * — pi replaces the whole argument text with it.
+ * One slot with four values, each carrying the sentence the selector shows
+ * beside it, so the menu and the picker answer the same question the same way.
  * @param argumentPrefix - argument text typed so far.
- * @returns the tokens still legal at the cursor, or `null` for no menu.
+ * @returns the matching themes, or `null` for no menu.
  */
-export function detailsArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
-  const tokens = argumentPrefix.split(/\s+/u)
-  const typed = tokens[tokens.length - 1] ?? ''
-  const before = tokens.slice(0, -1)
-  const settled = before.join(' ')
-  const withPrefix = (token: string): string => settled === '' ? token : `${settled} ${token}`
+export function themeArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
+  const typed = argumentPrefix.trim()
   const items: AutocompleteItem[] = []
-  const push = (token: string, description: string): void => {
-    if (matches(token, typed)) items.push({ value: withPrefix(token), label: token, description })
+  for (const id of THEME_PREFERENCES) {
+    if (!matches(id, typed)) continue
+    items.push({ value: id, label: id, description: THEME_PREFERENCE_DESCRIPTIONS[id] })
   }
-  if (before[before.length - 1] === 'reasoning') {
-    for (const value of DETAILS_REASONING) push(value, `Turn reasoning blocks ${value}`)
-    return menu(items)
-  }
-  if (!before.some(token => (DETAILS_VISIBILITY as readonly string[]).includes(token))) {
-    for (const value of DETAILS_VISIBILITY) push(value, `Show tool cards ${value}`)
-  }
-  if (!before.includes('reasoning')) push('reasoning', 'Toggle reasoning blocks, or set them explicitly')
   return menu(items)
 }
 

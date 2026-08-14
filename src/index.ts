@@ -107,7 +107,17 @@ import type {
 import { ApprovalDialog } from './components/approval.ts'
 import { displayInlineText, displayText } from './components/text.ts'
 import { contentText } from './components/content.ts'
-import { brandText, createPalette, markdownTheme, renderPalette, selectTheme } from './components/theme.ts'
+import {
+  brandText,
+  createPalette,
+  isThemePreference,
+  markdownTheme,
+  renderPalette,
+  resolveThemeAppearance,
+  selectTheme,
+  THEME_PREFERENCES,
+  type ThemePreferenceId,
+} from './components/theme.ts'
 import { cardPhaseNotice, TranscriptReconciler } from './components/reconciler.ts'
 import { SessionStore } from './core/session-store.ts'
 import type { SessionSnapshot } from './core/types.ts'
@@ -141,6 +151,7 @@ import {
   HeaderComponent,
   planModeRow,
   TodoComponent,
+  TOOL_CARD_PHASES,
 } from './components/transcript.ts'
 import { claudeMarkdownTheme } from './render/markdown.ts'
 import { ScrollablePanel } from './components/panel.ts'
@@ -158,9 +169,16 @@ import {
   type PluginInventoryReader,
 } from './components/plugins-panel.ts'
 import {
+  SettingsPanel,
+  type SettingsEntry,
+} from './components/settings-panel.ts'
+import {
+  openTuiPreferences,
+  type TuiPreferenceStore,
+} from './chat/preferences.ts'
+import {
   compactTargetLabel,
   CUSTOM_ANSWER_HINT,
-  DetailsDialog,
   diagnosticMeter,
   formatDiagnosticCount,
   formatDiagnosticNumber,
@@ -170,7 +188,7 @@ import {
   StatusCardComponent,
   PromptContextComponent,
   targetLabel,
-  type DetailsSelection,
+  ThemeDialog,
   type StatusCardRow,
 } from './components/dialogs.ts'
 import {
@@ -215,11 +233,11 @@ import type { TuiForkRequest, TuiResumeHost, TuiRuntime } from './runtime.ts'
 import { toolCallTouchesFiles, WorkspaceFileSearch } from './chat/file-autocomplete.ts'
 import { resolveFileSearchCommand } from './chat/fd.ts'
 import {
-  detailsArgumentCompletions,
   memoizeListing,
   modelArgumentCompletions,
   presetArgumentCompletions,
   resumeArgumentCompletions,
+  themeArgumentCompletions,
   type CompletableSession,
 } from './chat/command-completions.ts'
 import {
@@ -598,7 +616,33 @@ export function createTuiChat(
   // line, so an editor constructed ahead of this would answer to pi-tui's
   // defaults for the rest of its life.
   const keybindings = installKeybindings(resolved.keybindings)
-  const palette = createPalette(resolved.theme.color)
+  /**
+   * The choices `/config` and `/theme` write, read once here so the first frame
+   * is already painted in the theme the user picked in an earlier session.
+   *
+   * The report is deferred to a microtask: nothing exists to append a notice to
+   * while the terminal is still being assembled.
+   */
+  const preferences: TuiPreferenceStore = openTuiPreferences(
+    ctx,
+    { showReasoning: resolved.showReasoning },
+    (message) => {
+      queueMicrotask(() => {
+        if (!disposed) appendNotice(message, 'warning')
+      })
+    },
+  )
+  const storedPreferences = preferences.current()
+  /**
+   * The theme this terminal paints with, and the scheme the terminal itself
+   * last reported. `auto` follows the report; the other three override it, so
+   * both facts are kept — a user who returns to `auto` gets the terminal's own
+   * answer back rather than whichever palette was forced over it.
+   */
+  let themePreference: ThemePreferenceId = storedPreferences.theme
+  let reportedScheme: TerminalColorScheme = 'dark'
+  let appearance = resolveThemeAppearance(themePreference, reportedScheme, resolved.theme.color)
+  const palette = createPalette(appearance.color, appearance.scheme)
   const mdTheme = markdownTheme(palette)
   const ui: TUI = new TuiMainScreen(runtime.terminal, resolved.showHardwareCursor)
   const chat = new Container()
@@ -648,10 +692,11 @@ export function createTuiChat(
    * leaves `running`.
    */
   let cancelRequested = false
-  let showReasoning = resolved.showReasoning
+  let showReasoning = storedPreferences.showReasoning
   // Ctrl+O cycles collapsed -> expanded -> hidden. Codex-style: hidden drops
-  // tool cards entirely, collapsed previews, expanded shows full bodies.
-  let toolsVisibility: ToolCardVisibility = 'collapsed'
+  // tool cards entirely, collapsed previews, expanded shows full bodies. The
+  // session opens on the stored default; the key moves this session alone.
+  let toolsVisibility: ToolCardVisibility = storedPreferences.toolCards
   // One shared accumulator serves every step's timing footer; per-footer
   // replay of the whole log is quadratic on a long resumed session.
   const stepTimingTracker = new StepTimingTracker()
@@ -812,16 +857,12 @@ export function createTuiChat(
       })
     },
   }
-  /**
-   * The color scheme the terminal last reported, and the one every fill on
-   * screen is chosen against. Declared here rather than beside
-   * `applyColorScheme` because the reconciler reads it per mount.
-   */
-  let currentScheme: TerminalColorScheme = 'dark'
   const transcript = new TranscriptReconciler(chat, {
     palette,
     mdTheme,
-    scheme: () => currentScheme,
+    // The scheme every fill on screen is chosen against: the terminal's report
+    // under `auto`, and whichever scheme `/theme` forced otherwise.
+    scheme: () => appearance.scheme,
     markdown,
     maxToolOutputLines: resolved.maxToolOutputLines,
     maxDiffEditLength: resolved.maxDiffEditLength,
@@ -1361,7 +1402,7 @@ export function createTuiChat(
    */
   const applyPlanMode = (active: boolean): void => {
     planContainer.clear()
-    if (active) planContainer.addChild(new Text(planModeRow(palette, currentScheme), 0, 0))
+    if (active) planContainer.addChild(new Text(planModeRow(palette, appearance.scheme), 0, 0))
   }
 
   /**
@@ -1635,11 +1676,16 @@ export function createTuiChat(
     flashStatus(ask, EXIT_CONFIRM_MS)
   }
 
-  /** Swap the palette and all derived themes for the given terminal color scheme. */
-  const applyColorScheme = (scheme: TerminalColorScheme): void => {
-    if (scheme === currentScheme) return
-    currentScheme = scheme
-    Object.assign(palette, createPalette(resolved.theme.color, scheme))
+  /**
+   * Rebuild the palette and every theme derived from it, when the two inputs
+   * that decide it — the stored `/theme` choice and the terminal's own report —
+   * resolve to something other than what is on screen.
+   */
+  const repaint = (): void => {
+    const next = resolveThemeAppearance(themePreference, reportedScheme, resolved.theme.color)
+    if (next.scheme === appearance.scheme && next.color === appearance.color) return
+    appearance = next
+    Object.assign(palette, createPalette(next.color, next.scheme))
     Object.assign(mdTheme, markdownTheme(palette))
     // Rows cache the escapes they were built with, so every component is
     // remounted from the same nodes under the new palette.
@@ -1648,6 +1694,29 @@ export function createTuiChat(
     // `setStatus` below re-derives `editor.borderColor` from the new palette.
     setStatus(agent.status)
     requestRender()
+  }
+
+  /** Record what the terminal says about itself; `auto` is what acts on it. */
+  const applyColorScheme = (scheme: TerminalColorScheme): void => {
+    reportedScheme = scheme
+    repaint()
+  }
+
+  /**
+   * Paint one theme, without saving it — the preview the selector runs on every
+   * highlight move, and the path `/theme <id>` and the `/config` row commit
+   * through {@link saveThemePreference}.
+   */
+  const applyThemePreference = (theme: ThemePreferenceId): void => {
+    themePreference = theme
+    repaint()
+  }
+
+  /** Paint one theme and keep it: the choice a user made outlives the process. */
+  const saveThemePreference = (theme: ThemePreferenceId): void => {
+    applyThemePreference(theme)
+    preferences.save({ theme })
+    flashStatus(`Theme: ${theme}.`)
   }
 
   // Apply any color scheme the terminal reports. Registering before the query
@@ -1662,12 +1731,24 @@ export function createTuiChat(
   // same reason.
   ui.queryTerminalColorScheme({ timeoutMs: 2000 }).catch(() => {})
 
-  const setToolsVisibility = (next: ToolCardVisibility): void => {
+  /**
+   * Move the tool-card phase, and optionally make it this user's default.
+   *
+   * The two callers want different reaches, which is why the write is a
+   * parameter rather than a rule: Ctrl+O is a look at the conversation in front
+   * of you and stays in this session, while the `/config` row is the phase
+   * every future session opens on. A key that wants to write the default opts
+   * in here rather than persisting behind the cycle.
+   * @param next - the phase to enter.
+   * @param options - `persist` writes it to the settings document as well.
+   */
+  const setToolsVisibility = (next: ToolCardVisibility, options?: { persist?: boolean }): void => {
     toolsVisibility = next
     // The reconciler owns card visibility, so one call re-places every card,
     // and it also owns the sentence naming what the phase leaves on screen —
     // the collapsed phase renders no context card, so it must not say it does.
     transcript.setVisibility(toolsVisibility)
+    if (options?.persist === true) preferences.save({ toolCards: toolsVisibility })
     flashStatus(cardPhaseNotice(toolsVisibility))
   }
 
@@ -1696,78 +1777,77 @@ export function createTuiChat(
     requestRender()
   }
 
-  const setReasoning = (show: boolean): void => {
+  /**
+   * Show or hide reasoning blocks, and optionally keep the answer.
+   *
+   * Reasoning display has no key of its own here: Ctrl+O's expanded phase
+   * already shows the thinking blocks, and Ctrl+R is worth more as history
+   * search than as a second switch over the same rows. The `/config` row is
+   * where the value is chosen, and it writes; a key that later wants the same
+   * switch calls this with `persist` when it means "from now on".
+   * @param show - whether reasoning blocks stay on screen.
+   * @param options - `persist` writes it to the settings document as well.
+   */
+  const setReasoning = (show: boolean, options?: { persist?: boolean }): void => {
     showReasoning = show
     // Every mounted step toggles in place, so a running stream keeps streaming
     // and the rows above it keep their positions.
     transcript.setShowReasoning(showReasoning)
+    if (options?.persist === true) preferences.save({ showReasoning })
     flashStatus(`Reasoning blocks ${showReasoning ? 'shown' : 'hidden'}.`)
   }
 
-  // Reasoning display has no key of its own: Ctrl+O's expanded phase already
-  // shows the thinking blocks, and Ctrl+R is worth more as history search than
-  // as a second switch over the same rows. `/details` and the selector below
-  // still set it, and a deployment can still turn it off in config.
-  //
-  // The selector and the argument grammar mutate the same closure state the
-  // Ctrl+O cycle drives, so every entry converges.
-  let detailsOverlay: TuiOverlaySession | undefined
-  const showDetailsSelector = (): void => {
-    void detailsOverlay?.close()
+  /**
+   * The theme selector `/theme` opens and the `/config` panel's Theme row
+   * enters, in the editor slot like every other interactive surface.
+   *
+   * One selector, two doors: a value picked here is painted while the highlight
+   * moves and written on Enter, so the two entries cannot drift into two
+   * different vocabularies for the same four themes.
+   */
+  let themeOverlay: TuiOverlaySession | undefined
+  const showThemeSelector = (): void => {
+    void themeOverlay?.close()
     const session = overlayManager.open({
-      create: () => new DetailsDialog(
-        toolsVisibility,
-        showReasoning,
+      create: () => new ThemeDialog(
+        themePreference,
         palette,
-        // Each Tab applies immediately; one dimension changes per call.
-        (selection: DetailsSelection) => {
-          if (selection.showReasoning !== showReasoning) setReasoning(selection.showReasoning)
-          if (selection.visibility !== toolsVisibility) setToolsVisibility(selection.visibility)
-        },
+        applyThemePreference,
+        saveThemePreference,
         () => { void session.close() },
       ),
-      options: { width: resolved.detailsDialogWidth },
+      options: { width: resolved.settingsDialogWidth },
       // A view of this screen's own settings: a permission prompt or a question
       // that arrives while it is open takes the slot back.
       dismissable: true,
-      // Under the conversation, in the editor slot, like every other
-      // interactive surface — not floating over the transcript it previews.
     }, 'inline')
-    detailsOverlay = session
+    themeOverlay = session
     void session.closed.then(() => {
-      if (detailsOverlay === session) detailsOverlay = undefined
+      if (themeOverlay === session) themeOverlay = undefined
     })
     requestRender()
   }
 
-  // `/details` names the same transcript-detail state the Ctrl+O cycle mutates,
-  // plus the reasoning switch that has no key of its own, so a user can jump to
-  // a mode without cycling.
-  const runDetails = (rawInput: string): CommandResult => {
-    const tokens = rawInput.split(/\s+/u).filter(token => token !== '')
-    if (tokens.length === 0) {
-      showDetailsSelector()
+  /**
+   * `/theme [auto|light|dark|no-color]`: the selector without an argument, and
+   * the named theme with one, so a user who knows what they want does not have
+   * to walk a list to get it.
+   * @param rawInput - everything typed after the command name.
+   * @returns success, or the refusal naming the four values.
+   */
+  const runTheme = (rawInput: string): CommandResult => {
+    const token = rawInput.trim()
+    if (token === '') {
+      showThemeSelector()
       return { kind: 'success' }
     }
-    let visibility: ToolCardVisibility | undefined
-    let reasoning: boolean | undefined
-    for (let token = tokens.shift(); token !== undefined; token = tokens.shift()) {
-      if (token === 'collapsed' || token === 'expanded' || token === 'hidden') {
-        visibility = token
-      } else if (token === 'reasoning') {
-        const value = tokens[0]
-        if (value === 'on' || value === 'off') {
-          tokens.shift()
-          reasoning = value === 'on'
-        } else {
-          reasoning = !showReasoning
-        }
-      } else {
-        return { kind: 'error', text: `Unknown /details argument "${token}". Usage: /details [collapsed|expanded|hidden] [reasoning [on|off]]` }
+    if (!isThemePreference(token)) {
+      return {
+        kind: 'error',
+        text: `Unknown theme "${displayInlineText(token)}". Usage: /theme [${THEME_PREFERENCES.join('|')}]`,
       }
     }
-    if (reasoning !== undefined) setReasoning(reasoning)
-    if (visibility !== undefined) setToolsVisibility(visibility)
+    saveThemePreference(token)
     return { kind: 'success' }
   }
 
@@ -1781,7 +1861,7 @@ export function createTuiChat(
     Math.min(resolved.questionDialogMaxHeight, runtime.terminal.rows - editorRowCount()),
   )
   // One panel at a time, in the same editor slot the question, approval, model,
-  // and details surfaces use; opening another replaces it.
+  // and settings surfaces use; opening another replaces it.
   let panelOverlay: TuiOverlaySession | undefined
   /**
    * Show one page of pre-rendered lines under the editor, in the inline slot.
@@ -1838,6 +1918,9 @@ export function createTuiChat(
       `session ${displayText(agent.session.id)} · agent ${agent.status}${agentGone ? ' · detached' : ''}`,
       `events ${String(agent.session.events.length)} · context ${String(Math.round(contextTokens()))} tokens`,
       `terminal ${String(runtime.terminal.columns)}x${String(runtime.terminal.rows)} · editor ${String(editorRowCount())} rows`,
+      // Both facts, because `auto` is the default and a forced theme is exactly
+      // the kind of thing a "the colors are wrong" report never mentions.
+      `theme ${themePreference} · painting ${appearance.scheme}${appearance.color ? '' : ' · no color'} · terminal reports ${reportedScheme}`,
       `cards ${toolsVisibility} · reasoning ${showReasoning ? 'shown' : 'hidden'} · plan ${todo.isExpanded() ? 'expanded' : 'collapsed'}`,
       `overlay ${overlayManager.hasActiveOverlay() ? 'active' : 'none'} · pending steering ${String(pendingSteering.size)}`,
       '',
@@ -1865,7 +1948,7 @@ export function createTuiChat(
   }
 
   const showPalette = (): void => {
-    showPanel('/palette', renderPalette(palette, currentScheme, resolved.theme.color))
+    showPanel('/palette', renderPalette(palette, appearance.scheme, appearance.color))
   }
 
   /**
@@ -1883,6 +1966,88 @@ export function createTuiChat(
     const session = overlayManager.open({
       create: () => new PluginsPanel(
         inventory?.list(),
+        panelRows,
+        palette,
+        () => { void session.close() },
+      ),
+      dismissable: true,
+    }, 'inline')
+    panelOverlay = session
+    void session.closed.then(() => {
+      if (panelOverlay === session) panelOverlay = undefined
+    })
+    requestRender()
+  }
+
+  /**
+   * The `/config` rows, rebuilt per open so a value changed elsewhere — Ctrl+O,
+   * `/theme`, `/model` — is the value the panel shows.
+   *
+   * Deliberately short. This is the terminal's own presentation, not the
+   * harness's configuration: everything a deployment sets in `cordis.yml` and
+   * everything a session decides through its own command stays where it is, and
+   * a row that another command owns says so rather than growing a second way to
+   * set it.
+   * @returns the entries in display order.
+   */
+  const settingsEntries = (): SettingsEntry[] => [
+    {
+      kind: 'toggle',
+      label: 'Thinking display',
+      value: () => showReasoning,
+      // Written, not just applied: this row is the answer to "do I want to read
+      // the model's reasoning", which is a preference, not a per-session look.
+      set: next => { setReasoning(next, { persist: true }); requestRender() },
+    },
+    {
+      kind: 'choice',
+      label: 'Tool cards default',
+      options: TOOL_CARD_PHASES,
+      value: () => toolsVisibility,
+      set: (next) => {
+        /* v8 ignore next -- the options are TOOL_CARD_PHASES, so every value is one. */
+        if (next !== 'collapsed' && next !== 'expanded' && next !== 'hidden') return
+        setToolsVisibility(next, { persist: true })
+        requestRender()
+      },
+    },
+    {
+      kind: 'submenu',
+      label: 'Theme',
+      value: () => themePreference,
+      // The selector replaces this panel in the one inline slot; closing it
+      // returns to the conversation, not to the panel, which is what every
+      // other surface here does with the slot it took.
+      open: showThemeSelector,
+    },
+    {
+      kind: 'notice',
+      label: 'Language',
+      // TODO(i18n): read the selected language once the localization layer
+      // lands; until then this terminal has exactly one language and says so.
+      value: () => 'English',
+      hint: '(/lang)',
+    },
+    {
+      kind: 'notice',
+      label: 'Model',
+      value: () => target.current === undefined ? 'unset' : targetLabel(target.current),
+      hint: '(/model)',
+    },
+  ]
+
+  /**
+   * The settings panel, in the same inline slot every other panel takes.
+   *
+   * Changes apply as they are made — there is no OK button, because there is
+   * nothing to confirm: each row is one value, already live on the screen
+   * behind the panel, and already written.
+   */
+  const showSettings = (): void => {
+    void panelOverlay?.close()
+    const session = overlayManager.open({
+      create: () => new SettingsPanel(
+        settingsEntries(),
         panelRows,
         palette,
         () => { void session.close() },
@@ -2026,7 +2191,7 @@ export function createTuiChat(
    * command whose argument is free text (or that takes none).
    *
    * `argumentHint` describes the shape of an argument; these say which values
-   * exist in THIS session, so `/model `, `/preset `, `/details `, and
+   * exist in THIS session, so `/model `, `/preset `, `/theme `, and
    * `/resume ` offer the same rows their pickers would. Optional services are
    * read inside the closure, not captured: the roster and the session store
    * mount independently of the command registry, so a source resolved when the
@@ -2052,8 +2217,8 @@ export function createTuiChat(
             ? null
             : presetArgumentCompletions(presets, prefix, resolved.maxModelOptions)
         }
-      case 'details':
-        return detailsArgumentCompletions
+      case 'theme':
+        return themeArgumentCompletions
       case 'resume':
         return prefix => resumeArgumentCompletions(
           {
@@ -2295,10 +2460,15 @@ export function createTuiChat(
       handler: () => { transcript.clearTranscript(); requestRender(); return { kind: 'success' } },
     })
     commandCtx.commands.register({
-      name: 'details',
-      description: 'Select tool-card visibility and reasoning display',
-      input: { hint: '[collapsed|expanded|hidden] [reasoning [on|off]]' },
-      handler: ({ rawInput }) => runDetails(rawInput),
+      name: 'config',
+      description: 'Change this terminal\'s settings, saved for your next session',
+      handler: () => { showSettings(); return { kind: 'success' } },
+    })
+    commandCtx.commands.register({
+      name: 'theme',
+      description: 'Pick the palette this terminal paints with',
+      input: { hint: '[auto|light|dark|no-color]' },
+      handler: ({ rawInput }) => runTheme(rawInput),
     })
     commandCtx.commands.register({
       name: 'palette',
