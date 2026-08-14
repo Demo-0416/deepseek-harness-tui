@@ -67,9 +67,9 @@ interface SubmitHandle {
 }
 
 /**
- * One markdown document exercising the two constructs the pipelines disagree
- * on: pi draws a box-drawing table and a `│` quote bar, the claude port a pipe
- * table and a `▎` bar. Either renderer's output names itself.
+ * One markdown document exercising the construct the pipelines disagree on:
+ * pi draws a `│` quote bar, the claude port a `▎` bar (both draw box tables,
+ * so the quote bar is what names the renderer).
  */
 const RENDERER_PROBE = '> quoted line\n\n| a | b |\n| - | - |\n| 1 | 2 |'
 
@@ -174,8 +174,9 @@ describe('assistant body markdown renderer', () => {
     const body = new MarkdownBodyComponent(RENDERER_PROBE, palette, markdownTheme(palette), policy)
     const frame = body.render(40).join('\n')
     assert.match(frame, /▎ quoted line/)
-    assert.match(frame, /\| a\s+\| b\s+\|/)
-    assert.doesNotMatch(frame, /┌/, 'the box-drawing table is pi\'s, not the port\'s')
+    // Upstream's MarkdownTable draws box borders with a centered header row.
+    assert.match(frame, /┌─────┬─────┐/)
+    assert.match(frame, /│ {2}a {2}│ {2}b {2}│/)
   })
 })
 
@@ -187,7 +188,7 @@ describe('assistant body renderer selection', { skip: skipWithoutEntry }, () => 
     try {
       const frame = harness.terminal.text()
       assert.match(frame, /▎ quoted line/, `the claude quote bar must reach the transcript:\n${frame}`)
-      assert.doesNotMatch(frame, /┌───/, `and pi's table must not:\n${frame}`)
+      assert.doesNotMatch(frame, /│ quoted line/, `and pi's quote bar must not:\n${frame}`)
     } finally {
       await unmount(harness)
     }

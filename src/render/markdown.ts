@@ -29,12 +29,12 @@
  *   difference between rendering and not rendering a Chinese answer (see
  *   {@link hasMarkdownSyntax}).
  *
- * Tables stay a monospace-aligned text block of `|` cells (upstream promotes
- * them to a flexbox React component), but the column widths come from that
- * component's algorithm rather than from the text path's: they are fitted to
- * the render width and cell content wraps inside its column, because a table
- * padded to its widest cell is re-wrapped by the caller the moment it is wider
- * than the terminal, and a re-wrapped table is a wall of stray pipes.
+ * Tables are a monospace text block with the upstream React component's own
+ * glyphs and column algorithm (`MarkdownTable.tsx`: box-drawing borders, `│`
+ * walls, centered header): the widths are fitted to the render width and cell
+ * content wraps inside its column, because a table padded to its widest cell
+ * is re-wrapped by the caller the moment it is wider than the terminal, and a
+ * re-wrapped table is a wall of stray glyphs.
  * @module @deepseek-ai/dsh-tui/render/markdown
  */
 
@@ -554,8 +554,9 @@ function longestWordWidth(plain: string): number {
 }
 
 /**
- * Chrome around the cells of an `n`-column row: the leading `|`, then `| ` and
- * ` ` around every column. `| a | b |` is 1 + 2×3 columns wide beyond its cells.
+ * Chrome around the cells of an `n`-column row: the leading `│`, then a space,
+ * the cell, and ` │` per column. `│ a │ b │` is 1 + 2×3 columns wide beyond
+ * its cells.
  */
 function tableChromeWidth(columns: number): number {
   return 1 + columns * 3
@@ -620,19 +621,23 @@ function formatRow(
   row: readonly MeasuredCell[],
   columnWidths: readonly number[],
   align: ReadonlyArray<'center' | 'left' | 'right' | null>,
+  isHeader: boolean,
 ): string {
   const wrapped = row.map((cell, index) => wrapCell(cell.content, columnWidths[index] ?? MIN_COLUMN_WIDTH))
   const height = Math.max(1, ...wrapped.map(lines => lines.length))
   const offsets = wrapped.map(lines => Math.floor((height - lines.length) / 2))
   let output = ''
   for (let lineIndex = 0; lineIndex < height; lineIndex += 1) {
-    let line = '| '
+    let line = '│'
     wrapped.forEach((lines, index) => {
       const text = lines[lineIndex - (offsets[index] ?? 0)] ?? ''
       const width = columnWidths[index] ?? MIN_COLUMN_WIDTH
-      line += padAligned(text, displayWidth(text), width, align[index] ?? null) + ' | '
+      // Upstream centers every header cell; only data cells read the source's
+      // alignment markers.
+      const cellAlign = isHeader ? 'center' : align[index] ?? null
+      line += ` ${padAligned(text, displayWidth(text), width, cellAlign)} │`
     })
-    output += line.trimEnd() + EOL
+    output += line + EOL
   }
   return output
 }
@@ -646,8 +651,12 @@ function formatRow(
  * than pushing the row past the terminal — a row that overflows is re-wrapped
  * by the caller, and a re-wrapped row loses every column boundary it had. The
  * one case that still overflows is a terminal too narrow for three columns per
- * cell, where there is nothing left to shrink. Alignment colons are not echoed
- * into the separator row.
+ * cell, where there is nothing left to shrink.
+ *
+ * The glyphs are upstream's `MarkdownTable.tsx` verbatim: box-drawing borders
+ * (`┌─┬─┐`, a `├─┼─┤` rule between every row, `└─┴─┘`), `│` cell walls, and a
+ * centered header row. Alignment colons are consumed by the layout, never
+ * echoed.
  * @param table - The table token.
  * @param ctx - Theme, highlighter, hyperlink policy, and render width.
  * @returns The rendered table, ending in a blank line.
@@ -671,14 +680,14 @@ function formatTable(table: Tokens.Table, ctx: FormatContext): string {
   const available = Math.max(ctx.width - tableChromeWidth(columns), columns * MIN_COLUMN_WIDTH)
   const columnWidths = fitColumns(ideal, minimum, available)
 
-  let output = ''
+  const border = (left: string, cross: string, right: string): string =>
+    `${left}${columnWidths.map(width => '─'.repeat(width + 2)).join(cross)}${right}${EOL}`
+  let output = border('┌', '┬', '┐')
   rendered.forEach((row, rowIndex) => {
-    output += formatRow(row, columnWidths, table.align)
-    if (rowIndex === 0) {
-      output += `|${columnWidths.map(width => '-'.repeat(width + 2)).join('|')}|${EOL}`
-    }
+    output += formatRow(row, columnWidths, table.align, rowIndex === 0)
+    if (rowIndex < rendered.length - 1) output += border('├', '┼', '┤')
   })
-  return output + EOL
+  return output + border('└', '┴', '┘') + EOL
 }
 
 // ---------------------------------------------------------------------------

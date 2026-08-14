@@ -45,15 +45,16 @@ function plain(source: string, width = 60): string[] {
 }
 
 /**
- * The terminal columns a row's `|` characters land on. Counted in columns, not
- * in string indexes: a CJK cell holds half as many characters per column, so
- * two aligned rows have their pipes at completely different indexes.
+ * The terminal columns a row's cell walls (`│`, and the border glyphs above
+ * and below them) land on. Counted in columns, not in string indexes: a CJK
+ * cell holds half as many characters per column, so two aligned rows have
+ * their walls at completely different indexes.
  */
-function pipeColumns(row: string): number[] {
+function wallColumns(row: string): number[] {
   const columns: number[] = []
   let column = 0
   for (const char of stripTerminalSequences(row)) {
-    if (char === '|') columns.push(column)
+    if ('│┌┬┐├┼┤└┴┘'.includes(char)) columns.push(column)
     column += visibleWidth(char)
   }
   return columns
@@ -326,20 +327,32 @@ describe('markdown fast path', () => {
 
 describe('markdown tables', () => {
   it('renders a table as its own block, padded to the widest visible cell', () => {
+    // Upstream's MarkdownTable glyphs verbatim: box-drawing borders, a rule
+    // between every row, a centered header, and data cells on the source's
+    // alignment markers.
     assert.deepEqual(plain('intro\n\n| name | qty |\n|---|---:|\n| 中文 | 12 |\n| b | 3 |\n\nend'), [
       'intro',
       '',
-      '| name | qty |',
-      '|------|-----|',
-      '| 中文 |  12 |',
-      '| b    |   3 |',
+      '┌──────┬─────┐',
+      '│ name │ qty │',
+      '├──────┼─────┤',
+      '│ 中文 │  12 │',
+      '├──────┼─────┤',
+      '│ b    │   3 │',
+      '└──────┴─────┘',
       '',
       'end',
     ])
   })
 
-  it('pads a column to the three-character minimum', () => {
-    assert.deepEqual(plain('| a | b |\n|---|---|\n| 1 | 2 |'), ['| a   | b   |', '|-----|-----|', '| 1   | 2   |'])
+  it('pads a column to the three-character minimum and centers the header', () => {
+    assert.deepEqual(plain('| a | b |\n|---|---|\n| 1 | 2 |'), [
+      '┌─────┬─────┐',
+      '│  a  │  b  │',
+      '├─────┼─────┤',
+      '│ 1   │ 2   │',
+      '└─────┴─────┘',
+    ])
   })
 
   it('keeps a CJK table inside 100 columns with its pipes aligned', () => {
@@ -359,14 +372,15 @@ describe('markdown tables', () => {
     for (const row of rows) {
       assert.ok(visibleWidth(row) <= 100, `${visibleWidth(row)} > 100: ${JSON.stringify(row)}`)
     }
-    const columnsOf = rows.map(pipeColumns)
+    const columnsOf = rows.filter(row => row !== '').map(wallColumns)
     const [first = []] = columnsOf
     for (const columns of columnsOf) {
-      assert.deepEqual(columns, first, `every row's pipes must land in the same columns:\n${rows.join('\n')}`)
+      assert.deepEqual(columns, first, `every row's walls must land in the same columns:\n${rows.join('\n')}`)
     }
-    assert.equal(rows.filter(row => /^\|-+\|/u.test(row)).length, 1, 'exactly one rule, the rendered one')
+    assert.equal(rows.filter(row => row.startsWith('┌')).length, 1, 'one top border')
+    assert.equal(rows.filter(row => row.startsWith('└')).length, 1, 'one bottom border')
     assert.ok(
-      !rows.some(row => /-{3,}\s*\|?\s*$/u.test(row) && !/^\|-/u.test(row)),
+      !rows.some(row => /[-|]{3,}/u.test(stripTerminalSequences(row))),
       `the source's own separator row must not survive:\n${rows.join('\n')}`,
     )
     assert.ok(rows.join('\n').includes('纯 foldEvent 归约'), rows.join('\n'))
@@ -389,7 +403,7 @@ describe('markdown tables', () => {
     for (let width = 13; width <= 60; width += 1) {
       for (const row of plain(source, width)) {
         assert.ok(visibleWidth(row) <= width, `width ${width}: ${visibleWidth(row)} > ${width}: ${JSON.stringify(row)}`)
-        assert.ok(row === '' || row.startsWith('|'), `width ${width}: re-wrapped row ${JSON.stringify(row)}`)
+        assert.ok(row === '' || /^[┌│├└]/u.test(row), `width ${width}: re-wrapped row ${JSON.stringify(row)}`)
       }
     }
   })
