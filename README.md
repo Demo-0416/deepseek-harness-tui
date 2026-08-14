@@ -1,5 +1,10 @@
 # deepseek-harness-tui
 
+[![npm](https://img.shields.io/npm/v/deepseek-harness-tui)](https://www.npmjs.com/package/deepseek-harness-tui)
+[![license](https://img.shields.io/npm/l/deepseek-harness-tui)](./LICENSE)
+
+**English** | [简体中文](./README.zh.md)
+
 Interactive terminal UI for [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness),
 installed as a dsh profile bundle. It renders into the terminal's main screen —
 no alternate screen, so the conversation stays in the scrollback after you leave
@@ -7,42 +12,60 @@ no alternate screen, so the conversation stays in the scrollback after you leave
 
 ![dsh TUI demo: launch, ask, watch the agent read a file and answer](assets/demo.gif)
 
+## Highlights
+
+- **A transcript built for agents** — streaming answers, tool cards with live
+  output, and a one-row collapse for runs of read-only calls (`Thought for 8s,
+  searched for 3 patterns, read 2 files`); Ctrl+O reopens the cards.
+- **Steer while it runs** — the editor stays live under a running turn: Enter
+  steers, Esc cancels, and queued prompts are handed back on cancel.
+- **Modes on one key** — Shift+Tab cycles normal → auto-accept → plan; the
+  badges above the prompt and `/permission` / `/plan` always agree, because the
+  key writes through the same services.
+- **Sessions are durable** — `/resume` picks up any past session, `/rewind`
+  forks back to an earlier prompt with the original left intact, `/search`
+  greps everything the session holds.
+- **Models and providers, in place** — `/model` picks a route and reasoning
+  effort (per session or as the saved default); `/login` stores a key checked
+  against the endpoint before it lands in the credential store.
+- **A terminal that adapts** — light/dark/no-color themes previewed live,
+  English/Chinese chrome (`/lang`), rebindable keys, `@` file references
+  honoring `.gitignore` via `fd`.
+- **Scriptable** — `--print` runs one task with no UI and answers on stdout,
+  under the same flags, model, and preset as the interactive run.
+
 A turn as it streams: the tool card the agent's `read` call renders, the
 thinking that follows it, the answer arriving token by token — and the editor
 still live underneath, waiting for a steer (`Enter`) or a cancel (`Esc`):
 
 ![A streaming turn: tool card, thinking, partial answer, steer hint](assets/turn-streaming.png)
 
-## Prerequisite
+## Quick start
 
 The [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) must be installed
 first — this package is a dsh plugin, not a standalone program:
 
 ```sh
 npm install -g @deepseek-ai/dsh
-```
-
-## Install
-
-```sh
 dsh plugin --profile tui add deepseek-harness-tui
+dsh --profile tui
 ```
 
-This installs the package into a new `tui` profile (dsh-base + deepseek-harness-tui) and
-activates it on next launch.
+The plugin command installs the package into a new `tui` profile (dsh-base +
+deepseek-harness-tui) and activates it on next launch.
 
 ![The welcome screen: banner, model route, workspace, and loaded plugins](assets/welcome.png)
 
 ## Usage
 
 ```sh
-dsh --profile tui                                # start the interactive TUI
-dsh --profile tui "fix the failing test"         # start and send an initial prompt
-dsh --profile tui --continue                     # resume the most recent session
-dsh --profile tui --resume <sessionId>           # resume a specific session
-dsh --profile tui --preset code                  # start on the "code" agent preset
-dsh --profile tui -m kimi-coding/kimi-for-coding # override the model
-dsh --profile tui --print "run the tests"        # one task, one answer on stdout
+dsh --profile tui                                      # start the interactive TUI
+dsh --profile tui "fix the failing test"               # start and send an initial prompt
+dsh --profile tui --continue                           # resume the most recent session
+dsh --profile tui --resume <sessionId>                 # resume a specific session
+dsh --profile tui --preset code                        # start on the "code" agent preset
+dsh --profile tui -m deepseek-official/deepseek-v4-flash  # override the model
+dsh --profile tui --print "run the tests"              # one task, one answer on stdout
 ```
 
 | Flag | Action |
