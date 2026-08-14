@@ -183,7 +183,7 @@ describe('--print', () => {
     await runPrintTask(ctx, 'run the tests', {
       openAgent: () => Promise.resolve(scriptedAgent(session, (target) => {
         target.append('turn/start', { turn: 1 })
-        target.append('turn/end', { turn: 1, reason: { kind: 'aborted', reason: 'user' } })
+        target.append('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } })
       })),
     }, io)
 
