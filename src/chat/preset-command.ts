@@ -35,6 +35,8 @@ import type {} from '@deepseek-ai/dsh-agent-presets'
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type { TuiOverlaySession } from '../extension/types.ts'
 import { PresetDialog, type PresetChoice } from '../components/dialogs.ts'
+import { displayInlineText } from '../components/text.ts'
+import { t } from '../i18n/index.ts'
 import type { ChannelNotice, ChatChannelDeps } from './channel.ts'
 
 /**
@@ -222,7 +224,7 @@ export function createPresetController(deps: PresetControllerDeps): PresetContro
   const showPresetSelector = (choices: readonly PresetChoice[], defaultId: string): void => {
     const current = sessionAgentPreset(agent.session)
     if (choices.length === 0) {
-      deps.appendNotice('This deployment\'s preset roots supply no presets.', 'warning')
+      deps.appendNotice(t('preset.noRoster'), 'warning')
       return
     }
     void presetOverlay?.close()
@@ -238,7 +240,13 @@ export function createPresetController(deps: PresetControllerDeps): PresetContro
           // The list shows broken presets so their directories are visible; it
           // is this refusal, not a hidden row, that keeps one from composing.
           if (choice.broken !== undefined) {
-            deps.appendNotice(`Preset "${choice.id}" cannot compose a session: ${choice.broken}`, 'error')
+            deps.appendNotice(
+              t('preset.broken.refusal', {
+                id: displayInlineText(choice.id),
+                reason: displayInlineText(choice.broken),
+              }),
+              'error',
+            )
             return
           }
           queue(() => applyPreset(choice.id))

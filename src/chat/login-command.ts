@@ -43,7 +43,7 @@ import {
   type ProbeOutcome,
 } from './provider-probe.ts'
 import type { ChannelNotice, ChannelPendingHint, ChatChannelDeps } from './channel.ts'
-import { t } from '../i18n/index.ts'
+import { plural, t } from '../i18n/index.ts'
 
 /** Collaborators the login controller needs from the chat channel. */
 export type LoginControllerDeps = ChatChannelDeps & ChannelNotice & ChannelPendingHint
@@ -392,7 +392,7 @@ export function createLoginController(deps: LoginControllerDeps): LoginControlle
       kind: 'checklist',
       title: t('provider.models.title'),
       lines: [
-        t('provider.models.lead', { count: models.length }),
+        plural(models.length, 'provider.models.lead'),
         t('provider.models.tickNone'),
       ],
       items: models.map(model => ({
@@ -560,7 +560,7 @@ export function createLoginController(deps: LoginControllerDeps): LoginControlle
         const where = entry.apiKeyEnv === undefined
           ? t('login.roster.noKey')
           : t('login.roster.keyIn', { env: entry.apiKeyEnv })
-        const count = models.length === 0 ? '' : t('provider.list.models', { count: models.length })
+        const count = models.length === 0 ? '' : plural(models.length, 'provider.list.models')
         lines.push(`  ${displayInlineText(entry.provider)} — ${where}${count}`)
       }
     }

@@ -185,7 +185,7 @@ export const EN_MESSAGES = {
   'doctor.color.truecolor': '16-color palette, truecolor brand art',
   'doctor.model.noProvider': 'no LLM provider is registered',
   'doctor.model.noProviderAdvice':
-    'the profile mounts no adapter row, or none of them activated; check the bundle and its credentials',
+    'the profile mounts no adapter row, or none of them activated; check the bundle, or give a provider a key with /login',
   'doctor.model.noRoute': 'no model selected (providers: {providers})',
   'doctor.model.noRouteAdvice': 'pick one with /model, or pass --model provider/model on the command line',
   'doctor.model.resolves': '{route} resolves (providers: {providers})',
@@ -194,7 +194,7 @@ export const EN_MESSAGES = {
     'no adapter answers for "{provider}"; mount its plugin row, or switch with /model',
   'doctor.model.failed': '{route} did not resolve: {error}',
   'doctor.model.failedAdvice':
-    'the adapter is registered but rejected the lookup; check the provider\'s credentials and base URL',
+    'the adapter is registered but rejected the lookup; check the base URL, and run /login if the key is the suspect',
   'doctor.persistence.mounted': 'sessionPersistence is mounted',
   'doctor.persistence.missing': 'sessionPersistence is not mounted',
   'doctor.persistence.advice':
@@ -246,6 +246,19 @@ export const EN_MESSAGES = {
   'dialog.preset.title': 'Select agent preset',
   'dialog.preset.noMatch': 'No presets match the filter',
   'dialog.preset.hint': 'type to filter • ↑/↓ move • Enter select • Esc',
+
+  // What a preset row says about itself, shared by the picker, the argument
+  // menu, and the refusal. One state, one word: a preset that cannot compose is
+  // "unavailable" wherever it is named, the same word `/resume` uses for a
+  // session it will not reopen.
+  'preset.badge.current': 'current',
+  'preset.badge.default': 'default',
+  'preset.badge.builtIn': 'built-in',
+  'preset.badge.local': 'local',
+  'preset.broken.badge': 'unavailable: {reason}',
+  'preset.broken.refusal': 'Preset "{id}" is unavailable: {reason}',
+  'preset.noRoster': 'This deployment\'s preset roots supply no presets.',
+  'preset.arg.copy': 'Copy an existing preset under a new id',
 
   // `/config`: the panel's own chrome and one label per row. The two hints
   // beside a notice row are command names (`/lang`, `/model`), which every
@@ -584,12 +597,14 @@ export const EN_MESSAGES = {
   // `/provider`: the listing, and the form that describes a route no adapter
   // ships.
   'provider.usage': 'Usage: /provider [add]',
+  'provider.arg.add': 'Describe an endpoint no adapter ships',
   'provider.noStore':
     'This deployment has no writable settings or credential store, so a provider cannot be added here.',
   'provider.error.read': 'Could not read providers: {error}',
   'provider.list.empty': 'No providers are configured, and no adapter offers any. Use /provider add.',
   'provider.list.configured': 'Configured:',
-  'provider.list.models': ', {count} model(s)',
+  'provider.list.models.one': ', {count} model',
+  'provider.list.models.other': ', {count} models',
   'provider.list.available': 'Available to configure with /login:',
   'provider.list.addHint': 'Use /provider add to describe an endpoint no adapter ships.',
   'provider.add.title': 'Add a provider',
@@ -619,7 +634,8 @@ export const EN_MESSAGES = {
   'provider.model.none': 'This endpoint did not list its models. Name one, or leave it empty to let the adapter decide.',
   'provider.model.prompt': 'Model id (optional).',
   'provider.models.title': 'Models',
-  'provider.models.lead': '{count} model(s) reported by the endpoint. Ticked models are written into settings.',
+  'provider.models.lead.one': '{count} model reported by the endpoint. Ticked models are written into settings.',
+  'provider.models.lead.other': '{count} models reported by the endpoint. Ticked models are written into settings.',
   'provider.models.tickNone': 'Tick none to serve whatever the adapter finds.',
   'provider.refuse.routeEmpty': 'Enter a name, or press Esc to cancel.',
   'provider.refuse.routeShape':
@@ -779,14 +795,14 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'doctor.color.basic': '16 色配色',
   'doctor.color.truecolor': '16 色配色，品牌图形用 truecolor',
   'doctor.model.noProvider': '没有注册任何 LLM provider',
-  'doctor.model.noProviderAdvice': 'profile 里没有 adapter 行，或者它们都没激活；检查 bundle 与其凭据',
+  'doctor.model.noProviderAdvice': 'profile 里没有 adapter 行，或者它们都没激活；检查 bundle，或者用 /login 给一个 provider 配上 key',
   'doctor.model.noRoute': '未选择模型（provider：{providers}）',
   'doctor.model.noRouteAdvice': '用 /model 选一个，或在命令行传 --model provider/model',
   'doctor.model.resolves': '{route} 可解析（provider：{providers}）',
   'doctor.model.noAdapter': '{route} 没有对应的 adapter',
   'doctor.model.noAdapterAdvice': '没有 adapter 负责 "{provider}"；挂上它的 plugin 行，或用 /model 换一个',
   'doctor.model.failed': '{route} 解析失败：{error}',
-  'doctor.model.failedAdvice': 'adapter 已注册但拒绝了这次查询；检查该 provider 的凭据与 base URL',
+  'doctor.model.failedAdvice': 'adapter 已注册但拒绝了这次查询；检查 base URL，如果怀疑是 key 就跑一次 /login',
   'doctor.persistence.mounted': '已挂载 sessionPersistence',
   'doctor.persistence.missing': '未挂载 sessionPersistence',
   'doctor.persistence.advice': '本会话只存在于内存中：退出后无法 resume，/export 导出的也只是还在内存里的内容',
@@ -830,6 +846,15 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'dialog.preset.title': '选择 agent preset',
   'dialog.preset.noMatch': '没有 preset 匹配当前筛选',
   'dialog.preset.hint': '输入以筛选 • ↑/↓ 移动 • Enter 选择 • Esc 取消',
+
+  'preset.badge.current': '当前',
+  'preset.badge.default': '默认',
+  'preset.badge.builtIn': '内置',
+  'preset.badge.local': '本地',
+  'preset.broken.badge': '不可用：{reason}',
+  'preset.broken.refusal': 'preset "{id}" 不可用：{reason}',
+  'preset.noRoster': '这个部署的 preset 根目录里没有任何 preset。',
+  'preset.arg.copy': '复制一个已有 preset，另存为新 id',
 
   'settings.hint': '↑↓ 移动 · enter 修改 · esc 关闭',
   'settings.thinking': '思考块显示',
@@ -1078,11 +1103,13 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'login.refuse.keyIllegal': '这把 key 里有空白或控制字符，请重新粘贴。',
 
   'provider.usage': '用法：/provider [add]',
+  'provider.arg.add': '描述一个没有任何 adapter 自带的 endpoint',
   'provider.noStore': '这个部署没有可写的 settings 或 credential store，provider 无法在这里添加。',
   'provider.error.read': '没能读取 provider 列表：{error}',
   'provider.list.empty': '没有已配置的 provider，也没有任何 adapter 提供。用 /provider add 添加。',
   'provider.list.configured': '已配置：',
-  'provider.list.models': '，{count} 个 model',
+  'provider.list.models.one': '，{count} 个 model',
+  'provider.list.models.other': '，{count} 个 model',
   'provider.list.available': '可以用 /login 配置：',
   'provider.list.addHint': '用 /provider add 可以描述一个没有任何 adapter 自带的 endpoint。',
   'provider.add.title': '添加一个 provider',
@@ -1111,7 +1138,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'provider.model.none': '这个 endpoint 没有列出自己的 model。写一个，或者留空交给 adapter 决定。',
   'provider.model.prompt': 'Model id（可选）。',
   'provider.models.title': 'Model',
-  'provider.models.lead': 'endpoint 报告了 {count} 个 model。勾选的会写入 settings。',
+  'provider.models.lead.one': 'endpoint 报告了 {count} 个 model。勾选的会写入 settings。',
+  'provider.models.lead.other': 'endpoint 报告了 {count} 个 model。勾选的会写入 settings。',
   'provider.models.tickNone': '一个都不勾，就用 adapter 自己找到的。',
   'provider.refuse.routeEmpty': '请输入名字，或按 Esc 取消。',
   'provider.refuse.routeShape': 'provider 名以字母或数字开头，只能包含字母、数字、点、短横线和下划线。',

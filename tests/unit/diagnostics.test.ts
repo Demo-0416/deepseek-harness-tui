@@ -257,7 +257,10 @@ describe('/doctor model check', () => {
     }), 'Model')
     assert.equal(refused.status, 'fail')
     assert.match(refused.detail, /401 unauthorized/u)
-    assert.match(refused.advice ?? '', /credentials/u)
+    // The remedy names the command that fixes the credential half of this
+    // verdict, the way every other /doctor line names one where it exists.
+    assert.match(refused.advice ?? '', /base URL/u)
+    assert.match(refused.advice ?? '', /\/login/u)
   })
 })
 

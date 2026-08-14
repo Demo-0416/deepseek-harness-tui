@@ -33,12 +33,15 @@ import {
 } from '../../src/chat/file-autocomplete.ts'
 import { ReferenceAutocompleteProvider } from '../../src/chat/autocomplete.ts'
 import {
+  loginArgumentCompletions,
   memoizeListing,
   modelArgumentCompletions,
   presetArgumentCompletions,
+  providerArgumentCompletions,
   resumeArgumentCompletions,
   themeArgumentCompletions,
   type CompletableModel,
+  type CompletableProvider,
   type CompletableSession,
 } from '../../src/chat/command-completions.ts'
 
@@ -283,7 +286,10 @@ describe('/preset argument completions', () => {
     const items = await presetArgumentCompletions(source, '', 10)
     assert.deepEqual(items?.map(item => item.value), ['copy ', 'general', 'review', 'broken-one'])
     assert.equal(items?.[1]?.description, 'default · the default composition')
-    assert.equal(items?.[3]?.description, 'unusable: missing agent file')
+    // One word for one state: the picker row, this menu, and the refusal all
+    // say "unavailable", which is what `/resume` calls a session it will not
+    // reopen too.
+    assert.equal(items?.[3]?.description, 'unavailable: missing agent file')
   })
 
   it('completes only the source preset of a copy, and nothing past the grammar', async () => {
@@ -292,6 +298,36 @@ describe('/preset argument completions', () => {
       ['copy review'],
     )
     assert.equal(await presetArgumentCompletions(source, 'copy review new-', 10), null)
+  })
+})
+
+describe('/login and /provider argument completions', () => {
+  const roster: CompletableProvider[] = [
+    { provider: 'deepseek', displayName: 'DeepSeek', configured: true, apiKeyEnv: 'DEEPSEEK_API_KEY' },
+    { provider: 'acme', displayName: 'acme', configured: true },
+    { provider: 'moonshot', displayName: 'Moonshot', configured: false },
+  ]
+
+  it('offers the roster the picker would show, and says where each key lives', () => {
+    const items = loginArgumentCompletions(roster, '', 10)
+    assert.deepEqual(items?.map(item => item.value), ['deepseek', 'acme', 'moonshot'])
+    assert.equal(items?.[0]?.description, 'DeepSeek · key in DEEPSEEK_API_KEY')
+    assert.equal(items?.[1]?.description, 'no key stored', 'a route named after itself repeats nothing')
+    assert.equal(items?.[2]?.description, 'Moonshot · Available to configure')
+  })
+
+  it('matches the display name as well as the route, and opens no empty menu', () => {
+    assert.deepEqual(loginArgumentCompletions(roster, 'moon', 10)?.map(item => item.value), ['moonshot'])
+    assert.deepEqual(loginArgumentCompletions(roster, 'ACM', 10)?.map(item => item.value), ['acme'])
+    assert.equal(loginArgumentCompletions(roster, 'openai', 10), null)
+    assert.equal(loginArgumentCompletions([], '', 10), null)
+    assert.equal(loginArgumentCompletions(roster, '', 1)?.length, 1, 'the row budget is honoured')
+  })
+
+  it('completes /provider with the one verb its grammar has', () => {
+    assert.deepEqual(providerArgumentCompletions('')?.map(item => item.value), ['add'])
+    assert.deepEqual(providerArgumentCompletions('ad')?.map(item => item.value), ['add'])
+    assert.equal(providerArgumentCompletions('remove'), null)
   })
 })
 

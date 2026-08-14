@@ -228,6 +228,34 @@ describe('TUI exit ladder', { skip: skipWithoutEntry }, () => {
     }
   })
 
+  it('holds the event loop open with nothing of its own after the exit', async () => {
+    // The observable symptom this pins: in a PTY the two presses printed the
+    // goodbye and the resume line, and then the process sat there for up to two
+    // more seconds. Nothing was wrong with the shutdown — a startup query had
+    // armed a two-second timer to answer a question nobody was listening for,
+    // and a referenced timer is a reason for Node to stay alive whether or not
+    // anything still wants it. Counting live timers rather than naming the
+    // culprit keeps this true of the next one as well.
+    const liveTimers = (): number =>
+      process.getActiveResourcesInfo().filter(name => name === 'Timeout').length
+    const before = liveTimers()
+    const exits: number[] = []
+    const harness = await mount({}, (code) => { exits.push(code) })
+    try {
+      harness.terminal.send(CTRL_C)
+      await delay(SETTLE_MS)
+      harness.terminal.send(CTRL_C)
+      await delay(SETTLE_MS)
+      assert.deepEqual(exits, [0], 'the two presses did leave')
+      assert.ok(
+        liveTimers() <= before,
+        `the exited terminal holds no timer of its own: ${String(liveTimers())} live, ${String(before)} before it mounted`,
+      )
+    } finally {
+      await unmount(harness)
+    }
+  })
+
   it('starts the ladder over once the turn does end', async () => {
     const exits: number[] = []
     const harness = await mount({}, (code) => { exits.push(code) })

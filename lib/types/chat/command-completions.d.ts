@@ -56,6 +56,17 @@ export interface PresetSource {
     /** Preset id a session composes when it names none. */
     readonly defaultId: string;
 }
+/** One provider row, as `/login` completion needs it. */
+export interface CompletableProvider {
+    /** Route key, which is exactly what the argument carries. */
+    provider: string;
+    /** Human-readable name, falling back to the route key. */
+    displayName: string;
+    /** Whether settings already store a profile for this route. */
+    configured: boolean;
+    /** Environment variable the stored profile reads its key from, when set. */
+    apiKeyEnv?: string;
+}
 /** One resumable session, reduced to what a completion row can show. */
 export interface CompletableSession {
     /** Session id, which is what the argument carries. */
@@ -137,6 +148,30 @@ export declare function themeArgumentCompletions(argumentPrefix: string): Autoco
  * @returns the matching locales, or `null` for no menu.
  */
 export declare function langArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null;
+/**
+ * Complete `/login [provider]` with the same roster the picker opens on.
+ *
+ * The argument is a closed set — the command refuses a name that is not on the
+ * roster — so leaving it uncompleted would make the newest command the one that
+ * asks the user to type a name blind and then refuses the guess. Rows keep the
+ * picker's own description: where a configured route's key is read from, and
+ * for a route that is only offered by the adapter's directory, that configuring
+ * it is what `/login` would be doing.
+ * @param roster - the provider roster, as the login controller reads it.
+ * @param argumentPrefix - argument text typed so far.
+ * @param limit - maximum rows offered.
+ * @returns the providers still matching, or `null` for no menu.
+ */
+export declare function loginArgumentCompletions(roster: readonly CompletableProvider[], argumentPrefix: string, limit: number): AutocompleteItem[] | null;
+/**
+ * Complete `/provider [add]`, whose whole grammar is one verb.
+ *
+ * The bare command lists what is configured and needs no argument, so the menu
+ * exists to name the one word that does something else.
+ * @param argumentPrefix - argument text typed so far.
+ * @returns the `add` row while it still matches, or `null` for no menu.
+ */
+export declare function providerArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null;
 /**
  * Complete `/resume [session]` with this workspace's resumable sessions.
  *

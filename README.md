@@ -230,11 +230,15 @@ its four values, and `/resume` this workspace's recent sessions.
   holds what settings already configure and what the adapter's own directory
   offers, which is what lets a machine with an empty settings file reach
   DeepSeek's official endpoint at all. The key is never echoed — the field draws
-  dots — and it is checked against the endpoint before it is stored: a 401 or a
-  403 stores nothing, and a key that could not be checked is stored only after
-  an explicit yes and is then reported as unchecked rather than as working. The
-  secret goes to the credential store's own file; settings record the variable
-  name and nothing else. `/provider` lists the same two groups, and
+  dots — and it is checked against the endpoint before it is stored where there
+  is an endpoint to check: a 401 or a 403 stores nothing; a key an endpoint
+  could not answer for is stored only after an explicit yes; and a catalog
+  route, whose endpoint lives inside the adapter where this terminal cannot see
+  it, is stored straight away because there was never anything here to ask. A
+  key the endpoint actually answered for is the only one the receipt calls
+  checked; every other stored key is reported as unchecked rather than as
+  working. The secret goes to the credential store's own file; settings record
+  the variable name and nothing else. `/provider` lists the same two groups, and
   `/provider add` walks a route the adapter has never heard of through name,
   endpoint, protocol, credential variable, key, and the models the endpoint
   reports.

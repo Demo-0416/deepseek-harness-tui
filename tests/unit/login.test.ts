@@ -12,7 +12,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { afterEach, describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { LlmDiscoveredModel, LlmModelDiscoveryRequest } from '@deepseek-ai/dsh-llm'
 import {
@@ -23,6 +23,7 @@ import {
   type TuiHarnessOptions,
 } from '../harness.ts'
 import { HeadlessTerminal } from '../headless-terminal.ts'
+import { setLocale } from '../../src/i18n/index.ts'
 
 /** `src/index.ts` is landed by a separate port; without it this suite cannot run. */
 const entryAvailable = await tuiEntryAvailable()
@@ -491,6 +492,63 @@ describe('/provider', { skip: skipWithoutEntry }, () => {
       const screen = await press(harness, '\r')
       assert.match(screen, /already configured/u, `the collision is refused:\n${screen}`)
       assert.match(screen, /\/login/u, `and the command that does re-key it is named:\n${screen}`)
+    } finally {
+      await unmount(harness)
+    }
+  })
+})
+
+describe('/login under /lang zh', { skip: skipWithoutEntry }, () => {
+  // Every other surface migrated to `t()` on this branch got a rendering
+  // assertion in its own language; without one the zh table can lose a row and
+  // still ship green, because `t()` falls back to English in silence.
+  afterEach(() => { setLocale('en') })
+
+  it('draws the wizard and the receipt out of the Chinese table', async () => {
+    const recorder = recordingServices(ACME_SECTION)
+    const harness = await mount({
+      catalog: {
+        providers: [],
+        models: [],
+        discoverModels: async () => [] satisfies LlmDiscoveredModel[],
+      },
+      services: recorder.services,
+    })
+    try {
+      setLocale('zh')
+      await run(harness, '/login acme')
+      const typed = await press(harness, FAKE_KEY)
+      assert.match(typed, /粘贴 API key/u, `the prompt is translated:\n${typed}`)
+      assert.match(typed, /credential store/u, `and so is the sentence under it:\n${typed}`)
+      assert.doesNotMatch(typed, /sk-not-a-real-key/u, 'the key is still not echoed')
+
+      const done = await press(harness, '\r')
+      assert.match(done, /key 以 ACME_API_KEY 保存在 credential store/u,
+        `the receipt names the variable in Chinese:\n${done}`)
+      assert.match(done, /endpoint 已接受这把 key/u,
+        `and states the verdict in Chinese:\n${done}`)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('lists providers in Chinese too', async () => {
+    const recorder = recordingServices(ACME_SECTION)
+    const harness = await mount({
+      catalog: {
+        providers: [],
+        models: [],
+        configurableProviders: [DEEPSEEK_DIRECTORY],
+        discoverModels: async () => [] satisfies LlmDiscoveredModel[],
+      },
+      services: recorder.services,
+    })
+    try {
+      setLocale('zh')
+      const screen = await run(harness, '/provider')
+      assert.match(screen, /已配置：/u, `the configured group is translated:\n${screen}`)
+      assert.match(screen, /可以用 \/login 配置：/u,
+        `and so is the group that points at /login:\n${screen}`)
     } finally {
       await unmount(harness)
     }

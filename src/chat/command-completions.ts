@@ -63,6 +63,18 @@ export interface PresetSource {
   readonly defaultId: string
 }
 
+/** One provider row, as `/login` completion needs it. */
+export interface CompletableProvider {
+  /** Route key, which is exactly what the argument carries. */
+  provider: string
+  /** Human-readable name, falling back to the route key. */
+  displayName: string
+  /** Whether settings already store a profile for this route. */
+  configured: boolean
+  /** Environment variable the stored profile reads its key from, when set. */
+  apiKeyEnv?: string
+}
+
 /** One resumable session, reduced to what a completion row can show. */
 export interface CompletableSession {
   /** Session id, which is what the argument carries. */
@@ -214,15 +226,15 @@ export async function presetArgumentCompletions(
   const presets = await source.list()
   const items: AutocompleteItem[] = []
   if (!copying && matches('copy', typed)) {
-    items.push({ value: 'copy ', label: 'copy', description: 'Copy an existing preset under a new id' })
+    items.push({ value: 'copy ', label: 'copy', description: t('preset.arg.copy') })
   }
   for (const preset of presets) {
     if (!matches(preset.id, typed)) continue
     const detail = preset.broken === undefined
       ? preset.description ?? preset.name
-      : `unusable: ${preset.broken}`
+      : t('preset.broken.badge', { reason: preset.broken })
     const description = [
-      preset.id === source.defaultId ? 'default' : undefined,
+      preset.id === source.defaultId ? t('preset.badge.default') : undefined,
       detail,
     ].filter(part => part !== undefined && part !== '').join(' · ')
     items.push({
@@ -275,6 +287,59 @@ export function langArgumentCompletions(argumentPrefix: string): AutocompleteIte
     })
   }
   return menu(items)
+}
+
+/**
+ * Complete `/login [provider]` with the same roster the picker opens on.
+ *
+ * The argument is a closed set — the command refuses a name that is not on the
+ * roster — so leaving it uncompleted would make the newest command the one that
+ * asks the user to type a name blind and then refuses the guess. Rows keep the
+ * picker's own description: where a configured route's key is read from, and
+ * for a route that is only offered by the adapter's directory, that configuring
+ * it is what `/login` would be doing.
+ * @param roster - the provider roster, as the login controller reads it.
+ * @param argumentPrefix - argument text typed so far.
+ * @param limit - maximum rows offered.
+ * @returns the providers still matching, or `null` for no menu.
+ */
+export function loginArgumentCompletions(
+  roster: readonly CompletableProvider[],
+  argumentPrefix: string,
+  limit: number,
+): AutocompleteItem[] | null {
+  const typed = argumentPrefix.trim()
+  const items: AutocompleteItem[] = []
+  for (const entry of roster) {
+    if (!matches(entry.provider, typed) && !matches(entry.displayName, typed)) continue
+    const state = !entry.configured
+      ? t('login.group.available')
+      : entry.apiKeyEnv === undefined
+        ? t('login.roster.noKey')
+        : t('login.roster.keyIn', { env: entry.apiKeyEnv })
+    const description = [
+      entry.displayName === entry.provider ? undefined : displayInlineText(entry.displayName),
+      state,
+    ].filter(part => part !== undefined && part !== '').join(' · ')
+    items.push({ value: entry.provider, label: itemLabel(entry.provider), description })
+    if (items.length >= limit) break
+  }
+  return menu(items)
+}
+
+/**
+ * Complete `/provider [add]`, whose whole grammar is one verb.
+ *
+ * The bare command lists what is configured and needs no argument, so the menu
+ * exists to name the one word that does something else.
+ * @param argumentPrefix - argument text typed so far.
+ * @returns the `add` row while it still matches, or `null` for no menu.
+ */
+export function providerArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
+  const typed = argumentPrefix.trim()
+  return matches('add', typed)
+    ? [{ value: 'add', label: 'add', description: t('provider.arg.add') }]
+    : null
 }
 
 /**

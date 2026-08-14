@@ -247,13 +247,16 @@ import { toolCallTouchesFiles, WorkspaceFileSearch } from './chat/file-autocompl
 import { resolveFileSearchCommand } from './chat/fd.ts'
 import {
   langArgumentCompletions,
+  loginArgumentCompletions,
   memoizeListing,
   modelArgumentCompletions,
   presetArgumentCompletions,
+  providerArgumentCompletions,
   resumeArgumentCompletions,
   themeArgumentCompletions,
   type CompletableSession,
 } from './chat/command-completions.ts'
+import { readProviderRoster } from './chat/provider-store.ts'
 import {
   AGENT_START_TIMEOUT_MS,
   EXIT_IDLE_TIMEOUT_MS,
@@ -445,6 +448,24 @@ const ESCAPE_DOUBLE_PRESS_MS = 800
  * Ctrl+C typed minutes later is a fresh intent rather than a stale half of one.
  */
 const EXIT_CONFIRM_MS = 2_000
+
+/**
+ * Device-status report asking the terminal which color scheme it is set to
+ * (`CSI ? 996 n`); a terminal that implements the palette-notification protocol
+ * answers `CSI ? 997 ; 1 n` for dark or `CSI ? 997 ; 2 n` for light, and most
+ * answer nothing at all.
+ *
+ * Written directly rather than through pi-tui's `queryTerminalColorScheme`,
+ * whose answer this terminal already takes from `onTerminalColorSchemeChange`
+ * instead: that helper arms a two-second `setTimeout` so it can resolve a
+ * promise nothing here reads, and neither the timer nor the promise can be
+ * reached from outside to cancel. A referenced timer that teardown cannot clear
+ * is the one thing an exit path must not leave behind — the process sat in the
+ * event loop for the remainder of that window after printing its goodbye,
+ * instead of ending — and it is the same rule `clearStatus` already applies to
+ * the armed-exit timer.
+ */
+const COLOR_SCHEME_QUERY = '\x1b[?996n'
 
 /**
  * Longest a "working on it" hint holds the status row when the command that
@@ -2053,9 +2074,15 @@ export function createTuiChat(
 
   // Ask the terminal for its color scheme via device-status report; the reply,
   // if any, arrives through the listener above. Most terminals do not respond,
-  // so we keep the dark-optimised palette. Swallow a query-write failure for the
-  // same reason.
-  ui.queryTerminalColorScheme({ timeoutMs: 2000 }).catch(() => {})
+  // so we keep the dark-optimised palette — and, per {@link COLOR_SCHEME_QUERY},
+  // wait for the answer with no clock at all rather than with one that outlives
+  // the session. Swallow a query-write failure for the same reason: a terminal
+  // that will not take the question is a terminal that was not going to answer.
+  try {
+    runtime.terminal.write(COLOR_SCHEME_QUERY)
+  } catch (_terminalWillNotTakeTheQuestion: unknown) {
+    // The palette stays as resolved above.
+  }
 
   /**
    * Move the tool-card phase, and optionally make it this user's default.
@@ -2759,7 +2786,7 @@ export function createTuiChat(
    * command whose argument is free text (or that takes none).
    *
    * `argumentHint` describes the shape of an argument; these say which values
-   * exist in THIS session, so `/model `, `/preset `, `/theme `, and
+   * exist in THIS session, so `/model `, `/preset `, `/theme `, `/login `, and
    * `/resume ` offer the same rows their pickers would. Optional services are
    * read inside the closure, not captured: the roster and the session store
    * mount independently of the command registry, so a source resolved when the
@@ -2789,6 +2816,17 @@ export function createTuiChat(
         return themeArgumentCompletions
       case 'lang':
         return langArgumentCompletions
+      case 'login':
+        // Read per keystroke rather than captured: a route added by
+        // `/provider add` in this same session must be offerable immediately,
+        // and the roster is assembled from settings already in memory.
+        return prefix => loginArgumentCompletions(
+          readProviderRoster(ctx),
+          prefix,
+          resolved.maxModelOptions,
+        )
+      case 'provider':
+        return providerArgumentCompletions
       case 'resume':
         return prefix => resumeArgumentCompletions(
           {

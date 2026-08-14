@@ -676,12 +676,14 @@ export class PresetDialog implements Component {
    */
   private describeChoice(choice: PresetChoice): string {
     const badges = [
-      ...choice.id === this.current ? ['current'] : [],
-      ...choice.id === this.defaultId ? ['default'] : [],
-      ...choice.trust === 'system' ? ['built-in'] : ['local'],
+      ...choice.id === this.current ? [t('preset.badge.current')] : [],
+      ...choice.id === this.defaultId ? [t('preset.badge.default')] : [],
+      ...choice.trust === 'system' ? [t('preset.badge.builtIn')] : [t('preset.badge.local')],
     ].join(' · ')
     return [
-      ...choice.broken === undefined ? [] : [`unavailable: ${displayText(choice.broken)}`],
+      ...choice.broken === undefined
+        ? []
+        : [t('preset.broken.badge', { reason: displayText(choice.broken) })],
       badges,
       ...choice.name === undefined ? [] : [displayText(choice.name)],
       ...choice.description === undefined ? [] : [displayText(choice.description)],
