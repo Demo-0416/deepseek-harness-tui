@@ -377,9 +377,9 @@ function lastActivityTime(session: Session): number | undefined {
 }
 
 /**
- * How long a transient confirmation (the Ctrl+O card cycle, the Ctrl+T plan
- * toggle) stays on the status row before the row goes back to what it was
- * showing.
+ * How long a transient confirmation (the Ctrl+O card cycle, the Ctrl+T thinking
+ * switch, the Ctrl+Y plan toggle) stays on the status row before the row goes
+ * back to what it was showing.
  */
 const STATUS_FLASH_MS = 1_500
 
@@ -433,6 +433,14 @@ const MIN_PANEL_ROWS = 5
  */
 const DISPOSED_RECOVERY = 'Run /resume to open another session, or press ctrl+d to exit.'
 
+/** What the Ctrl+T switch reports in each of its three states. */
+const THINKING_PINNED = 'Thinking blocks kept on screen.'
+const THINKING_UNPINNED = 'Thinking blocks hidden once a step finishes.'
+const REASONING_DISABLED = 'Thinking blocks are off in this configuration (showReasoning: false).'
+
+/** How the debug and status surfaces name the Ctrl+T state. */
+const THINKING_STATE_LABELS = { disabled: 'disabled', pinned: 'kept', live: 'while streaming' } as const
+
 /**
  * Every key this terminal binds, as `/hotkeys`, `/help` and `?` list them.
  *
@@ -450,7 +458,8 @@ function keyboardShortcuts(manager: KeybindingsManager): string[] {
     'Enter send • Shift/Alt+Enter newline • Up/Down prompt history • Tab accept a completion',
     '@ reference a file • / run a command • /skill:<name> load a skill • ? this list',
     `${key('app.history.search')} search prompt history backwards • ${key('app.todos.toggle')} expand or collapse the plan`,
-    `${key('app.tools.cycle')} cycle tool cards (preview/full/hidden) • ${key('app.message.copy')} copy the last answer • ${key('app.screen.redraw')} redraw`,
+    `${key('app.tools.cycle')} cycle tool cards (preview/full/hidden) • ${key('app.thinking.toggle')} show or hide thinking blocks`,
+    `${key('app.message.copy')} copy the last answer • ${key('app.screen.redraw')} redraw`,
     `${key('app.cancel')} cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind`,
     `${key('app.exit')} exit on an empty prompt • Shift+Ctrl+D session debug panel`,
     'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
@@ -648,7 +657,24 @@ export function createTuiChat(
    * leaves `running`.
    */
   let cancelRequested = false
-  let showReasoning = resolved.showReasoning
+  /**
+   * The deployment's master switch over reasoning, read once and never moved.
+   *
+   * `showReasoning: false` means this transcript does not show reasoning at
+   * all — no phase, no key, no command — so it is a constant here rather than
+   * the seed of a runtime toggle: a switch a user could flip back on would make
+   * the setting a default rather than the policy it is meant to be.
+   */
+  const reasoningEnabled = resolved.showReasoning
+  /**
+   * Ctrl+T: whether finished steps keep their thinking blocks on screen.
+   *
+   * A presentation switch and nothing else — the model reasons either way, and
+   * flipping it re-renders the whole transcript, history included. Off (the
+   * default) is Claude Code's shape: thinking streams while the step runs and
+   * goes with the step that produced it.
+   */
+  let thinkingPinned = false
   // Ctrl+O cycles collapsed -> expanded -> hidden. Codex-style: hidden drops
   // tool cards entirely, collapsed previews, expanded shows full bodies.
   let toolsVisibility: ToolCardVisibility = 'collapsed'
@@ -829,7 +855,7 @@ export function createTuiChat(
     tracker: stepTimingTracker,
     now,
     toolDefinition: name => ctx.tools.get(name, agent),
-  }, { showReasoning, visibility: toolsVisibility })
+  }, { showReasoning: reasoningEnabled, visibility: toolsVisibility, thinkingPinned })
 
   let sessionTitle = store.getSnapshot().title
   const formattedCwd = displayText(runtime.formatCwd?.(agent.session.header.cwd) ?? formatCwd(agent.session.header.cwd))
@@ -1679,7 +1705,7 @@ export function createTuiChat(
   }
 
   /**
-   * Show the plan's items or its one-line summary (Ctrl+T).
+   * Show the plan's items or its one-line summary (Ctrl+Y).
    *
    * The panel used to be unconditional, so a session with a long plan spent the
    * rows above the prompt on it from the moment the agent wrote one until the
@@ -1696,18 +1722,40 @@ export function createTuiChat(
     requestRender()
   }
 
-  const setReasoning = (show: boolean): void => {
-    showReasoning = show
-    // Every mounted step toggles in place, so a running stream keeps streaming
-    // and the rows above it keep their positions.
-    transcript.setShowReasoning(showReasoning)
-    flashStatus(`Reasoning blocks ${showReasoning ? 'shown' : 'hidden'}.`)
+  /**
+   * Keep or drop thinking blocks across the whole transcript (Ctrl+T).
+   *
+   * Purely presentational: the model reasons whatever this says, and every
+   * mounted step re-renders in place, so a running stream keeps streaming while
+   * history gains or loses its asides. Independent of the Ctrl+O card cycle —
+   * pinned thinking survives the hidden phase, and expanded still brings
+   * thinking back on its own while the pin is off.
+   * @param pinned - Whether a finished step keeps its thinking on screen.
+   */
+  const setThinking = (pinned: boolean): void => {
+    if (!reasoningEnabled) {
+      // A key that does nothing at all reads as a broken key, so the refusal is
+      // spoken rather than silent — and it names the setting, because that is
+      // the only thing that can bring the blocks back.
+      flashStatus(REASONING_DISABLED)
+      return
+    }
+    thinkingPinned = pinned
+    transcript.setThinkingPinned(thinkingPinned)
+    // `flashStatus` requests the frame, which is also the one that re-lays the
+    // transcript the call above just rebuilt.
+    flashStatus(thinkingPinned ? THINKING_PINNED : THINKING_UNPINNED)
   }
 
-  // Reasoning display has no key of its own: Ctrl+O's expanded phase already
-  // shows the thinking blocks, and Ctrl+R is worth more as history search than
-  // as a second switch over the same rows. `/details` and the selector below
-  // still set it, and a deployment can still turn it off in config.
+  const toggleThinking = (): void => { setThinking(!thinkingPinned) }
+
+  /** The Ctrl+T state as the debug and status surfaces report it. */
+  const thinkingStateLabel = (): string => !reasoningEnabled
+    ? THINKING_STATE_LABELS.disabled
+    : thinkingPinned ? THINKING_STATE_LABELS.pinned : THINKING_STATE_LABELS.live
+
+  // `/details` names the same switch Ctrl+T flips, so a user who found it in the
+  // command list and a user who found the key converge on one state.
   //
   // The selector and the argument grammar mutate the same closure state the
   // Ctrl+O cycle drives, so every entry converges.
@@ -1717,11 +1765,12 @@ export function createTuiChat(
     const session = overlayManager.open({
       create: () => new DetailsDialog(
         toolsVisibility,
-        showReasoning,
+        thinkingPinned,
+        reasoningEnabled,
         palette,
         // Each Tab applies immediately; one dimension changes per call.
         (selection: DetailsSelection) => {
-          if (selection.showReasoning !== showReasoning) setReasoning(selection.showReasoning)
+          if (selection.showThinking !== thinkingPinned) setThinking(selection.showThinking)
           if (selection.visibility !== toolsVisibility) setToolsVisibility(selection.visibility)
         },
         () => { void session.close() },
@@ -1740,9 +1789,11 @@ export function createTuiChat(
     requestRender()
   }
 
-  // `/details` names the same transcript-detail state the Ctrl+O cycle mutates,
-  // plus the reasoning switch that has no key of its own, so a user can jump to
-  // a mode without cycling.
+  // `/details` names the same transcript-detail state the Ctrl+O cycle and the
+  // Ctrl+T switch mutate, so a user can jump to a mode without cycling. Its
+  // `reasoning` token keeps that spelling — it is the argument this command
+  // shipped with, and renaming it would break the sessions and scripts that
+  // type it — but it drives the Ctrl+T pin, which is the only switch left.
   const runDetails = (rawInput: string): CommandResult => {
     const tokens = rawInput.split(/\s+/u).filter(token => token !== '')
     if (tokens.length === 0) {
@@ -1760,13 +1811,13 @@ export function createTuiChat(
           tokens.shift()
           reasoning = value === 'on'
         } else {
-          reasoning = !showReasoning
+          reasoning = !thinkingPinned
         }
       } else {
         return { kind: 'error', text: `Unknown /details argument "${token}". Usage: /details [collapsed|expanded|hidden] [reasoning [on|off]]` }
       }
     }
-    if (reasoning !== undefined) setReasoning(reasoning)
+    if (reasoning !== undefined) setThinking(reasoning)
     if (visibility !== undefined) setToolsVisibility(visibility)
     return { kind: 'success' }
   }
@@ -1838,7 +1889,7 @@ export function createTuiChat(
       `session ${displayText(agent.session.id)} · agent ${agent.status}${agentGone ? ' · detached' : ''}`,
       `events ${String(agent.session.events.length)} · context ${String(Math.round(contextTokens()))} tokens`,
       `terminal ${String(runtime.terminal.columns)}x${String(runtime.terminal.rows)} · editor ${String(editorRowCount())} rows`,
-      `cards ${toolsVisibility} · reasoning ${showReasoning ? 'shown' : 'hidden'} · plan ${todo.isExpanded() ? 'expanded' : 'collapsed'}`,
+      `cards ${toolsVisibility} · thinking ${thinkingStateLabel()} · plan ${todo.isExpanded() ? 'expanded' : 'collapsed'}`,
       `overlay ${overlayManager.hasActiveOverlay() ? 'active' : 'none'} · pending steering ${String(pendingSteering.size)}`,
       '',
       ...Object.keys(APP_KEYBINDINGS).map(action => `${action} → ${keyLabel(keybindings, action as AppKeybinding)}`),
@@ -1945,7 +1996,7 @@ export function createTuiChat(
         ['Session', displayText(agent.session.id)],
         ['Title', displayText(sessionTitle ?? 'untitled')],
         ['Directory', displayText(cwd)],
-        ['Model', `${model} ${palette.dim(`(effort ${effort}; reasoning blocks ${showReasoning ? 'shown' : 'hidden'})`)}`],
+        ['Model', `${model} ${palette.dim(`(effort ${effort}; thinking blocks ${thinkingStateLabel()})`)}`],
         ...agentPreset === undefined ? [] : [['Preset', displayText(agentPreset)] as StatusCardRow],
         ...preset === undefined ? [] : [['Permission', displayText(preset)] as StatusCardRow],
         ...goalStatusRows(goalState.goal, goalState.roundsStarted),
@@ -2296,7 +2347,7 @@ export function createTuiChat(
     })
     commandCtx.commands.register({
       name: 'details',
-      description: 'Select tool-card visibility and reasoning display',
+      description: 'Select tool-card visibility and thinking blocks',
       input: { hint: '[collapsed|expanded|hidden] [reasoning [on|off]]' },
       handler: ({ rawInput }) => runDetails(rawInput),
     })
@@ -2889,6 +2940,10 @@ export function createTuiChat(
     }
     if (keybindings.matches(data, 'app.todos.toggle')) {
       if (press) toggleTodos()
+      return { consume: true }
+    }
+    if (keybindings.matches(data, 'app.thinking.toggle')) {
+      if (press) toggleThinking()
       return { consume: true }
     }
     if (keybindings.matches(data, 'app.message.copy')) {

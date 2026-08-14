@@ -81,7 +81,7 @@ function userNode(text: string, key: string, source: UserMessageNode['source'] =
 /** A reconciler over its own chat container, plus the rows it currently renders. */
 function mount(
   events: readonly SessionEvent[],
-  view: { showReasoning?: boolean; visibility?: ToolCardVisibility } = {},
+  view: { showReasoning?: boolean; visibility?: ToolCardVisibility; thinkingPinned?: boolean } = {},
 ): {
   reconciler: TranscriptReconciler
   rows: () => string[]
@@ -111,6 +111,7 @@ function mount(
   const reconciler = new TranscriptReconciler(chat, deps, {
     showReasoning: view.showReasoning ?? true,
     visibility: view.visibility ?? 'collapsed',
+    thinkingPinned: view.thinkingPinned ?? false,
   })
   const rows = (): string[] => chat.render(WIDTH).map(row => row.trimEnd())
   return { reconciler, rows, frame: () => rows().join('\n') }
@@ -212,6 +213,83 @@ describe('thinking visibility across the Ctrl+O phases', () => {
     const expanded = mounted.frame()
     assert.ok(!expanded.includes(THOUGHT), `and the expanded phase adds none:\n${expanded}`)
     assert.ok(!expanded.includes(TITLE), `title included:\n${expanded}`)
+  })
+})
+
+describe('the Ctrl+T thinking switch', () => {
+  it('pins a finished step\'s thinking back on, and unpinning drops it again', () => {
+    const mounted = mount(turnEvents(1, undefined))
+    const node = assistantNode()
+    settle(node, START + 5_000)
+    mounted.reconciler.reconcile([node])
+    assert.ok(!mounted.frame().includes(THOUGHT), 'the default transcript retired the block')
+
+    mounted.reconciler.setThinkingPinned(true)
+    const pinned = mounted.rows()
+    const title = pinned.findIndex(row => row.includes(TITLE))
+    assert.ok(title >= 0, `the pin brings the whole block back:\n${pinned.join('\n')}`)
+    assert.equal(pinned[title], ` ${TITLE}`)
+    assert.equal(pinned[title + 1], '')
+    assert.equal(pinned[title + 2], `   ${THOUGHT}`)
+
+    mounted.reconciler.setThinkingPinned(false)
+    assert.ok(!mounted.frame().includes(THOUGHT), 'and unpinning retires it once more')
+  })
+
+  it('applies to every turn in the transcript, not only the newest', () => {
+    const events = [...turnEvents(1, 45_000), ...turnEvents(2, 45_000, START + 60_000)]
+    const mounted = mount(events)
+    const first = assistantNode({ turn: 1, step: 1, text: 'FIRST-ANSWER' })
+    const second = assistantNode({ turn: 2, step: 1, key: 'assistant:2:1', text: 'SECOND-ANSWER' })
+    settle(first, START + 45_000)
+    settle(second, START + 105_000)
+    mounted.reconciler.reconcile([first, userNode('SECOND-PROMPT', 'user:2'), second])
+
+    mounted.reconciler.setThinkingPinned(true)
+    // The switch is over the transcript rather than over the turn, so a session
+    // resumed with ten answers behind it shows ten asides, not one.
+    assert.equal(
+      mounted.rows().filter(row => row.includes(TITLE)).length,
+      2,
+      `both finished turns render their thinking:\n${mounted.frame()}`,
+    )
+  })
+
+  it('holds the pin across the Ctrl+O cycle, which keeps its own phase', () => {
+    const mounted = mount(turnEvents(1, undefined), { thinkingPinned: true })
+    const node = assistantNode()
+    settle(node, START + 5_000)
+    mounted.reconciler.reconcile([node])
+
+    // Neither switch takes the other over: the hidden phase drops tool cards,
+    // and pinned thinking is not one of them.
+    for (const phase of ['collapsed', 'expanded', 'hidden'] as const) {
+      mounted.reconciler.setVisibility(phase)
+      assert.ok(mounted.frame().includes(THOUGHT), `the ${phase} phase keeps a pinned block:\n${mounted.frame()}`)
+    }
+
+    // And with the pin off, the expanded phase still brings thinking back on
+    // its own, which is the behaviour Ctrl+T was added beside rather than over.
+    mounted.reconciler.setVisibility('expanded')
+    mounted.reconciler.setThinkingPinned(false)
+    assert.ok(mounted.frame().includes(THOUGHT), 'expanded still shows it unpinned')
+    mounted.reconciler.setVisibility('collapsed')
+    assert.ok(!mounted.frame().includes(THOUGHT), 'and the collapsed phase drops it again')
+  })
+
+  it('cannot override showReasoning: false, in any phase', () => {
+    const mounted = mount(turnEvents(1, undefined), { showReasoning: false, thinkingPinned: true })
+    const node = assistantNode()
+    mounted.reconciler.reconcile([node])
+    // The deployment's switch is the outer one: a pin that reached this far
+    // (the entry refuses it, but the reconciler must not depend on that) still
+    // renders nothing.
+    assert.ok(!mounted.frame().includes(THOUGHT), `a live step shows none:\n${mounted.frame()}`)
+    settle(node, START + 5_000)
+    mounted.reconciler.reconcile([node])
+    mounted.reconciler.setThinkingPinned(true)
+    assert.ok(!mounted.frame().includes(THOUGHT), `nor a finished one:\n${mounted.frame()}`)
+    assert.ok(!mounted.frame().includes(TITLE), `title included:\n${mounted.frame()}`)
   })
 })
 

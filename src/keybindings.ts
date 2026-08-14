@@ -28,6 +28,7 @@ export interface AppKeybindings {
   'app.tools.cycle': true
   'app.history.search': true
   'app.todos.toggle': true
+  'app.thinking.toggle': true
   'app.message.copy': true
   'app.screen.redraw': true
   'app.cancel': true
@@ -50,7 +51,12 @@ export type AppKeybinding = keyof AppKeybindings
 export const APP_KEYBINDINGS = {
   'app.tools.cycle': { defaultKeys: 'ctrl+o', description: 'Cycle tool cards: preview, full, hidden' },
   'app.history.search': { defaultKeys: 'ctrl+r', description: 'Search prompt history backwards' },
-  'app.todos.toggle': { defaultKeys: 'ctrl+t', description: 'Expand or collapse the plan' },
+  // Claude Code gives Ctrl+T to the plan and has no thinking switch at all;
+  // pi gives it to thinking. This terminal has both, so the collision is real
+  // and was decided for thinking: it is the key a user reaches for mid-answer,
+  // and Ctrl+Y is free and adjacent for the plan.
+  'app.todos.toggle': { defaultKeys: 'ctrl+y', description: 'Expand or collapse the plan' },
+  'app.thinking.toggle': { defaultKeys: 'ctrl+t', description: 'Show or hide thinking blocks' },
   'app.message.copy': { defaultKeys: 'ctrl+x', description: 'Copy the last answer' },
   'app.screen.redraw': { defaultKeys: 'ctrl+l', description: 'Redraw the screen' },
   'app.cancel': { defaultKeys: 'escape', description: 'Cancel the turn; twice to clear the draft or rewind' },

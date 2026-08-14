@@ -60,8 +60,9 @@ all three.
 | `/` | run a command; `/skill:<name>` loads a skill |
 | `?` | shortcut help, on an empty prompt; never typed into the draft |
 | Ctrl+R | search the prompt history backwards |
-| Ctrl+T | expand or collapse the plan |
+| Ctrl+Y | expand or collapse the plan |
 | Ctrl+O | cycle tool cards: preview, full, hidden |
+| Ctrl+T | show or hide thinking blocks — off, thinking streams and goes with the step that wrote it; on, every step keeps it, history included. The model reasons either way; `showReasoning: false` turns the key off with it |
 | Ctrl+X | copy the last answer |
 | Ctrl+L | redraw |
 | Esc | cancel the turn (and hand back what was queued behind it); again on a draft clears it; again on an empty prompt opens Rewind |
@@ -94,7 +95,7 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/hotkeys` | the keyboard shortcuts alone |
 | `/model [[provider/]model]` | switch the model and save it as your default; without an argument it opens the picker, which can also pick for this session only |
 | `/preset [<preset> \| copy <preset> <new-id>]` | show, switch, or copy this session's agent preset |
-| `/details [collapsed\|expanded\|hidden] [reasoning [on\|off]]` | tool-card visibility and reasoning display; without arguments it opens the selector |
+| `/details [collapsed\|expanded\|hidden] [reasoning [on\|off]]` | tool-card visibility (Ctrl+O) and thinking blocks (Ctrl+T); without arguments it opens the selector |
 | `/copy` | copy the last answer to the system clipboard |
 | `/new` | start a blank session in this workspace; the current one keeps its history and stays resumable |
 | `/clear` | clear the transcript view; the session log is unchanged |
@@ -152,7 +153,7 @@ Values on the bundle row (`tui-runner`), all optional.
 | `initialSkill` | — | skill auto-invoked as the session's first turn, as if `/skill:<name>` were typed; set by a launcher, not by a person |
 | `initialDraft` | — | text the editor opens with, unsent; set by a rewind handoff |
 | `experimentalCommands` | `false` | register the developer commands (`/reload` today) |
-| `showReasoning` | `true` | render model reasoning blocks |
+| `showReasoning` | `true` | may this transcript render reasoning blocks at all; `false` hides them in every phase and turns Ctrl+T off |
 | `markdownRenderer` | `claude` | `claude` (this bundle's renderer) or `pi` (pi-tui's `Markdown`); a `claude` render that throws falls back to `pi` for the rest of the process |
 | `maxToolOutputLines` | `6` | body lines kept in a collapsed tool card's head/tail preview |
 | `maxDiffEditLength` | `1000` | added and removed lines explored while deriving an exact line diff |
