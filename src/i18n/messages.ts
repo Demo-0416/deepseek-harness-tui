@@ -287,6 +287,17 @@ export const EN_MESSAGES = {
   'dialog.resume.workspaceRow': 'workspace {label}',
   'dialog.resume.unavailable': 'unavailable: {reason}',
   'dialog.resume.hint': 'Type to search  •  ↑/↓ navigate  •  Tab scope  •  Enter resume  •  Esc clear/cancel',
+  'dialog.resume.searchPlaceholder': 'Search…',
+  // A row's age, in the units a browsing eye reads without arithmetic.
+  'dialog.resume.ageJustNow': 'just now',
+  'dialog.resume.ageMinutes.one': '{count} minute ago',
+  'dialog.resume.ageMinutes.other': '{count} minutes ago',
+  'dialog.resume.ageHours.one': '{count} hour ago',
+  'dialog.resume.ageHours.other': '{count} hours ago',
+  'dialog.resume.ageDays.one': '{count} day ago',
+  'dialog.resume.ageDays.other': '{count} days ago',
+  // The last line an exiting terminal prints: how to come back to this session.
+  'exit.resumeHint': 'Resume this session: {command}',
 
   // The user-question dialog.
   'dialog.question.header': 'Question {position}/{total} ({unanswered} unanswered)',
@@ -711,6 +722,15 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'dialog.resume.workspaceRow': '工作区 {label}',
   'dialog.resume.unavailable': '不可用：{reason}',
   'dialog.resume.hint': '输入以搜索  •  ↑/↓ 移动  •  Tab 切换范围  •  Enter 恢复  •  Esc 清空/取消',
+  'dialog.resume.searchPlaceholder': '搜索…',
+  'dialog.resume.ageJustNow': '刚刚',
+  'dialog.resume.ageMinutes.one': '{count} 分钟前',
+  'dialog.resume.ageMinutes.other': '{count} 分钟前',
+  'dialog.resume.ageHours.one': '{count} 小时前',
+  'dialog.resume.ageHours.other': '{count} 小时前',
+  'dialog.resume.ageDays.one': '{count} 天前',
+  'dialog.resume.ageDays.other': '{count} 天前',
+  'exit.resumeHint': '恢复本会话：{command}',
 
   'dialog.question.header': '第 {position}/{total} 个问题（{unanswered} 个待回答）',
   'dialog.question.selectOne': '至少选择一项，或按 {keys} 自己填写答案。',

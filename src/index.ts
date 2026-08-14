@@ -209,6 +209,7 @@ import {
   gitBranch,
   HintEditor,
   packageVersion,
+  resumeCommandLine,
   shortSessionId,
 } from './chat/helpers.ts'
 import {
@@ -1671,6 +1672,14 @@ export function createTuiChat(
       if (exitProcess) {
         if (runtime.goodbyeMessage !== undefined) {
           runtime.terminal.write(`${palette.dim(displayText(runtime.goodbyeMessage))}\n`)
+        }
+        // The last thing on screen is the way back in. Printed only where the
+        // session outlives the process: a composition with no persistence
+        // cannot resume anything, and the line would be an instruction that
+        // fails when followed.
+        if (ctx.get('sessionPersistence') !== undefined) {
+          const command = resumeCommandLine(agent.session.id)
+          runtime.terminal.write(`${palette.dim(displayText(t('exit.resumeHint', { command })))}\n`)
         }
         runtime.exit(0)
       }

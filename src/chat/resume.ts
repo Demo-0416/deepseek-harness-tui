@@ -26,6 +26,7 @@ import {
   ResumePicker,
   summarizeResumeCandidate,
   type ResumeCandidate,
+  type ResumeCandidateMetadata,
 } from '../components/dialogs.ts'
 import type { ChannelNotice, ChatChannelDeps } from './channel.ts'
 
@@ -77,12 +78,11 @@ export function createResumeController(deps: ResumeControllerDeps): ResumeContro
   const summarize = (
     record: SessionRecord,
     title: string | undefined,
-    lastActivityAt: number | undefined,
+    metadata: ResumeCandidateMetadata,
   ): ResumeCandidate => summarizeResumeCandidate(
     record,
     title,
-    lastActivityAt,
-    agent.session.id,
+    metadata,
     agent.session.header.cwd,
     workspaceLabel,
   )
@@ -90,33 +90,42 @@ export function createResumeController(deps: ResumeControllerDeps): ResumeContro
   /** The disabled fallback row for a session whose title read failed. */
   const unreadableCandidate = (
     record: SessionRecord,
-    lastActivityAt: number | undefined,
+    metadata: ResumeCandidateMetadata,
     error: unknown,
   ): ResumeCandidate => ({
     record,
     title: 'Unreadable session',
-    lastActivityAt: lastActivityAt ?? record.header.createdAt,
+    lastActivityAt: metadata.lastActivityAt ?? record.header.createdAt,
+    ...metadata.sizeBytes === undefined ? {} : { sizeBytes: metadata.sizeBytes },
     currentWorkspace: record.header.cwd === agent.session.header.cwd,
     workspaceLabel: workspaceLabel(record.header.cwd),
     disabledReason: `session cannot be loaded: ${errorChain(error)}`,
   })
 
   /**
-   * Metadata-only activity time: a live session's last in-memory event time,
-   * otherwise the persisted artifact's mtime. Never reads a log, so browsing
-   * cost stays independent of log size; any append (including bookkeeping)
-   * moves it.
+   * One row's activity time and artifact size, from metadata alone: a live
+   * session's last in-memory event time wins over the artifact's mtime, and the
+   * size comes from the same `stat` that produced the mtime. Never reads a log,
+   * so browsing cost stays independent of log size; any append (including
+   * bookkeeping) moves the time.
+   *
+   * A session with no artifact — memory-only persistence, or a log not
+   * materialized yet — reports no size at all, and its row shows none.
    */
-  const lastActivityAt = async (record: SessionRecord): Promise<number | undefined> => {
+  const scanMetadata = async (record: SessionRecord): Promise<ResumeCandidateMetadata> => {
     const live = ctx.sessions.get(record.header.id)
-    if (live !== undefined) return live.events.at(-1)?.time
+    const liveActivityAt = live?.events.at(-1)?.time
     const location = ctx.get('sessionPersistence')?.locate(record.header)
-    if (location === undefined) return undefined
+    if (location === undefined) {
+      return liveActivityAt === undefined ? {} : { lastActivityAt: liveActivityAt }
+    }
     try {
-      return (await stat(location.path)).mtimeMs
+      const artifact = await stat(location.path)
+      return { lastActivityAt: liveActivityAt ?? artifact.mtimeMs, sizeBytes: artifact.size }
     } catch {
-      // Only a just-deleted or never-materialized artifact fails stat; the row falls back to created-at.
-      return undefined
+      // Only a just-deleted or never-materialized artifact fails stat; the row
+      // keeps a live time when it has one and falls back to created-at otherwise.
+      return liveActivityAt === undefined ? {} : { lastActivityAt: liveActivityAt }
     }
   }
 
@@ -214,7 +223,7 @@ export function createResumeController(deps: ResumeControllerDeps): ResumeContro
     if (initialStatus !== 'idle') throw new Error(`Resume requires an idle agent (status: ${initialStatus}).`)
     const record = (await query.listSessions()).find(candidate => candidate.header.id === sessionId)
     if (record === undefined) throw new Error(`Session "${sessionId}" is no longer available.`)
-    const candidate = summarize(record, undefined, undefined)
+    const candidate = summarize(record, undefined, {})
     if (candidate.disabledReason !== undefined) throw new Error(candidate.disabledReason)
     let events: readonly SessionEvent[]
     try {
@@ -339,21 +348,25 @@ export function createResumeController(deps: ResumeControllerDeps): ResumeContro
         deps.isDisposed() || scan !== resumeScan || scanAbort.signal.aborted
       const scanCandidates = async (): Promise<void> => {
         // Every workspace in the store is listed; the picker owns the
-        // current-workspace/all-workspaces scope split over the whole set.
-        const records = await listQuery.listSessions(scanAbort.signal)
+        // current-workspace/all-workspaces scope split over the whole set. The
+        // session being browsed from is not in it: resuming into itself is not
+        // a destination, and a row for it could only ever be a refusal.
+        const records = (await listQuery.listSessions(scanAbort.signal))
+          .filter(record => record.header.id !== agent.session.id)
         if (scanStale()) return
-        // Rows need only metadata, an mtime, and a title — resolved without
+        // Rows need only metadata, one stat, and a title — resolved without
         // whole-log reads when the projection cache is mounted. A corrupt
         // neighbor degrades to one disabled row.
-        const [titles, activity] = await Promise.all([
+        const [titles, metadata] = await Promise.all([
           resolveTitles(listQuery, records, scanAbort.signal),
-          Promise.all(records.map(record => lastActivityAt(record))),
+          Promise.all(records.map(record => scanMetadata(record))),
         ])
         const candidates = records.map((record, index) => {
           const resolution = titles[index] as TitleResolution
+          const observed = metadata[index] ?? {}
           return 'failure' in resolution
-            ? unreadableCandidate(record, activity[index], resolution.failure)
-            : summarize(record, resolution.title, activity[index])
+            ? unreadableCandidate(record, observed, resolution.failure)
+            : summarize(record, resolution.title, observed)
         })
         candidates.sort((a, b) => b.lastActivityAt - a.lastActivityAt
           || a.record.header.id.localeCompare(b.record.header.id))
