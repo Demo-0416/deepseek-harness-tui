@@ -33,6 +33,9 @@ importers:
       '@deepseek-ai/dsh-agent-loop':
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(db22cad5b0daedec4301b8f186ddd2da)
+      '@deepseek-ai/dsh-agent-presets':
+        specifier: 0.1.0-rc.6
+        version: 0.1.0-rc.6(4c20af7d23bdb1bbe92fd5e1e7ddef5d)
       '@deepseek-ai/dsh-cmdline':
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(@deepseek-ai/cordis-plugin-loader@1.0.2)(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))

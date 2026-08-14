@@ -19,10 +19,10 @@ import {
   type ModelChoice,
   type ModelDialogSelection,
 } from '../components/dialogs.ts'
-import type { ChannelNotice, ChatChannelDeps } from './channel.ts'
+import type { ChannelNotice, ChannelPendingHint, ChatChannelDeps } from './channel.ts'
 
 /** Collaborators the model controller needs from the chat channel. */
-export interface ModelControllerDeps extends ChatChannelDeps, ChannelNotice {
+export interface ModelControllerDeps extends ChatChannelDeps, ChannelNotice, ChannelPendingHint {
   /** Shared selected-target handle owned by the channel. */
   readonly target: ModelSelectionRef
 }
@@ -247,7 +247,13 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
   }
 
   const handleModelCommand = async (raw: string): Promise<void> => {
-    const choices = await readModelChoices(ctx, target.current)
+    // The catalog is read from every registered provider, one advertisement
+    // list per adapter, so `/model` can sit for a beat before the selector
+    // opens. Without a hint the key press left no trace at all and the command
+    // read as dropped; the row is released the moment the read settles, failure
+    // included, so the outcome below owns the screen from there.
+    const settleHint = deps.flashPending('Loading models…')
+    const choices = await readModelChoices(ctx, target.current).finally(settleHint)
     if (deps.isDisposed()) return
     const argument = raw.trim()
     if (argument === '') {

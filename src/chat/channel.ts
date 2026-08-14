@@ -29,3 +29,20 @@ export interface ChatChannelDeps {
 export interface ChannelNotice {
   appendNotice(message: string, kind?: 'info' | 'warning' | 'error'): void
 }
+
+/**
+ * Hold a "working on it" hint on the status row; controllers whose commands
+ * assemble asynchronously mix this in.
+ *
+ * The channel owns the row and its wording rules (a later flash wins, and the
+ * settle callback only clears a row that still shows its own message), so a
+ * controller states what it is doing and when that is over — nothing else.
+ */
+export interface ChannelPendingHint {
+  /**
+   * Show `message` until the returned callback is called.
+   * @param message - what the command is doing, in the present tense.
+   * @returns the callback that takes the hint back down.
+   */
+  flashPending(message: string): () => void
+}

@@ -8,6 +8,7 @@
 
 import { lstat, readdir } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import type { ToolCallKind, ToolCallView, ToolDefinition } from '@deepseek-ai/dsh-tools'
 
 /** Default maximum file and directory candidates rendered for one query. */
 export const DEFAULT_FILE_SEARCH_MAX_RESULTS = 20
@@ -91,6 +92,60 @@ export function formatFileMention(
   const quoted = preserveQuote || /\s/u.test(path)
   if (!quoted) return `@${path}`
   return `@"${path}"`
+}
+
+/**
+ * Tool-call intents that cannot have moved a path in the workspace.
+ *
+ * `other` is in here on the strength of what actually carries it: `todo_write`,
+ * the goal tools, and `exit_plan_mode` write session log entries, not files.
+ * `read`, `search`, and `fetch` are read-only by definition of the vocabulary.
+ */
+const READ_ONLY_CALL_KINDS: ReadonlySet<ToolCallKind> = new Set<ToolCallKind>([
+  'read',
+  'search',
+  'fetch',
+  'other',
+])
+
+/**
+ * Whether a completed tool call could have changed the workspace tree, and the
+ * `@` index therefore has to be discarded.
+ *
+ * Invalidating on every tool result threw away a full traversal (up to
+ * `maxEntries` paths) after a `grep`, a `web_search`, or a `todo_write` — none
+ * of which can move a file — and rebuilt it on the next `@`, which is precisely
+ * the interaction the index exists to keep fast.
+ *
+ * The classification is the tool's own declared render intent, never a name
+ * list: a profile mounts tools this bundle has never heard of, and a tool's
+ * `presentCall` is a pure function of its arguments, so it can be asked without
+ * running anything. A diff card is a file mutation; a terminal card is a shell
+ * whose side effects are unknowable, so it counts as one. Anything this cannot
+ * classify — no presenter, unparsable arguments, a presenter that threw, a
+ * generic card with no `kind` — is assumed to have written, because a stale
+ * completion list is a wrong answer while a redundant rescan is only slow.
+ * @param definition - the registered tool, when the runtime still has it.
+ * @param rawArguments - the call's arguments exactly as the model produced them.
+ * @returns true when the index must be rebuilt before the next bare query.
+ */
+export function toolCallTouchesFiles(definition: ToolDefinition | undefined, rawArguments: string): boolean {
+  if (definition?.presentCall === undefined) return true
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawArguments)
+  } catch (_unparsableArguments) {
+    return true
+  }
+  let view: ToolCallView | undefined
+  try {
+    view = definition.presentCall(parsed)
+  } catch (_presenterFailed) {
+    return true
+  }
+  if (view === undefined) return true
+  if (view.card !== 'generic') return true
+  return view.kind === undefined || !READ_ONLY_CALL_KINDS.has(view.kind)
 }
 
 /**

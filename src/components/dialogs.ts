@@ -1,7 +1,8 @@
 /**
  * pi-tui dialog and selector components for the terminal front door: the status
- * card, prompt-context line, model selector, resume picker, and user-question
- * dialog, plus the model-choice and resume-candidate data they present.
+ * card, prompt-context line, model selector, agent-preset selector, resume
+ * picker, and user-question dialog, plus the model-choice, preset-choice, and
+ * resume-candidate data they present.
  * @module @deepseek-ai/dsh-tui/components/dialogs
  */
 
@@ -423,6 +424,163 @@ export class ModelDialog implements Component {
         : this.list.render(innerWidth),
       '',
       this.palette.dim('type to filter • ↑/↓ move • Shift+Tab reasoning • Enter select • Esc'),
+    ], width, this.palette)
+  }
+}
+
+/**
+ * One selectable agent preset, exactly the fields the roster reports about it.
+ *
+ * Structural rather than the roster's own `AgentPreset`: the preset package is
+ * an optional mount, so nothing under `src/` may depend on its runtime, and the
+ * absolute composition `path` it also carries has no place on a picker row.
+ */
+export interface PresetChoice {
+  /** Preset id and directory name; also what `/preset <id>` takes. */
+  id: string
+  /** Whether the preset ships with the deployment or was authored locally. */
+  trust: 'system' | 'user'
+  /** Display name the preset published, absent when it published none. */
+  name?: string
+  /** One sentence on what the preset is for, when it published one. */
+  description?: string
+  /** Why the preset cannot compose a session, absent when it can. */
+  broken?: string
+}
+
+/**
+ * Keyboard agent-preset selector: the `ModelDialog` frame and filter box over
+ * the deployment's preset roster.
+ *
+ * Broken presets stay on the list rather than being filtered out — a directory
+ * that occupies an id with nothing usable in it is exactly what the reader
+ * needs to see — and each states its own reason in the description column the
+ * list already dims. Enter still yields them; the caller owns the refusal,
+ * because it owns the sentence explaining what would have happened.
+ */
+export class PresetDialog implements Component {
+  private list: SelectList
+  private readonly filter = new Input()
+  private readonly items: Map<string, SelectItem>
+  private readonly choices: Map<string, PresetChoice>
+
+  constructor(
+    choices: readonly PresetChoice[],
+    /** The preset this session runs, badged `current` and pre-selected. */
+    private readonly current: string | undefined,
+    /** The preset a session that names none gets, badged `default`. */
+    private readonly defaultId: string | undefined,
+    private readonly maxVisible: number,
+    private readonly palette: Palette,
+    private readonly done: (choice: PresetChoice) => void,
+    private readonly cancel: () => void,
+  ) {
+    this.items = new Map()
+    this.choices = new Map()
+    for (const choice of choices) {
+      this.choices.set(choice.id, choice)
+      this.items.set(choice.id, {
+        value: choice.id,
+        label: displayText(choice.id),
+        description: this.describeChoice(choice),
+      })
+    }
+    this.list = this.buildList(current)
+  }
+
+  /** Build a SelectList over the currently filtered items, selecting `selectValue` when present. */
+  private buildList(selectValue: string | undefined): SelectList {
+    const items = this.filteredItems()
+    const list = new SelectList(items, this.maxVisible, dialogSelectTheme(this.palette))
+    const index = selectValue === undefined ? 0 : items.findIndex(item => item.value === selectValue)
+    list.setSelectedIndex(Math.max(0, index))
+    list.onSelect = (item) => { this.confirm(item) }
+    list.onCancel = this.cancel
+    return list
+  }
+
+  /** Items matching the filter box, as a case-insensitive substring over the id, name, and description. */
+  private filteredItems(): SelectItem[] {
+    const query = this.filter.getValue().trim().toLocaleLowerCase()
+    if (query === '') return [...this.items.values()]
+    return [...this.items.values()].filter((item) => {
+      const choice = this.choices.get(item.value)
+      /* v8 ignore next -- items and choices share the same keys. */
+      if (choice === undefined) return false
+      return [choice.id, choice.name ?? '', choice.description ?? '']
+        .some(field => field.toLocaleLowerCase().includes(query))
+    })
+  }
+
+  private confirm(item: SelectItem): void {
+    const selected = this.choices.get(item.value)
+    /* v8 ignore next -- SelectList only returns values built from `choices`. */
+    if (selected === undefined) return
+    this.done(selected)
+  }
+
+  /**
+   * The row's description column: why the preset is unusable if it is, then
+   * what it is, then how this deployment relates to it.
+   *
+   * The blocker leads because the column is truncated from the right, and a
+   * reason pushed behind a description is the one fact a reader cannot afford
+   * to lose.
+   */
+  private describeChoice(choice: PresetChoice): string {
+    return [
+      ...choice.broken === undefined ? [] : [`unavailable: ${displayText(choice.broken)}`],
+      ...choice.name === undefined ? [] : [displayText(choice.name)],
+      ...choice.description === undefined ? [] : [displayText(choice.description)],
+      ...choice.id === this.current ? ['current'] : [],
+      ...choice.id === this.defaultId ? ['default'] : [],
+      ...choice.trust === 'system' ? ['built-in'] : [],
+    ].join(' — ')
+  }
+
+  invalidate(): void {
+    this.filter.invalidate()
+    this.list.invalidate()
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, Key.escape)) {
+      if (this.filter.getValue() === '') this.cancel()
+      else {
+        this.filter.setValue('')
+        this.list = this.buildList(undefined)
+      }
+    } else if (
+      matchesKey(data, Key.up)
+      || matchesKey(data, Key.down)
+      || matchesKey(data, Key.enter)
+    ) {
+      this.list.handleInput(data)
+    } else {
+      const previous = this.filter.getValue()
+      this.filter.focused = true
+      this.filter.handleInput(data)
+      if (this.filter.getValue() !== previous) {
+        const selected = this.list.getSelectedItem()
+        this.list = this.buildList(selected?.value)
+      }
+    }
+    this.invalidate()
+  }
+
+  render(width: number): string[] {
+    const innerWidth = Math.max(1, width - 4)
+    this.filter.focused = true
+    const results = this.filteredItems()
+    const filterContent = truncateToWidth(this.filter.render(innerWidth).join(''), innerWidth, '')
+    return renderDialog('Select agent preset', [
+      filterContent,
+      '',
+      ...results.length === 0
+        ? [this.palette.dim('  No presets match the filter')]
+        : this.list.render(innerWidth),
+      '',
+      this.palette.dim('type to filter • ↑/↓ move • Enter select • Esc'),
     ], width, this.palette)
   }
 }

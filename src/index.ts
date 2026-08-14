@@ -35,15 +35,22 @@ import {
   type Agent,
   type AgentHandle,
   type AgentOptions,
+  type AgentSetup,
   type AgentStatus,
+  type CreateAgentOptions,
   type ModelSelection,
   type ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-loop'
+// Type import declaration-merges the optional `agentPresets` service onto
+// `Context`, so the boot path reads the roster by name rather than by cast. The
+// package itself is a deployment choice this bundle never requires at runtime;
+// see ./chat/preset-command.ts for why nothing imports its values.
+import type {} from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-token-meter'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { createUserMessage, errorChain } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { CallId, ContentBlock, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm-retry'
 // Type import declaration-merges the compaction bracket events onto the
 // session event map, so `compaction/start` / `compaction/end` are typed here.
@@ -168,6 +175,11 @@ import {
   createModelController,
   type ModelController,
 } from './chat/model-command.ts'
+import {
+  createPresetController,
+  sessionAgentPreset,
+  type PresetController,
+} from './chat/preset-command.ts'
 import { createQuestionQueue } from './chat/questions.ts'
 import {
   exportSessionLog,
@@ -181,7 +193,12 @@ import {
 } from './chat/session-summary.ts'
 import { createResumeController } from './chat/resume.ts'
 import type { TuiResumeHost, TuiRuntime } from './runtime.ts'
-import { WorkspaceFileSearch } from './chat/file-autocomplete.ts'
+import { toolCallTouchesFiles, WorkspaceFileSearch } from './chat/file-autocomplete.ts'
+import {
+  AGENT_START_TIMEOUT_MS,
+  EXIT_IDLE_TIMEOUT_MS,
+  whenIdleOrTimeout,
+} from './chat/lifecycle.ts'
 import type { TuiStartupValues } from './startup.ts'
 
 export { TuiPromptService } from './prompt.ts'
@@ -346,6 +363,14 @@ const STATUS_FLASH_MS = 1_500
 const EXIT_CONFIRM_MS = 2_000
 
 /**
+ * Longest a "working on it" hint holds the status row when the command that
+ * armed it never settles. Not a deadline the command is held to — nothing is
+ * cancelled here — only the point past which an unanswered hint is more
+ * misleading than an empty row.
+ */
+const PENDING_HINT_MS = 30_000
+
+/**
  * Smallest panel a short terminal still gets: three rows of chrome (the
  * separating blank, the title, the hint) and two of content. A panel squeezed
  * below this shows nothing it was opened for, which is worse than one that
@@ -353,12 +378,25 @@ const EXIT_CONFIRM_MS = 2_000
  */
 const MIN_PANEL_ROWS = 5
 
+/**
+ * The two ways out of a session whose agent is gone, named by every refusal
+ * that mentions it.
+ *
+ * A disposed agent (an agent-loop reload, a host that retired it) leaves this
+ * TUI mounted over a session that can still be read and can no longer run a
+ * turn. Reporting only the refusal made that a dead end: every submission
+ * failed and nothing on screen said what to do about it. `/resume` swaps this
+ * chat for another session without leaving the process, and Ctrl+D ends it.
+ */
+const DISPOSED_RECOVERY = 'Run /resume to open another session, or press ctrl+d to exit.'
+
 /** Every key the terminal binds, as `/hotkeys` and `/help` both list them. */
 const KEYBOARD_SHORTCUTS: readonly string[] = [
   'Enter send • Shift/Alt+Enter newline • Up/Down prompt history',
   'Esc cancel turn • Ctrl+O cycle cards (collapse/expand/hide) • Ctrl+R toggle reasoning • Ctrl+L redraw',
-  'Ctrl+X copy the last answer • Ctrl+D exit',
+  'Ctrl+X copy the last answer • Ctrl+D exit on an empty prompt',
   'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
+  'Ctrl+C again on a turn that will not cancel exits without waiting for it',
 ]
 
 /**
@@ -524,6 +562,15 @@ export function createTuiChat(
   let flashingStatus: { text: string; timer: ReturnType<typeof setTimeout> } | undefined
   /** Timer of an armed first Ctrl+C; while it runs, a second one exits. */
   let exitArmed: ReturnType<typeof setTimeout> | undefined
+  /** The status row's wording while that exit is armed, so disarming can take it down. */
+  let armedAsk: string | undefined
+  /**
+   * Whether the running turn has already been asked to stop (Esc, or a Ctrl+C
+   * this terminal sent). Read by the Ctrl+C ladder to tell "cancel this turn"
+   * from "this turn is not stopping, get me out"; cleared whenever the agent
+   * leaves `running`.
+   */
+  let cancelRequested = false
   let showReasoning = resolved.showReasoning
   // Ctrl+O cycles collapsed -> expanded -> hidden. Codex-style: hidden drops
   // tool cards entirely, collapsed previews, expanded shows full bodies.
@@ -547,6 +594,15 @@ export function createTuiChat(
   // counts pending work and owns no transcript state of its own.
   const pendingSteering = new Set<MessageId>()
   let disposed = false
+  /**
+   * Whether this terminal's agent left the registry while the terminal stayed.
+   *
+   * Separate from {@link disposed}, which means "this UI is going away" and
+   * gates rendering: an agent can be retired under a live screen (an
+   * agent-loop-only reload), and that screen still has to paint the refusal and
+   * the `/resume` picker that gets the user out of it.
+   */
+  let agentGone = false
   let shuttingDown: Promise<void> | undefined
   // Optional: skills mount conditionally, so read the global service store
   // rather than declaring an injection that would make the TUI require them.
@@ -557,6 +613,16 @@ export function createTuiChat(
     maxEntries: resolved.fileSearchMaxEntries,
     excludedDirectories: resolved.fileSearchExcludedDirectories,
   })
+  /**
+   * Name and arguments of every tool call this session has logged but not yet
+   * answered, keyed by call id.
+   *
+   * The `@` index is dropped when a tool could have moved a file, and only
+   * `tool/call` carries what tool that was — its `tool/result` names nothing
+   * but the call id. Kept as narrowly as the question needs: entries are
+   * removed as their results land (see the session listener).
+   */
+  const inFlightToolCalls = new Map<CallId, { name: string; arguments: string }>()
   const skillAbort = new AbortController()
   const tokens = sessionTokens(agent.session)
   const commandControllers = new Set<AbortController>()
@@ -671,6 +737,24 @@ export function createTuiChat(
    * refold belongs.
    */
   let goalState: FoldedGoal = foldGoal(agent.session.events)
+  /**
+   * The session's measured context total, remeasured only when the log grew.
+   *
+   * `tokenMeter.measure` folds the whole session, and `updatePromptValues` runs
+   * on every animation frame — 50 ms apart while a turn is live — so measuring
+   * per frame is O(events) per frame on a log that a long session only makes
+   * longer. A mounted chat's log is append-only, so its length is the version
+   * of the thing being measured: same length, same measurement. The step-timing
+   * tracker earns its frame budget the same way.
+   */
+  let measuredContext: { events: number; totalTokens: number } | undefined
+  const contextTokens = (): number => {
+    const events = agent.session.events.length
+    if (measuredContext?.events !== events) {
+      measuredContext = { events, totalTokens: ctx.tokenMeter.measure(agent.session).totalTokens }
+    }
+    return measuredContext.totalTokens
+  }
   const promptValues: TuiPromptValueHandle[] = [
     ctx.tuiPrompt.register('cwd', palette.bold(palette.accent(formattedCwd))),
     ctx.tuiPrompt.register('git/worktree', branch === undefined ? undefined : palette.dim(` (${displayText(branch)})`)),
@@ -704,7 +788,7 @@ export function createTuiChat(
     tokenValue.set(`  ${palette.dim(rate === undefined ? usage : `${usage}  cache ${rate}%`)}`)
     const contextWindow = modelController.contextWindow()
     contextValue.set(contextWindow === undefined ? undefined : `  ${palette.dim(
-      `${Math.min(100, Math.round(ctx.tokenMeter.measure(agent.session).totalTokens / contextWindow * 100))}% context`,
+      `${Math.min(100, Math.round(contextTokens() / contextWindow * 100))}% context`,
     )}`)
     const goalFragment = formatGoalPrompt(goalState.goal)
     goalValue.set(goalFragment === undefined ? undefined : `  ${palette.dim(goalFragment)}`)
@@ -860,6 +944,33 @@ export function createTuiChat(
   }
 
   /**
+   * Say that an asynchronous command is working, and hand back the way to stop
+   * saying it.
+   *
+   * `/status` folds the whole system prompt and `/model` reads every registered
+   * provider's catalog; either can take a visible beat, and until its panel
+   * opened the screen carried no evidence the key press had landed at all. The
+   * ordinary flash window is the wrong shape for this — a hint that expires
+   * mid-assembly reads as "your command was dropped" — so the row is held for
+   * the work's own duration, with {@link PENDING_HINT_MS} only as a backstop.
+   *
+   * The settle callback clears the row only while it is still showing this
+   * message: a later flash (a Ctrl+O cycle, an armed exit) owns the row from
+   * the moment it lands, and a slow command settling afterwards must not wipe
+   * something the user just did.
+   * @param message - what the command is doing, in the present tense.
+   * @returns the callback that takes the hint back down.
+   */
+  const flashPending = (message: string): (() => void) => {
+    flashStatus(message, PENDING_HINT_MS)
+    return () => {
+      if (flashingStatus?.text !== message) return
+      clearFlash()
+      requestRender()
+    }
+  }
+
+  /**
    * The last answer this session produced, as plain text.
    *
    * Read from the store's own snapshot rather than the rendered rows: what the
@@ -980,6 +1091,19 @@ export function createTuiChat(
     overlayManager: dismissableOverlays(overlayManager),
     target,
     appendNotice,
+    flashPending,
+    requestRender,
+    isDisposed,
+  })
+  const presetController: PresetController = createPresetController({
+    ctx,
+    resolved,
+    palette,
+    // Same slot and same dismissal rule as the model picker: a permission
+    // prompt or a question that arrives while it is open takes the slot back.
+    overlayManager: dismissableOverlays(overlayManager),
+    agent,
+    appendNotice,
     requestRender,
     isDisposed,
   })
@@ -1039,6 +1163,10 @@ export function createTuiChat(
   const setStatus = (status: AgentStatus): void => {
     const priorTurn = runningStatus?.turn
     const fadeOutGlyph = status !== 'running' ? runningStatus?.lastGlyph : undefined
+    // A turn that ended closes its cancel ladder: the next Ctrl+C on the next
+    // turn starts at "cancel" again rather than inheriting an escalation from
+    // a turn that did, in the end, stop.
+    if (status !== 'running') cancelRequested = false
     if (status === 'running') clearTurnStatus()
     else if (fadeOutGlyph !== undefined) beginFadeOut(fadeOutGlyph)
     else clearTurnStatus()
@@ -1185,6 +1313,7 @@ export function createTuiChat(
       questions.rejectAll()
       await overlayManager.dispose()
       modelController.clearOverlay()
+      presetController.clearOverlay()
       questions.unregister()
       await runtime.terminal.drainInput(100, 20)
       ui.stop()
@@ -1198,21 +1327,64 @@ export function createTuiChat(
     return shuttingDown
   }
 
+  /**
+   * Leave, after the running turn has been cancelled and given a bounded chance
+   * to end itself.
+   *
+   * The wait exists so a session is never torn down mid-write; the bound exists
+   * because the wait is only as good as the driver's cancellation. An unbounded
+   * tool loop or a stalled stream never reports idle, and the unbounded version
+   * of this left the terminal owned by a TUI that had already said it was
+   * leaving — an exit the user could only complete by killing the process from
+   * somewhere else. `shutdown` is idempotent, so whichever of the two settles
+   * first ends the session and the other becomes a no-op.
+   */
   const requestExit = (): void => {
     if (agent.status === 'running') {
-      agent.cancel({ kind: 'user' })
+      cancelActiveTurn()
       appendNotice('Cancelling the active turn before exit…', 'warning')
-      void agent.whenIdle().then(() => shutdown(true))
+      void whenIdleOrTimeout(agent.whenIdle(), EXIT_IDLE_TIMEOUT_MS).then((outcome) => {
+        if (outcome === 'timeout') {
+          ctx.logger.warn(`dsh-tui: the cancelled turn did not reach idle within ${String(EXIT_IDLE_TIMEOUT_MS)}ms; exiting anyway`)
+        }
+        void shutdown(true)
+      })
       return
     }
     void shutdown(true)
   }
 
-  /** Drop the armed first Ctrl+C, so the next one asks again instead of exiting. */
+  /**
+   * Cancel the running turn and remember that a cancel is outstanding.
+   *
+   * The memory is what turns the Ctrl+C ladder into an escape hatch instead of
+   * a loop: a driver that honors the cancel reaches idle and clears this (see
+   * {@link setStatus}), so the next press starts the ordinary two-press exit,
+   * while one that does not leaves it set — and the press after that can offer
+   * to leave without it.
+   */
+  const cancelActiveTurn = (): void => {
+    cancelRequested = true
+    agent.cancel({ kind: 'user' })
+  }
+
+  /**
+   * Drop the armed first Ctrl+C, so the next one asks again instead of exiting.
+   *
+   * The row goes with it. An ask that outlives its window is the same lie in
+   * reverse as one that expires early: it names a key that no longer exits,
+   * while the press it invites now does something else entirely (cancel the
+   * turn that just started).
+   */
   const disarmExit = (): void => {
     if (exitArmed === undefined) return
     clearTimeout(exitArmed)
     exitArmed = undefined
+    if (flashingStatus?.text === armedAsk) {
+      clearFlash()
+      requestRender()
+    }
+    armedAsk = undefined
   }
 
   /**
@@ -1226,11 +1398,15 @@ export function createTuiChat(
    * The row holds the ask for the whole window rather than the default flash:
    * a hint that vanished half a second early left the exit armed with nothing
    * on screen saying so, which is the same surprise exit this replaced.
+   * @param ask - the wording the row holds, which differs between the idle exit
+   *   and the running session's escape hatch because the two do different
+   *   things to the turn that is still open.
    */
-  const armExit = (): void => {
+  const armExit = (ask: string): void => {
     disarmExit()
     exitArmed = setTimeout(() => { exitArmed = undefined }, EXIT_CONFIRM_MS)
-    flashStatus('Press ctrl+c again to exit.', EXIT_CONFIRM_MS)
+    armedAsk = ask
+    flashStatus(ask, EXIT_CONFIRM_MS)
   }
 
   /** Swap the palette and all derived themes for the given terminal color scheme. */
@@ -1446,7 +1622,11 @@ export function createTuiChat(
   }
 
   const showStatus = async (signal: AbortSignal): Promise<void> => {
-    const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent, signal))
+    // Assembling the system prompt runs every registered section, some of which
+    // read files or ask a service; on a cold cache that is long enough for the
+    // screen to look like `/status` never landed.
+    const settleHint = flashPending('Collecting session status…')
+    const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent, signal)).finally(settleHint)
     /* v8 ignore next -- disposal during the awaited assembly is covered by command-owner teardown tests. */
     if (disposed) return
     /* v8 ignore next -- SystemPrompt always emits at least its required base section. */
@@ -1454,7 +1634,7 @@ export function createTuiChat(
     const registeredTools = assembly.tools.map(tool => displayText(tool.name)).join(', ') || '(none)'
     const events = agent.session.events
     const latestActivity = lastActivityTime(agent.session) ?? agent.session.header.createdAt
-    const usedContext = Math.max(0, Math.round(ctx.tokenMeter.measure(agent.session).totalTokens))
+    const usedContext = Math.max(0, Math.round(contextTokens()))
     let context = `${formatDiagnosticNumber(usedContext)} used · capacity unknown`
     const contextWindow = modelController.contextWindow()
     if (contextWindow !== undefined) {
@@ -1480,12 +1660,18 @@ export function createTuiChat(
     // a permission service reports it, so a deployment without one says nothing
     // rather than implying a policy it does not enforce.
     const preset = approvalPreset(ctx, agent.session)
+    // Which composition this session's tools, prompt sections, and skills come
+    // from. Present only when the deployment composes a roster, for the same
+    // reason the Permission row is: naming a preset in a profile that mounts
+    // none would describe a layer that is not there.
+    const agentPreset = presetController.currentPreset()
     const groups: readonly (readonly StatusCardRow[])[] = [
       [
         ['Session', displayText(agent.session.id)],
         ['Title', displayText(sessionTitle ?? 'untitled')],
         ['Directory', displayText(cwd)],
         ['Model', `${model} ${palette.dim(`(effort ${effort}; reasoning blocks ${showReasoning ? 'shown' : 'hidden'})`)}`],
+        ...agentPreset === undefined ? [] : [['Preset', displayText(agentPreset)] as StatusCardRow],
         ...preset === undefined ? [] : [['Permission', displayText(preset)] as StatusCardRow],
         ...goalStatusRows(goalState.goal, goalState.roundsStarted),
       ],
@@ -1626,6 +1812,15 @@ export function createTuiChat(
       },
     })
     commandCtx.commands.register({
+      name: 'preset',
+      description: 'Show, switch, or copy this session\'s agent preset',
+      input: { hint: '[<preset> | copy <preset> <new-id>]' },
+      handler: ({ rawInput }) => {
+        presetController.queuePresetCommand(rawInput)
+        return { kind: 'success' }
+      },
+    })
+    commandCtx.commands.register({
       name: 'copy',
       description: 'Copy the last answer to the system clipboard',
       handler: () => { copyLastAnswer(); return { kind: 'success' } },
@@ -1735,8 +1930,8 @@ export function createTuiChat(
    * @param attachedContext - optional session-reference snapshot delivered with it.
    */
   const dispatchMessage = (content: ContentBlock[], attachedContext?: UserMessage): void => {
-    if (disposed) {
-      appendNotice(`Agent "${agent.id}" is disposed.`, 'error')
+    if (disposed || agentGone) {
+      appendNotice(`Agent "${agent.id}" is disposed. ${DISPOSED_RECOVERY}`, 'error')
       return
     }
     // Queued before the prompt so the nearest pre-step claims both together.
@@ -1766,18 +1961,29 @@ export function createTuiChat(
     dispatchMessage([{ type: 'text', text: payload }])
   }
 
-  /** Load a manually invoked skill and deliver its rendered body as a user turn, reporting lookup outcomes as notices. */
-  const invokeSkill = (name: string, instructions: string): void => {
+  /**
+   * Load a manually invoked skill and deliver its rendered body as a user turn,
+   * reporting lookup outcomes as notices.
+   *
+   * The returned promise settles when the invocation is over — delivered,
+   * refused, or failed — which is what the launcher-seeded first turn waits on
+   * before it lets typed prompts through (see `initialSkillPending`). A typed
+   * `/skill:` needs nothing from it.
+   * @param name - the skill to look up in the registry.
+   * @param instructions - extra text the user typed after the skill name.
+   * @returns a promise that settles once the invocation has run its course.
+   */
+  const invokeSkill = (name: string, instructions: string): Promise<void> => {
     if (skills === undefined) {
       appendNotice('Skills are not available in this session.', 'warning')
-      return
+      return Promise.resolve()
     }
     const lookup = { cwd, signal: skillAbort.signal }
     const reportFailure = (error: unknown): void => {
       if (disposed) return
       appendNotice(`Skill "${name}" failed to load: ${errorChain(error)}`, 'error')
     }
-    skills.list(lookup).then(
+    return skills.list(lookup).then(
       (summaries) => {
         if (disposed) return
         const summary = summaries.find(skill => skill.name === name)
@@ -1789,7 +1995,7 @@ export function createTuiChat(
           appendNotice(`Skill "${name}" is not available for user invocation.`, 'warning')
           return
         }
-        skills.get(name, lookup).then(
+        return skills.get(name, lookup).then(
           (skill) => {
             if (disposed) return
             if (skill === undefined) {
@@ -1858,11 +2064,39 @@ export function createTuiChat(
     })
   }
 
+  /**
+   * Whether the launcher-seeded skill still owes this session its first turn.
+   *
+   * Only a `config.initialSkill` session ever has one, so an ordinary chat
+   * never queues anything: the flag is false from the first submission on.
+   */
+  let initialSkillPending = config.initialSkill !== undefined
+  /** Prompts submitted during that window, in the order they were typed. */
+  const queuedSubmissions: string[] = []
+
   const submitLine = (value: string): void => {
     const text = value.trim()
     if (text === '') return
     const restoreSubmittedInput = (): void => {
       if (editor.getText() === '') editor.setText(value)
+    }
+    // Every routing decision below reads the trimmed line, because a leading
+    // space is a typo, not an intent: " /help" used to miss the command branch
+    // and be sent to the model as a chat message, which the user paid for and
+    // could not undo.
+    const command = text.startsWith('/')
+    // A launcher-seeded skill owns the first turn of the session it seeded, and
+    // its registry lookup is asynchronous: a prompt submitted inside that window
+    // used to reach the model first, so the model answered a question whose
+    // instructions had not arrived yet. Anything that becomes a turn waits for
+    // that send and is replayed in order; terminal-local slash commands are not
+    // turns and run immediately, so `/quit` still works while the skill loads.
+    if (initialSkillPending && (!command || text.startsWith(SKILL_COMMAND_PREFIX))) {
+      editor.addToHistory(text)
+      editor.setText('')
+      queuedSubmissions.push(value)
+      flashStatus('Queued until the startup skill has been sent.')
+      return
     }
     // `/skill:<name>` carries a colon, which the command registry's name
     // grammar rejects, so it is intercepted before generic command routing.
@@ -1871,13 +2105,13 @@ export function createTuiChat(
       editor.setText('')
       const { name: skillName, instructions } = parseSkillCommand(text)
       if (skillName === '') appendNotice('Usage: /skill:<name> [instructions]', 'warning')
-      else invokeSkill(skillName, instructions)
+      else void invokeSkill(skillName, instructions)
       return
     }
-    if (value.startsWith('/')) {
+    if (command) {
       editor.addToHistory(text)
       editor.setText('')
-      runCommand(value)
+      runCommand(text)
       return
     }
     let parsed: ReturnType<typeof parseSessionReferenceText>
@@ -1928,6 +2162,21 @@ export function createTuiChat(
   }
   editor.onSubmit = submitLine
 
+  /**
+   * Open the gate the launcher-seeded skill held, and replay what waited behind
+   * it in submission order.
+   *
+   * A teardown mid-lookup drops the queue instead: those prompts were never
+   * delivered, and re-submitting them against a disposed agent would answer the
+   * user's typing with a row of refusals on a screen that is going away.
+   */
+  const releaseInitialSkill = (): void => {
+    initialSkillPending = false
+    const held = queuedSubmissions.splice(0, queuedSubmissions.length)
+    if (disposed) return
+    for (const line of held) submitLine(line)
+  }
+
   const removeInputListener = ui.addInputListener((data) => {
     if (overlayManager.hasActiveOverlay()) return undefined
     // `matchesKey` reports the key, not the transition: under the Kitty
@@ -1957,14 +2206,32 @@ export function createTuiChat(
       return { consume: true }
     }
     if (matchesKey(data, Key.escape) && agent.status === 'running') {
-      if (press) agent.cancel({ kind: 'user' })
+      if (press) cancelActiveTurn()
       return { consume: true }
     }
     if (matchesKey(data, Key.ctrl('c'))) {
       if (press) {
         if (agent.status === 'running') {
-          agent.cancel({ kind: 'user' })
-          disarmExit()
+          // Claude Code's ladder, plus the rung a terminal needs that a browser
+          // tab does not. While a turn runs Ctrl+C means cancel, so the first
+          // press cancels and drops any exit armed while idle — a turn that
+          // started under an armed exit must not die of a keypress aimed at it.
+          // A cancel the driver honors ends the turn, and the ladder resets with
+          // it. One it does not honor leaves the user pressing a key that visibly
+          // does nothing, so the second press repeats the cancel (a driver may
+          // check the flag only at its next boundary) and arms the escape hatch,
+          // and the third leaves without the turn — the only exit available when
+          // the turn is what is stuck.
+          if (!cancelRequested) {
+            cancelActiveTurn()
+            disarmExit()
+          } else if (exitArmed === undefined) {
+            cancelActiveTurn()
+            armExit('Press ctrl+c again to exit without waiting for the turn.')
+          } else {
+            disarmExit()
+            void shutdown(true)
+          }
         } else if (editor.getText() !== '') {
           editor.setText('')
           disarmExit()
@@ -1975,14 +2242,20 @@ export function createTuiChat(
         } else if (exitArmed !== undefined) {
           requestExit()
         } else {
-          armExit()
+          armExit('Press ctrl+c again to exit.')
         }
       }
       return { consume: true }
     }
     if (matchesKey(data, Key.ctrl('d'))) {
       if (press) {
+        // Ctrl+D is the empty-prompt EOF it is in every shell: a draft in the
+        // editor is unsent work, and ending the session on top of it threw away
+        // something the user had typed but not yet delivered. The row names the
+        // key that discards it, so the exit is two deliberate presses away
+        // rather than one accident.
         if (agent.status === 'running') appendNotice('Cancel the active turn before exiting.', 'warning')
+        else if (editor.getText() !== '') flashStatus('Draft in the editor — clear it with ctrl+c to exit.')
         else requestExit()
       }
       return { consume: true }
@@ -1995,7 +2268,26 @@ export function createTuiChat(
   // counters, and the clocks this process is running.
   const disposeSessionEvents = ctx.on('session/event', (session, event) => {
     if (session !== agent.session) return
-    if (event.type === 'tool/result') fileSearch.invalidate()
+    // A completed call's own event says nothing about which tool ran, so the
+    // name and arguments are carried from its `tool/call`. Entries are dropped
+    // as they are consumed, and a turn that ends takes its unanswered calls
+    // (a cancelled turn discards them) with it, so this never grows with the
+    // log the way a per-session index would.
+    if (event.type === 'tool/call') {
+      inFlightToolCalls.set(event.data.callId, { name: event.data.name, arguments: event.data.arguments })
+    }
+    if (event.type === 'turn/end') inFlightToolCalls.clear()
+    if (event.type === 'tool/result') {
+      const callId = event.data.message.content[0].toolCallId
+      const call = inFlightToolCalls.get(callId)
+      inFlightToolCalls.delete(callId)
+      // An orphaned result (its call was compacted away, or the TUI mounted
+      // mid-turn) is unclassifiable, and unclassifiable means "assume it
+      // wrote" — see toolCallTouchesFiles.
+      if (call === undefined || toolCallTouchesFiles(ctx.tools.get(call.name, agent), call.arguments)) {
+        fileSearch.invalidate()
+      }
+    }
     // `foldGoal` rejects a malformed change loudly, and this listener runs on
     // the shared event bus: a throw here would take every other subscriber's
     // notification with it, so a rejected refold keeps the last good goal.
@@ -2061,14 +2353,20 @@ export function createTuiChat(
     if (payload.agent !== agent) return
     // The agent left the registry (e.g. an agent-loop-only reload) while the
     // TUI stays mounted. Retained agents accept deliveries after detachment, so
-    // without this a later send would drive a zombie agent/session; mark
-    // disposed so dispatchMessage reports it instead.
+    // without this a later send would drive a zombie agent/session; `agentGone`
+    // makes dispatchMessage report it instead.
+    //
+    // It is deliberately not `disposed`: that flag means "this terminal is
+    // going away" and gates rendering itself, so setting it here froze the
+    // screen the notice below was written for — the refusal never painted, and
+    // neither did the `/resume` picker it points at. The agent is gone; the
+    // terminal is not.
     // The hard clear also retires live compaction. A later compaction/end is
     // intentionally presentation-silent: this disposal notice owns the
     // terminal outcome, and no animation may survive agent detachment.
+    agentGone = true
     clearStatus()
-    appendNotice(`Agent "${agent.id}" was disposed.`, 'warning')
-    disposed = true
+    appendNotice(`Agent "${agent.id}" was disposed; this session can no longer run a turn. ${DISPOSED_RECOVERY}`, 'warning')
   })
 
   const detachListeners = (): void => {
@@ -2171,7 +2469,15 @@ export function createTuiChat(
   // chat is live and the agent is idle. The launcher sets this only for a fresh
   // session, so there is no prior turn to collide with; invokeSkill reports an
   // unknown skill as a notice.
-  if (config.initialSkill !== undefined) invokeSkill(config.initialSkill, '')
+  //
+  // The gate around it is the ordering guarantee: until this invocation has
+  // settled, a submitted prompt is held (see submitLine) rather than racing the
+  // registry lookup to the model. It opens on every outcome, including a failed
+  // or unknown skill — a lookup that produced nothing must not strand what the
+  // user typed while it ran.
+  if (config.initialSkill !== undefined) {
+    void invokeSkill(config.initialSkill, '').finally(releaseInitialSkill)
+  }
 
   return {
     submit(text: string): void {
@@ -2204,6 +2510,7 @@ export function mountTui(ctx: Context, config: Config, runtime: TuiRuntime): voi
   let settled = false
 
   const stopWaiting = (): void => {
+    clearTimeout(stallTimer)
     disposeCreated()
     disposeFailure()
   }
@@ -2228,6 +2535,15 @@ export function mountTui(ctx: Context, config: Config, runtime: TuiRuntime): voi
   const disposeFailure = ctx.on('agent-loop/config-start-failed', (payload) => {
     fail(payload.sessionId, payload.error)
   })
+  // Neither event is guaranteed to arrive: the plugin that creates this agent
+  // can deadlock (a provider initializing against an unreachable endpoint) and
+  // then it reports neither success nor failure. The wait used to be unbounded,
+  // and its symptom was a terminal that printed nothing and never returned —
+  // the one failure mode a startup path must not have.
+  const stallTimer = setTimeout(() => {
+    fail(sessionId, new Error(`no agent was created within ${String(AGENT_START_TIMEOUT_MS)}ms (the plugin that creates it reported neither success nor failure)`))
+  }, AGENT_START_TIMEOUT_MS)
+  stallTimer.unref()
   const existing = ctx.agents.roots().find(agent => agent.id === sessionId)
   if (existing !== undefined) start(existing)
 }
@@ -2310,12 +2626,90 @@ async function latestWorkspaceSession(ctx: Context): Promise<SessionId | undefin
 }
 
 /**
+ * One agent's preset composition: the id its creation header records, and the
+ * setup hook that installs it. Both absent when the deployment composes no
+ * roster, which is the shape every session had before presets existed.
+ */
+interface PresetComposition {
+  /** The preset id to record as a creation fact; absent without a roster. */
+  readonly agentPreset?: string
+  /** Creation-time hook that joins the unpublished agent to that composition. */
+  readonly setup?: AgentSetup
+}
+
+/**
+ * Resolve the preset an agent will be composed from, and the setup that
+ * installs it.
+ *
+ * The id is resolved BEFORE the agent exists because the session boundary
+ * snapshots `meta` before asynchronous setup begins, so a preset discovered
+ * during setup could never reach the header. Mounting still happens inside
+ * setup, where a rejection rolls the whole creation back rather than leaving a
+ * published session whose capabilities are half-installed — which is also why
+ * an unknown `--preset` fails the start with the roster's own message and its
+ * list of ids that do exist.
+ *
+ * Optional service: the roster is a deployment choice, and a profile that
+ * mounts none composes nothing, exactly as this bundle behaved before.
+ * @param ctx - the runner context.
+ * @param presetId - the requested preset, or `undefined` for the roster default.
+ * @returns the header fact and the setup hook, both absent without a roster.
+ * @throws when the roster supplies no such preset.
+ */
+async function composeAgentPreset(
+  ctx: Context,
+  presetId: string | undefined,
+): Promise<PresetComposition> {
+  const presets = ctx.get('agentPresets')
+  if (presets === undefined) return {}
+  const resolvedId = (await presets.resolve(presetId)).id
+  return {
+    agentPreset: resolvedId,
+    setup: async (agentCtx: Context) => { await presets.mount(agentCtx, resolvedId) },
+  }
+}
+
+/**
+ * The composition a resumed session must be rebuilt under: the one its own log
+ * records, never the one this process was asked for.
+ *
+ * Read from the LOG rather than the header, because a session that switched
+ * preset while it was blank ran every one of its turns under the newer
+ * composition; rebuilding it from the header would restore that history under
+ * a tool set the model no longer has. The session is inspected cold — before
+ * `resume` publishes anything — because setup receives only the agent's scope
+ * and has nothing to read the log from.
+ *
+ * A session with no persistence to inspect (an embedder without the service, a
+ * log written before the roster existed) falls back to the roster default,
+ * which is what an unrecorded preset resolves to everywhere else.
+ * @param ctx - the runner context.
+ * @param sessionId - the session about to be resumed.
+ * @returns the setup hook, absent without a roster.
+ */
+async function composeResumedPreset(ctx: Context, sessionId: SessionId): Promise<PresetComposition> {
+  const presets = ctx.get('agentPresets')
+  if (presets === undefined) return {}
+  const persistence = ctx.get('sessionPersistence')
+  let recorded: string | undefined
+  if (persistence !== undefined) {
+    const { meta, events } = await persistence.inspect(sessionId)
+    recorded = sessionAgentPreset({ header: meta, events })
+  }
+  const composition = await composeAgentPreset(ctx, recorded)
+  // A resume records nothing new: the header is a creation fact and the log
+  // already carries whatever switch produced `recorded`.
+  return composition.setup === undefined ? {} : { setup: composition.setup }
+}
+
+/**
  * Create or resume the single agent this terminal drives.
  * @param ctx - the runner context.
  * @param startup - the parsed command line.
  * @param agentOptions - resolved model route, when one was selected.
  * @returns the owned agent handle.
- * @throws when `--resume`/`--continue` names no loadable session.
+ * @throws when `--resume`/`--continue` names no loadable session, or when
+ * `--preset` names one the roster does not supply.
  */
 async function openStartupAgent(
   ctx: Context,
@@ -2323,28 +2717,67 @@ async function openStartupAgent(
   agentOptions: AgentOptions | undefined,
 ): Promise<AgentHandle> {
   const options = agentOptions === undefined ? {} : { agentOptions }
+  const resumeOptions = async (resumeSessionId: SessionId): Promise<{
+    resumeSessionId: SessionId
+    agentOptions?: AgentOptions
+    setup?: AgentSetup
+  }> => ({ resumeSessionId, ...options, ...await composeResumedPreset(ctx, resumeSessionId) })
+  const createOptions = async (sessionId: SessionId): Promise<CreateAgentOptions> => {
+    const composition = await composeAgentPreset(ctx, startup.preset)
+    return {
+      sessionId,
+      meta: {
+        cwd: process.cwd(),
+        ...composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset },
+      },
+      ...options,
+      ...composition.setup === undefined ? {} : { setup: composition.setup },
+    }
+  }
   if (startup.resume !== undefined) {
-    return ctx.agents.resume({ resumeSessionId: SessionId(startup.resume), ...options })
+    return ctx.agents.resume(await resumeOptions(SessionId(startup.resume)))
   }
   if (startup.continueLatest) {
     const latest = await latestWorkspaceSession(ctx)
     if (latest === undefined) {
       throw new Error('dsh-tui: --continue found no persisted session for this workspace')
     }
-    return ctx.agents.resume({ resumeSessionId: latest, ...options })
+    return ctx.agents.resume(await resumeOptions(latest))
   }
   // A launcher may still fix the identity through `ctx.provide('mainSessionId', …)`.
   const identity = ctx.get('mainSessionId')
   if (identity !== undefined) {
     return identity.resume
-      ? ctx.agents.resume({ resumeSessionId: identity.id, ...options })
-      : ctx.agents.create({ sessionId: identity.id, meta: { cwd: process.cwd() }, ...options })
+      ? ctx.agents.resume(await resumeOptions(identity.id))
+      : ctx.agents.create(await createOptions(identity.id))
   }
-  return ctx.agents.create({
-    sessionId: SessionId(`session-${randomUUID()}`),
-    meta: { cwd: process.cwd() },
-    ...options,
-  })
+  return ctx.agents.create(await createOptions(SessionId(`session-${randomUUID()}`)))
+}
+
+/**
+ * What a start that could not open its session prints before exiting.
+ *
+ * The in-process resume path already answers a bad session id with one readable
+ * line (`handoff` below); the startup path let the same failure propagate out of
+ * the cordis effect, so `--resume <typo>` answered with a stack trace, or with
+ * whatever the loader logged around it. This says which session could not be
+ * opened, why, and the flag to change — the three things the user needs and a
+ * trace does not carry.
+ * @param startup - the parsed command line, for which selection failed.
+ * @param error - the rejection from the agent registry.
+ * @returns the message to write on the released terminal, newline included.
+ */
+export function startupFailureMessage(startup: TuiStartupValues, error: unknown): string {
+  const cause = errorChain(error)
+  if (startup.resume !== undefined) {
+    return `dsh-tui: cannot resume session "${startup.resume}": ${cause}\n`
+      + 'Start without --resume for a new session, or --continue for the most recent one in this workspace.\n'
+  }
+  if (startup.continueLatest) {
+    return `dsh-tui: cannot continue the most recent session: ${cause}\n`
+      + 'Start without --continue for a new session.\n'
+  }
+  return `dsh-tui: cannot start a session: ${cause}\n`
 }
 
 /** The agent and chat this runner currently owns. */
@@ -2438,6 +2871,9 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
       resumed = await ctx.agents.resume({
         resumeSessionId: sessionId,
         ...agentOptions === undefined ? {} : { agentOptions },
+        // Same composition rule as the startup path: the session picked in
+        // `/resume` is rebuilt under the preset its own log records.
+        ...await composeResumedPreset(ctx, sessionId),
       })
     } catch (error: unknown) {
       terminal.write(`dsh-tui: failed to resume session "${sessionId}": ${errorChain(error)}\n`)
@@ -2454,7 +2890,18 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
   // whichever session is mounted when it runs.
   ctx.effect(() => () => teardown(), 'dsh-tui/session')
 
-  mount(await openStartupAgent(ctx, startup, agentOptions))
+  let handle: AgentHandle
+  try {
+    handle = await openStartupAgent(ctx, startup, agentOptions)
+  } catch (error: unknown) {
+    // Reported on the terminal this run never took over, exactly as the resume
+    // handoff reports its own fatal case: nothing is mounted yet, so there is
+    // no transcript to put a notice in and no renderer to restore.
+    terminal.write(displayText(startupFailureMessage(startup, error)))
+    exit(1)
+    return
+  }
+  mount(handle)
 
   // The command-line prompt takes the same path a typed line would.
   if (startup.initialPrompt !== undefined) mounted?.controller.submit(startup.initialPrompt)

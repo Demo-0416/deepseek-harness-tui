@@ -23,6 +23,12 @@ export const TUI_STARTUP_SERVICE = 'tuiStartup'
 export interface TuiStartupValues {
   /** `provider/model` selection override, e.g. `kimi-coding/kimi-for-coding`. */
   model: string | undefined
+  /**
+   * Agent preset the fresh session is composed from, when `--preset` was
+   * passed. Applies to creation only: a resumed session runs the preset its own
+   * log records, because its history was produced under that composition.
+   */
+  preset: string | undefined
   /** Session id to resume, when `--resume` was passed. */
   resume: string | undefined
   /** Continue the most recent session, when `--continue` was passed. */
@@ -43,6 +49,7 @@ export function tuiCommand(): Command {
     .description('Interactive terminal UI for deepseek-harness')
     .helpOption('-h, --help', 'show this help')
     .option('-m, --model <provider/model>', 'model selection (provider/model)')
+    .option('--preset <id>', 'agent preset a fresh session is composed from')
     .option('-r, --resume <sessionId>', 'resume a session by id')
     .option('-c, --continue', 'continue the most recent session')
     .option('-p, --print <task>', 'one-shot: answer one task and exit without the UI')
@@ -54,6 +61,7 @@ Examples:
   dsh --profile tui --continue                resume the most recent session
   dsh --profile tui --resume <sessionId>      resume a specific session
   dsh --profile tui --print "run the tests"   one-shot answer and exit
+  dsh --profile tui --preset code             start on the "code" agent preset
 `)
 }
 
@@ -66,6 +74,7 @@ export function apply(ctx: Context): void {
   program.action(() => {
     const opts = program.opts<{
       model?: string
+      preset?: string
       resume?: string
       continue?: boolean
       print?: string
@@ -73,6 +82,7 @@ export function apply(ctx: Context): void {
     const prompt = program.args.join(' ').trim()
     ctx.provide(TUI_STARTUP_SERVICE, {
       model: opts.model,
+      preset: opts.preset,
       resume: opts.resume,
       continueLatest: opts.continue === true,
       print: opts.print,

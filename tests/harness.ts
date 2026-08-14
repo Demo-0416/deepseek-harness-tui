@@ -240,11 +240,17 @@ export async function createTuiTestContext(options: TuiHarnessOptions = {}): Pro
   await ctx.plugin(UserQuestionService)
   await ctx.plugin(TuiPromptService)
   const catalog = options.catalog ?? DEFAULT_CATALOG
-  ctx.provide('tokenMeter', {
-    measure() {
-      return { totalTokens: options.contextTokens ?? 0 }
-    },
-  } as never)
+  // Skipped when the test brings its own, because a name can only be provided
+  // once: a case that counts how often the meter is read supplies a counting
+  // one through `services`, and this default exists only so the prompt row has
+  // a meter at all.
+  if (options.services?.['tokenMeter'] === undefined) {
+    ctx.provide('tokenMeter', {
+      measure() {
+        return { totalTokens: options.contextTokens ?? 0 }
+      },
+    } as never)
+  }
   if (options.configureContext === undefined) {
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)

@@ -51,6 +51,22 @@
     - id: cordis-host-runner
       name: '@deepseek-ai/dsh-cordis-host-runner'
 
+    # The preset roster, configured exactly as the web-app bundle configures it.
+    # Only `default` is stated here: the SHIPPED root (`config/agent-presets/`,
+    # `system` trust) sits beside the installed app's own config, so the launcher
+    # patches it into whichever profile carries a row with THIS id — which is why
+    # the id must stay `agent-presets`. The writable root under the harness home
+    # is `dsh-agent-presets`' own `includeUserRoot` default.
+    #
+    # Mounting this row is what makes every agent this bundle opens go through
+    # `AgentPresets.mount()` in its creation setup: the plugin warns on any agent
+    # published without joining a preset (see its `agent/created` listener), so
+    # the boot path in `src/index.ts` composes create AND resume.
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
+
 - insert:
     - id: tui-startup
       name: 'dsh-tui/startup'
