@@ -606,7 +606,15 @@ export function createTuiChat(
   let shuttingDown: Promise<void> | undefined
   // Optional: skills mount conditionally, so read the global service store
   // rather than declaring an injection that would make the TUI require them.
-  const skills = ctx.get('skills')
+  // The host registry is layered per scope and serves every session; a
+  // composition may realm-mount its own registry instead, which is invisible
+  // to host contexts, so address it through the live agent — the same
+  // resolution the Web host's skill domain performs. Guarded per the optional
+  // -service stance: an embedder's roster stub need not carry `serviceFor`.
+  const presetRoster = ctx.get('agentPresets')
+  const skills = (typeof presetRoster?.serviceFor === 'function'
+    ? presetRoster.serviceFor(agent, 'skills')
+    : undefined) ?? ctx.get('skills')
   const cwd = agent.session.header.cwd ?? process.cwd()
   const fileSearch = new WorkspaceFileSearch(cwd, {
     maxResults: resolved.fileSearchMaxResults,
@@ -1795,7 +1803,10 @@ export function createTuiChat(
 
   const refreshSkillCommands = (service: SkillRegistry): void => {
     const scan = ++skillCommandScan
-    service.snapshot({ cwd, signal: skillAbort.signal }).then(
+    // `scope` selects the agent's preset layers; without it the read sees the
+    // global layer alone, which the host composition leaves empty now that
+    // skill discovery is a preset row.
+    service.snapshot({ cwd, scope: agent, signal: skillAbort.signal }).then(
       (snapshot) => {
         if (disposed || scan !== skillCommandScan || !snapshot.complete) return
         const invocable = snapshot.skills.filter(skill => skill.invocation.userInvocable)
@@ -2023,7 +2034,7 @@ export function createTuiChat(
       appendNotice('Skills are not available in this session.', 'warning')
       return Promise.resolve()
     }
-    const lookup = { cwd, signal: skillAbort.signal }
+    const lookup = { cwd, scope: agent, signal: skillAbort.signal }
     const reportFailure = (error: unknown): void => {
       if (disposed) return
       appendNotice(`Skill "${name}" failed to load: ${errorChain(error)}`, 'error')

@@ -52,6 +52,9 @@
       name: '@deepseek-ai/dsh-cordis-host-runner'
 
     # The preset roster, configured exactly as the web-app bundle configures it.
+    # The agent-plane disables BELOW are the other half of this row: without
+    # them the base's process-global tools stack under every preset and the
+    # roster only ever adds to the standard composition instead of selecting.
     # Only `default` is stated here: the SHIPPED root (`config/agent-presets/`,
     # `system` trust) sits beside the installed app's own config, so the launcher
     # patches it into whichever profile carries a row with THIS id — which is why
@@ -66,6 +69,108 @@
       name: '@deepseek-ai/dsh-agent-presets'
       config:
         default: standard
+
+# ── surface values the base deliberately omits (web-app parity) ─────────────
+
+# The deployment persona, the same line the web-app bundle states. Presets
+# shadow it with their own `dsh-persona` row; this host value is what a
+# rosterless overlay of this profile would fall back to.
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+- id: tools
+  config:
+    # TEMPORARY workaround mirrored from the web-app bundle: DSH_TOOLS_MODE
+    # (native|code|both) opts a whole dsh process into Code Mode; unset keeps
+    # the schema default (native). The designed path is the `code` preset.
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+# ── the agent plane moves behind agent presets (web-app parity) ─────────────
+#
+# Every row below composes what ONE agent contributes to the host registries:
+# its tools, its prompt sections, its delegation backends. The base keeps them
+# for a preset-less single-session terminal; this bundle mounts the preset
+# roster above, so — exactly as the web-app bundle does — each session mounts
+# a preset instead, and these base rows are disabled so a preset SELECTS the
+# agent plane rather than stacking on a process-global copy of `standard`.
+#
+# Disabling rather than deleting is deliberate: the base is shared, and a row
+# absent from a surface overlay would silently reappear the day someone
+# reorders the composition. What stays enabled is host-plane by the criteria
+# the web-app patch records: `shell-env` (host injection), the `jobs`,
+# `skill`, `goals`, and `subagents` registries plus `tool-subagent-report`
+# (read across sessions or process-singletons), and the token meter.
+
+- id: tool-bash
+  disabled: true
+
+- id: tool-pwsh
+  disabled: true
+
+- id: tool-jobs
+  disabled: true
+
+- id: tool-fs
+  disabled: true
+
+- id: tool-fs-search
+  disabled: true
+
+- id: tool-str-replace-editor
+  disabled: true
+
+- id: skill-filesystem
+  disabled: true
+
+- id: tool-skill
+  disabled: true
+
+- id: tool-goal
+  disabled: true
+
+- id: plan-mode
+  disabled: true
+
+- id: compaction-basic
+  disabled: true
+
+- id: command-compact
+  disabled: true
+
+- id: tool-result-pruner
+  disabled: true
+
+- id: tool-subagent-control
+  disabled: true
+
+- id: tool-subagent-list-agents
+  disabled: true
+
+- id: tool-subagent
+  disabled: true
+
+- id: tool-subagent-fork
+  disabled: true
+
+- id: workflow-worker-thread
+  disabled: true
+
+- id: tool-workflow
+  disabled: true
+
+- id: tool-ralph
+  disabled: true
+
+- id: agent-instructions
+  disabled: true
+
+- id: tool-todo
+  disabled: true
+
+- id: tool-web
+  disabled: true
 
 - insert:
     - id: tui-startup
