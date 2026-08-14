@@ -211,11 +211,18 @@ export class TranscriptReconciler {
     // The turn a step belongs to, tracked so the turn's completion row lands
     // after everything that turn rendered — its last step's footer included.
     let turn: number | undefined
+    // One row per turn, whatever the node order does. A turn the pass re-enters
+    // would otherwise push its (memoized) row a second time, which is the same
+    // component mounted twice.
+    const reported = new Set<number>()
     const flushTurn = (): void => {
-      if (turn === undefined) return
-      const row = this.turnFooter(turn)
-      if (row !== undefined) children.push(row)
+      const closing = turn
       turn = undefined
+      if (closing === undefined || reported.has(closing)) return
+      const row = this.turnFooter(closing)
+      if (row === undefined) return
+      reported.add(closing)
+      children.push(row)
     }
     const emitLocals = (anchor: number): void => {
       const rows = this.locals.get(anchor)
@@ -241,8 +248,13 @@ export class TranscriptReconciler {
       flushFooter()
       // A new turn opens at its first step, or at the prompt that asked for it
       // (the fold logs the prompt above the step it entered), so either one is
-      // where the previous turn's row is due.
-      if (node.kind === 'user-message' || (node.kind === 'assistant' && node.turn !== turn)) flushTurn()
+      // where the previous turn's row is due. A steering prompt is neither: it
+      // lands between two steps of the turn it interrupted, and closing the
+      // turn there reported it mid-answer and again at its real end.
+      const opensTurn = node.kind === 'user-message'
+        ? node.source !== 'steering'
+        : node.kind === 'assistant' && node.turn !== turn
+      if (opensTurn) flushTurn()
       if (node.kind === 'assistant') turn = node.turn
       switch (node.kind) {
         case 'assistant': {

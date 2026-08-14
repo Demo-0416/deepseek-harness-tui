@@ -74,8 +74,8 @@ function assistantNode(overrides: Partial<AssistantNode> = {}): AssistantNode {
 }
 
 /** One typed prompt. */
-function userNode(text: string, key: string): UserMessageNode {
-  return { kind: 'user-message', key, version: 0, time: START, text, source: 'user' }
+function userNode(text: string, key: string, source: UserMessageNode['source'] = 'user'): UserMessageNode {
+  return { kind: 'user-message', key, version: 0, time: START, text, source }
 }
 
 /** A reconciler over its own chat container, plus the rows it currently renders. */
@@ -280,6 +280,26 @@ describe('turn completion row', () => {
       `and stays above the next turn's prompt:\n${rows.join('\n')}`)
     assert.equal(rows.filter(entry => entry.startsWith(' ✻ ')).length, 1,
       `the open turn adds none of its own:\n${rows.join('\n')}`)
+  })
+
+  it('reports a steered turn once, at its end rather than at the interruption', () => {
+    // A steering prompt lands *between* two steps of the turn it interrupted,
+    // so it is not a turn boundary. Treating it as one closed the turn twice:
+    // the row printed mid-answer and again at the real end, and because the row
+    // is memoized per turn, the second push mounted the same component twice.
+    const mounted = mount(turnEvents(1, 45_000))
+    const first = assistantNode({ step: 1, text: 'FIRST-STEP' })
+    const second = assistantNode({ step: 2, key: 'assistant:1:2', text: 'SECOND-STEP' })
+    settle(first, START + 45_000)
+    settle(second, START + 45_000)
+    const steer = userNode('STEERED-PROMPT', 'user:steer', 'steering')
+    mounted.reconciler.reconcile([first, steer, second])
+    const rows = mounted.rows()
+
+    assert.equal(rows.filter(row => row.startsWith(' ✻ ')).length, 1, `one row per turn:\n${rows.join('\n')}`)
+    const row = rows.findIndex(entry => entry.startsWith(' ✻ '))
+    assert.ok(row > rows.findIndex(entry => entry.includes('SECOND-STEP')),
+      `and it closes the turn rather than interrupting it:\n${rows.join('\n')}`)
   })
 
   it('keeps its verb through the remount a color-scheme change forces', () => {
