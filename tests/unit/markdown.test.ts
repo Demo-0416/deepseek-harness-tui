@@ -19,11 +19,8 @@ import assert from 'node:assert/strict'
 import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import {
   claudeMarkdownTheme,
-  clearMarkdownHighlightCache,
   hasMarkdownSyntax,
-  markdownHighlighter,
   renderMarkdownAnsi,
-  warmMarkdownHighlightCache,
   type MarkdownAnsiTheme,
 } from '../../src/render/markdown.ts'
 import { MarkdownBodyComponent, type MarkdownPolicy } from '../../src/components/transcript.ts'
@@ -45,6 +42,21 @@ const sentinel: MarkdownAnsiTheme = {
 /** Render with the sentinel theme and hyperlinks off (a bare URL is easier to read). */
 function plain(source: string, width = 60): string[] {
   return renderMarkdownAnsi(source, width, sentinel, { hyperlinks: false })
+}
+
+/**
+ * The terminal columns a row's `|` characters land on. Counted in columns, not
+ * in string indexes: a CJK cell holds half as many characters per column, so
+ * two aligned rows have their pipes at completely different indexes.
+ */
+function pipeColumns(row: string): number[] {
+  const columns: number[] = []
+  let column = 0
+  for (const char of stripTerminalSequences(row)) {
+    if (char === '|') columns.push(column)
+    column += visibleWidth(char)
+  }
+  return columns
 }
 
 describe('markdown headings', () => {
@@ -69,6 +81,24 @@ describe('markdown headings', () => {
 
   it('formats inline tokens inside a heading before styling it', () => {
     assert.deepEqual(plain('## Run `dsh` now'), ['H2<Run C<dsh> now>'])
+  })
+
+  it('renders a heading with inline code at every level the way upstream does', () => {
+    // The regression this pins: a heading used to reach the transcript as bare
+    // italic-underlined text with its `#` markers still in it, and the code
+    // span inside it at prose color.
+    const rows = renderMarkdownAnsi('# 顶层 `dsh` 标题\n\n## 二级 `--resume`\n\n### 三级说明', 60, claudeMarkdownTheme)
+    const codeColor = '\x1b[38;2;177;185;249m'
+    assert.deepEqual(rows, [
+      `\x1b[1m\x1b[3m\x1b[4m顶层 ${codeColor}dsh\x1b[39m 标题\x1b[24m\x1b[23m\x1b[22m`,
+      '',
+      '',
+      `\x1b[1m二级 ${codeColor}--resume\x1b[39m\x1b[22m`,
+      '',
+      '',
+      '\x1b[1m三级说明\x1b[22m',
+    ])
+    assert.ok(!rows.some(row => row.includes('#')), 'no marker survives into the render')
   })
 
   it('accepts a depth-blind `string => string` heading slot', () => {
@@ -130,15 +160,36 @@ describe('markdown inline spans', () => {
 })
 
 describe('markdown code blocks', () => {
-  it('falls back to the codeBlock slot when nothing highlighted it', () => {
+  it('indents every line and styles it through the codeBlock slot', () => {
+    // Per line, not per block: one span opened around the whole block would
+    // end at the first row break, leaving the rest of the fence at prose color.
     assert.deepEqual(plain('before\n\n```ts\nconst a = 1\nconst b = 2\n```\n\nafter'), [
       'before',
       '',
-      'K<const a = 1',
-      'const b = 2>',
+      '  K<const a = 1>',
+      '  K<const b = 2>',
       '',
       'after',
     ])
+  })
+
+  it('keeps the indent when the fence opens the message', () => {
+    // The block trim runs on every block and used to eat the first line's
+    // indent whenever a fence was the first thing in it.
+    assert.deepEqual(plain('```ts\nconst a = 1\n```'), ['  K<const a = 1>'])
+  })
+
+  it('keeps interior blank lines blank rather than indenting them', () => {
+    // A trailing-space-only row is copied out of the transcript verbatim.
+    assert.deepEqual(plain('```ts\na\n\nb\n```'), ['  K<a>', '', '  K<b>'])
+  })
+
+  it('paints a fenced block in the same tone as an inline codespan', () => {
+    const [line = ''] = renderMarkdownAnsi('```ts\nconst a = 1\n```', 40, claudeMarkdownTheme)
+    const [inline = ''] = renderMarkdownAnsi('`const a = 1`', 40, claudeMarkdownTheme)
+    const codeColor = '\x1b[38;2;177;185;249m'
+    assert.equal(line, `  ${codeColor}const a = 1\x1b[39m`)
+    assert.ok(inline.startsWith(codeColor), inline)
   })
 
   it('uses an injected highlighter, and passes it the fence language', () => {
@@ -150,7 +201,9 @@ describe('markdown code blocks', () => {
       },
     })
     assert.deepEqual(seen, [['x = 1', 'python']])
-    assert.deepEqual(rows, ['HL<x = 1>'])
+    // Highlighted output is indented like any other block, but never re-styled:
+    // it already carries its own colors.
+    assert.deepEqual(rows, ['  HL<x = 1>'])
   })
 
   it('renders plain and never consults the highlighter for a bare fence', () => {
@@ -162,16 +215,11 @@ describe('markdown code blocks', () => {
       },
     })
     assert.equal(calls, 0)
-    assert.deepEqual(rows, ['K<raw>'])
+    assert.deepEqual(rows, ['  K<raw>'])
   })
 
-  it('reads the shared cache, which stays empty when shiki is absent', async () => {
-    clearMarkdownHighlightCache()
-    // `@shikijs/cli` is an optional peer that this repo does not install, so
-    // warming must resolve quietly and leave the render plain.
-    await warmMarkdownHighlightCache('```ts\nconst a = 1\n```')
-    assert.equal(markdownHighlighter()('const a = 1', 'ts'), undefined)
-    assert.deepEqual(plain('```ts\nconst a = 1\n```'), ['K<const a = 1>'])
+  it('draws no language label, exactly as upstream does', () => {
+    assert.deepEqual(plain('```typescript\nx\n```'), ['  K<x>'])
   })
 })
 
@@ -251,12 +299,28 @@ describe('markdown fast path', () => {
     ])
   })
 
-  it('leaves text that only looks like syntax far into a long string alone', () => {
-    // The sniff samples the first 500 characters, so a marker past that point
-    // never triggers the full parse.
-    const source = `${'x'.repeat(600)} **not bold**`
+  it('finds a marker past the first 500 characters', () => {
+    // Upstream samples the first 500 characters only. A Chinese answer opens
+    // with a paragraph that carries no ASCII marker at all, so its table or
+    // fence lands well past that sample and the whole message used to render
+    // as one plain paragraph — raw pipes, raw fences, forever.
+    const lead = '这是一段没有任何标记的中文说明文字。'.repeat(40)
+    assert.ok(lead.length > 500)
+    assert.equal(hasMarkdownSyntax(`${lead}\n\n**加粗**`), true)
+    assert.deepEqual(plain(`${lead.slice(0, 18)}\n\n**加粗**`, 100), ['这是一段没有任何标记的中文说明文字。', '', 'B<加粗>'])
+  })
+
+  it('still skips the parse for prose that has no marker anywhere', () => {
+    const source = 'x'.repeat(600)
     assert.equal(hasMarkdownSyntax(source), false)
     assert.equal(plain(source, 1000).join(''), source)
+  })
+
+  it('parses a fenced block that a long unmarked lead pushed past the sample', () => {
+    const lead = '这是一段没有任何标记的中文说明文字。'.repeat(40)
+    const rows = plain(`${lead}\n\n\`\`\`ts\nconst a = 1\n\`\`\``, 100)
+    assert.equal(rows.at(-1), '  K<const a = 1>', rows.join('\n'))
+    assert.ok(!rows.some(row => row.includes('```')), `the fence must not survive as text:\n${rows.join('\n')}`)
   })
 })
 
@@ -276,6 +340,67 @@ describe('markdown tables', () => {
 
   it('pads a column to the three-character minimum', () => {
     assert.deepEqual(plain('| a | b |\n|---|---|\n| 1 | 2 |'), ['| a   | b   |', '|-----|-----|', '| 1   | 2   |'])
+  })
+
+  it('keeps a CJK table inside 100 columns with its pipes aligned', () => {
+    // The regression this pins: a real answer's file/description table used to
+    // be padded to its widest cell, overflow the terminal, and be re-wrapped by
+    // the caller into a wall of stray pipes with the source's own `|---|` row
+    // still in it.
+    const source = [
+      '| 文件 | 说明 |',
+      '|------|------|',
+      '| src/core/nodes.ts | 纯 foldEvent 归约,新增的 markdown 分支全部落在这里,不碰任何 IO |',
+      '| src/components/reconciler.ts | 把 store 的快照差量重建成 pi-tui 组件树,只在会话变化时触发 |',
+      '| src/render/markdown.ts | Claude Code 的 markdown 管线,表格与代码围栏都在这一层定版 |',
+    ].join('\n')
+    const rows = plain(source, 100)
+
+    for (const row of rows) {
+      assert.ok(visibleWidth(row) <= 100, `${visibleWidth(row)} > 100: ${JSON.stringify(row)}`)
+    }
+    const columnsOf = rows.map(pipeColumns)
+    const [first = []] = columnsOf
+    for (const columns of columnsOf) {
+      assert.deepEqual(columns, first, `every row's pipes must land in the same columns:\n${rows.join('\n')}`)
+    }
+    assert.equal(rows.filter(row => /^\|-+\|/u.test(row)).length, 1, 'exactly one rule, the rendered one')
+    assert.ok(
+      !rows.some(row => /-{3,}\s*\|?\s*$/u.test(row) && !/^\|-/u.test(row)),
+      `the source's own separator row must not survive:\n${rows.join('\n')}`,
+    )
+    assert.ok(rows.join('\n').includes('纯 foldEvent 归约'), rows.join('\n'))
+  })
+
+  it('keeps an unbreakable CJK column inside every width that can seat the table', () => {
+    // The regression this pins: when even the per-column minimums do not fit,
+    // the widths are scaled down — and the three-column floor lifted the narrow
+    // ones straight back up, putting the row over the render width again. A
+    // two-column table with one space-free cell was re-wrapped into stray pipes
+    // at every width from 13 to 41, which is most of a split terminal.
+    const source = [
+      '| 键 | 值 |',
+      '|---|---|',
+      '| x | 这一格完全没有空格因此它的最小宽度就是整格宽度 |',
+    ].join('\n')
+    // Two columns need `2 * 3` cells plus `1 + 2 * 3` of chrome before the
+    // layout has anything left to shrink; below that the overflow is the one
+    // formatTable documents as unavoidable.
+    for (let width = 13; width <= 60; width += 1) {
+      for (const row of plain(source, width)) {
+        assert.ok(visibleWidth(row) <= width, `width ${width}: ${visibleWidth(row)} > ${width}: ${JSON.stringify(row)}`)
+        assert.ok(row === '' || row.startsWith('|'), `width ${width}: re-wrapped row ${JSON.stringify(row)}`)
+      }
+    }
+  })
+
+  it('wraps a long cell inside its column instead of widening the table', () => {
+    const source = '| id | note |\n|---|---|\n| 1 | 一段需要在单元格内折行而不是把整张表撑爆的中文说明 |'
+    const rows = plain(source, 40)
+    for (const row of rows) {
+      assert.ok(visibleWidth(row) <= 40, `${visibleWidth(row)} > 40: ${JSON.stringify(row)}`)
+    }
+    assert.ok(rows.length > 3, `the long cell must occupy several rows:\n${rows.join('\n')}`)
   })
 })
 

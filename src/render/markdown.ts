@@ -12,19 +12,29 @@
  *   {@link ../render/palette.ts | CLAUDE_COLORS}.
  * - Rendering is synchronous and returns wrapped rows rather than one joined
  *   string, so a pi-tui component can render inside its own `render(width)`
- *   pass. Syntax highlighting is therefore a *pre-warmed* input, exactly as in
- *   {@link ../render/diff.ts | diff.ts}: {@link warmMarkdownHighlightCache} is
- *   awaited off the render path and {@link markdownHighlighter} reads its cache.
+ *   pass. Syntax highlighting is therefore not bundled: upstream resolves
+ *   `cli-highlight` behind a React `Suspense` boundary and re-renders when it
+ *   lands, which a synchronous `render(width)` has no equivalent of. A fenced
+ *   block is styled as a block instead — indented and in Claude Code's own code
+ *   tone, the same tone an inline codespan gets — and a host that wants real
+ *   per-token highlighting injects a synchronous {@link MarkdownHighlighter}
+ *   through {@link MarkdownRenderOptions.highlight}.
  * - Wrapping is delegated to pi-tui's `wrapTextWithAnsi`, which is ANSI-, OSC 8-
  *   and East-Asian-width-aware. Nothing here computes a column count by hand.
- * - Two upstream bugs are not reproduced: a task-list checkbox token used to
- *   contribute a bare indent (and no `[ ]` marker) to its list item, and a
- *   `del` token is dropped by disabling the tokenizer on a *private* `Marked`
- *   instance instead of on the shared singleton.
+ * - Three upstream bugs are not reproduced: a task-list checkbox token used to
+ *   contribute a bare indent (and no `[ ]` marker) to its list item; a `del`
+ *   token is dropped by disabling the tokenizer on a *private* `Marked`
+ *   instance instead of on the shared singleton; and the markdown sniff reads
+ *   the whole string rather than its first 500 characters, which is the
+ *   difference between rendering and not rendering a Chinese answer (see
+ *   {@link hasMarkdownSyntax}).
  *
- * Tables stay a monospace-aligned text block (upstream promotes them to a
- * flexbox React component); they are still split into their own block so the
- * blank-line rhythm around them matches.
+ * Tables stay a monospace-aligned text block of `|` cells (upstream promotes
+ * them to a flexbox React component), but the column widths come from that
+ * component's algorithm rather than from the text path's: they are fitted to
+ * the render width and cell content wraps inside its column, because a table
+ * padded to its widest cell is re-wrapped by the caller the moment it is wider
+ * than the terminal, and a re-wrapped table is a wall of stray pipes.
  * @module @deepseek-ai/dsh-tui/render/markdown
  */
 
@@ -94,7 +104,11 @@ export interface MarkdownAnsiTheme {
   readonly italic: (text: string) => string
   /** An inline `` `codespan` ``. */
   readonly code: (text: string) => string
-  /** A fenced code block that no highlighter covered. */
+  /**
+   * One line of a fenced code block that no highlighter covered. Applied per
+   * line rather than per block so every wrapped row carries its own color: a
+   * single span opened around a whole block ends at the first row break.
+   */
   readonly codeBlock: (text: string) => string
   /** A link's display text (inside the OSC 8 sequence, when hyperlinks are on). */
   readonly link: (text: string) => string
@@ -109,17 +123,20 @@ export interface MarkdownAnsiTheme {
 /**
  * Claude Code's own styling, on {@link ../render/palette.ts | CLAUDE_COLORS}.
  *
- * `codeBlock` and `listBullet` are intentionally identity: upstream renders an
- * un-highlighted block and a list marker at plain text weight, and a code block
- * that arrives pre-highlighted already carries its own colors. `hr` is dimmed —
- * a rule is chrome, and at full weight it reads as content.
+ * `codeBlock` paints a fenced block in the same tone as an inline codespan.
+ * Upstream leaves it unstyled because `cli-highlight` colors it token by token;
+ * with no highlighter that fallback is *literally* indistinguishable from
+ * prose, so the block keeps the one color the product already reads as code.
+ * `listBullet` is intentionally identity — upstream renders a list marker at
+ * plain text weight. `hr` is dimmed: a rule is chrome, and at full weight it
+ * reads as content.
  */
 export const claudeMarkdownTheme: MarkdownAnsiTheme = {
   heading: (text, depth) => (depth === 1 ? bold(italic(underline(text))) : bold(text)),
   bold: text => bold(text),
   italic: text => italic(text),
   code: text => fg(CLAUDE_COLORS.permission, text),
-  codeBlock: text => text,
+  codeBlock: text => fg(CLAUDE_COLORS.permission, text),
   link: text => `${BLUE}${text}${FG_DEFAULT}`,
   quote: text => dim(text),
   listBullet: text => text,
@@ -137,8 +154,9 @@ export type MarkdownHighlighter = (code: string, language: string) => string | u
 /** Knobs that are not styling. */
 export interface MarkdownRenderOptions {
   /**
-   * Highlighter for fenced code blocks. Defaults to the shared cache
-   * {@link warmMarkdownHighlightCache} fills, which renders plain until warmed.
+   * Highlighter for fenced code blocks. With none — the default — a block is
+   * styled line by line through {@link MarkdownAnsiTheme.codeBlock}. A
+   * highlighter is only ever consulted for a fence that named its language.
    */
   readonly highlight?: MarkdownHighlighter
   /**
@@ -171,20 +189,23 @@ const lexer = new Marked({
  */
 const MD_SYNTAX_RE = /[#*`|[>\-_~]|\n\n|^\d+\. |\n\d+\. /
 
-/** How much of a long string is sampled when sniffing for markdown syntax. */
-const SYNTAX_SNIFF_CHARS = 500
-
 /**
  * Whether `text` contains anything the lexer would treat as markdown.
  *
- * Only the first {@link SYNTAX_SNIFF_CHARS} characters are sampled: real
- * markdown announces itself early (a heading, a fence, a list), while a long
- * plain tail is exactly the case worth skipping the parse for.
+ * The whole string is scanned. Upstream samples the first 500 characters on the
+ * theory that markdown announces itself early, but that theory is written for
+ * English: a Chinese answer opens with a paragraph that carries no ASCII marker
+ * at all, and the table or fence it ends with lands well past character 500.
+ * The document then renders as one plain paragraph — raw pipes, raw fences —
+ * and because the sniff is monotone in nothing, every streamed delta re-decides
+ * the same way and the answer never converts. One `O(n)` regex pass against a
+ * misrendered answer is not a trade; the render itself is cached per
+ * `(text, width)` by the component that mounts it.
  * @param text - The candidate source.
  * @returns `true` when the full lexer is needed.
  */
 export function hasMarkdownSyntax(text: string): boolean {
-  return MD_SYNTAX_RE.test(text.length > SYNTAX_SNIFF_CHARS ? text.slice(0, SYNTAX_SNIFF_CHARS) : text)
+  return MD_SYNTAX_RE.test(text)
 }
 
 /**
@@ -209,42 +230,19 @@ function lexMarkdown(text: string): readonly Token[] {
 }
 
 // ---------------------------------------------------------------------------
-// Syntax highlighting (pre-warmed, optional)
+// Fenced code blocks
 // ---------------------------------------------------------------------------
 
-/** Default shiki theme; only consulted when `@shikijs/cli` is installed. */
-export const DEFAULT_MARKDOWN_SHIKI_THEME = 'github-dark'
-
-/** Blocks longer than this are never highlighted. */
-const MAX_HIGHLIGHT_CHARS = 100_000
-/** Highlight cache capacity, in blocks. */
-const HIGHLIGHT_CACHE_LIMIT = 200
-
-const highlightCache = new Map<string, string>()
-
-/** Cache key for one highlight request. */
-function highlightKey(shikiTheme: string, language: string, code: string): string {
-  return `${shikiTheme} ${language} ${code}`
-}
-
-/** Store a highlight result, evicting the oldest entries past the cache limit. */
-function storeHighlight(key: string, value: string): void {
-  highlightCache.delete(key)
-  highlightCache.set(key, value)
-  while (highlightCache.size > HIGHLIGHT_CACHE_LIMIT) {
-    const oldest = highlightCache.keys().next().value
-    if (oldest === undefined) break
-    highlightCache.delete(oldest)
-  }
-}
-
-/** Clear the highlight cache (a theme change invalidates every entry). */
-export function clearMarkdownHighlightCache(): void {
-  highlightCache.clear()
-}
+/**
+ * Columns a fenced block is indented by. Upstream indents by nothing and leans
+ * on `cli-highlight` to tell code from prose; with the highlighter optional the
+ * indent is what still reads as a block when the colors are stripped (a no-color
+ * terminal, a piped transcript, a copy out of scrollback).
+ */
+const CODE_BLOCK_INDENT = '  '
 
 /**
- * The shiki language id for a fence info string.
+ * The highlighter's language id for a fence info string.
  *
  * A fence may carry metadata (` ```ts twoslash `), so only the first word is
  * the language.
@@ -257,84 +255,31 @@ function normalizeLanguage(lang: string | undefined): string | undefined {
   return first.toLowerCase()
 }
 
-/** Collect every fenced code block in a token tree, including nested ones. */
-function collectCodeBlocks(tokens: readonly Token[], out: Array<{ code: string; language: string }>): void {
-  for (const token of tokens) {
-    if (token.type === 'code') {
-      const language = normalizeLanguage((token as Tokens.Code).lang)
-      if (language !== undefined) out.push({ code: (token as Tokens.Code).text, language })
-    }
-    if (token.type === 'list') {
-      collectCodeBlocks((token as Tokens.List).items, out)
-      continue
-    }
-    if (token.type === 'table') {
-      const table = token as Tokens.Table
-      collectCodeBlocks(table.header.flatMap(cell => cell.tokens), out)
-      collectCodeBlocks(table.rows.flat().flatMap(cell => cell.tokens), out)
-      continue
-    }
-    collectCodeBlocks(tokensOf(token), out)
-  }
-}
-
 /**
- * Highlight one block off the render path.
+ * Render a fenced code block: indented, and styled per line.
  *
- * `@shikijs/cli` is an OPTIONAL dependency: the import is dynamic and every
- * failure path (package absent, unknown language, a throw inside shiki) leaves
- * the cache untouched, so the render falls back to plain text.
+ * The fence's language is passed to the highlighter and otherwise dropped — no
+ * language label is drawn, which is upstream's own choice — and a highlighter's
+ * output is indented but never re-styled, since it already carries its colors.
+ * @param code - The `code` token.
+ * @param ctx - Theme, highlighter, and hyperlink policy.
+ * @returns The rendered block, ending in a newline.
  */
-async function warmOneBlock(code: string, language: string, shikiTheme: string): Promise<void> {
-  if (code === '' || code.length > MAX_HIGHLIGHT_CHARS) return
-  const key = highlightKey(shikiTheme, language, code)
-  const hit = highlightCache.get(key)
-  if (hit !== undefined) {
-    storeHighlight(key, hit)
-    return
-  }
-  try {
-    // A non-literal specifier: the module is optional, so the compiler must not
-    // try to resolve it and a missing package must stay a runtime fallback.
-    const specifier = '@shikijs/cli'
-    const loaded = (await import(specifier)) as unknown
-    const codeToAnsi = (loaded as { codeToAnsi?: unknown }).codeToAnsi
-    if (typeof codeToAnsi !== 'function') return
-    const render = codeToAnsi as (source: string, lang: string, themeName: string) => Promise<string>
-    const ansi = await render(code, language, shikiTheme)
-    storeHighlight(key, ansi.endsWith('\n') ? ansi.slice(0, -1) : ansi)
-  } catch {
-    // Leave the block uncached; the synchronous render will emit it plain.
-  }
+function formatCodeBlock(code: Tokens.Code, ctx: FormatContext): string {
+  const language = normalizeLanguage(code.lang)
+  const highlighted = language === undefined ? undefined : ctx.highlight?.(code.text, language)
+  return (
+    (highlighted ?? code.text)
+      .split(EOL)
+      .map(line => {
+        // A blank line keeps no indent: trailing spaces are copied out of the
+        // transcript and read as stray whitespace.
+        if (stripTerminalSequences(line).trim() === '') return ''
+        return CODE_BLOCK_INDENT + (highlighted === undefined ? ctx.theme.codeBlock(line) : line)
+      })
+      .join(EOL) + EOL
+  )
 }
-
-/**
- * Highlight every fenced code block in `text` and cache the results, so a later
- * synchronous {@link renderMarkdownAnsi} picks them up.
- * @param text - The markdown source, exactly as it will be rendered.
- * @param shikiTheme - Shiki theme name.
- */
-export async function warmMarkdownHighlightCache(
-  text: string,
-  shikiTheme = DEFAULT_MARKDOWN_SHIKI_THEME,
-): Promise<void> {
-  const blocks: Array<{ code: string; language: string }> = []
-  collectCodeBlocks(lexMarkdown(text), blocks)
-  for (const block of blocks) {
-    await warmOneBlock(block.code, block.language, shikiTheme)
-  }
-}
-
-/**
- * A synchronous highlighter reading {@link warmMarkdownHighlightCache}'s results.
- * @param shikiTheme - Shiki theme the cache was warmed with.
- * @returns A highlighter that returns `undefined` for anything not warmed yet.
- */
-export function markdownHighlighter(shikiTheme = DEFAULT_MARKDOWN_SHIKI_THEME): MarkdownHighlighter {
-  return (code, language) => highlightCache.get(highlightKey(shikiTheme, language, code))
-}
-
-const sharedHighlighter = markdownHighlighter()
 
 // ---------------------------------------------------------------------------
 // Token formatting
@@ -343,8 +288,15 @@ const sharedHighlighter = markdownHighlighter()
 /** Everything the recursive formatter needs that does not change per token. */
 interface FormatContext {
   readonly theme: MarkdownAnsiTheme
-  readonly highlight: MarkdownHighlighter
+  /** Injected highlighter, or `undefined` to style fenced blocks by theme. */
+  readonly highlight: MarkdownHighlighter | undefined
   readonly hyperlinks: boolean
+  /**
+   * Columns the caller will wrap the result to. Only a table reads it — every
+   * other token wraps as prose, and only a table has to be laid out to a width
+   * to keep its columns.
+   */
+  readonly width: number
 }
 
 /** A token's children, or an empty list — `Tokens.Generic` may carry none. */
@@ -402,12 +354,8 @@ function formatToken(
         .map(line => (stripTerminalSequences(line).trim() === '' ? line : `${bar} ${ctx.theme.italic(line)}`))
         .join(EOL)
     }
-    case 'code': {
-      const code = token as Tokens.Code
-      const language = normalizeLanguage(code.lang)
-      const highlighted = language === undefined ? undefined : ctx.highlight(code.text, language)
-      return (highlighted ?? ctx.theme.codeBlock(code.text)) + EOL
-    }
+    case 'code':
+      return formatCodeBlock(token as Tokens.Code, ctx)
     case 'codespan':
       return ctx.theme.code(textOf(token))
     case 'em':
@@ -577,34 +525,155 @@ function cellContent(cell: Tokens.TableCell | undefined, ctx: FormatContext): st
   return cell.tokens.map(child => formatToken(child, ctx, 0, null, null)).join('')
 }
 
+/** One table cell, measured for layout. */
+interface MeasuredCell {
+  /** The cell's inline tokens, already formatted. */
+  readonly content: string
+  /** Visible width of the whole cell on one line: the column's ideal width. */
+  readonly width: number
+  /** Visible width of the cell's longest word: the column's minimum width. */
+  readonly wordWidth: number
+}
+
+/** Visible width of `content`, with any ANSI in it discounted. */
+function displayWidth(content: string): number {
+  return visibleWidth(stripTerminalSequences(content))
+}
+
 /**
- * Render a GFM table as a monospace-aligned text block.
+ * The width of the longest run that cannot be broken across lines. A CJK cell
+ * has no spaces at all, so this is the whole cell — which is exactly why a CJK
+ * table has to fall through to the proportional path below.
+ */
+function longestWordWidth(plain: string): number {
+  let widest = 0
+  for (const word of plain.split(/\s+/u)) {
+    if (word !== '') widest = Math.max(widest, visibleWidth(word))
+  }
+  return widest
+}
+
+/**
+ * Chrome around the cells of an `n`-column row: the leading `|`, then `| ` and
+ * ` ` around every column. `| a | b |` is 1 + 2×3 columns wide beyond its cells.
+ */
+function tableChromeWidth(columns: number): number {
+  return 1 + columns * 3
+}
+
+/**
+ * Fit the columns into `available` cells' worth of space.
+ *
+ * Upstream's React table decides this and this port copies the decision: pay
+ * every column its ideal width when the table fits, otherwise pay each its
+ * minimum and split what is left in proportion to what each column asked for,
+ * and when even the minimums do not fit, scale them down and let the cells
+ * break mid-word.
+ * @param ideal - Per column, the width that needs no wrapping.
+ * @param minimum - Per column, the width that breaks no word.
+ * @param available - Total cell width the row may use.
+ * @returns One width per column.
+ */
+function fitColumns(ideal: readonly number[], minimum: readonly number[], available: number): number[] {
+  const total = (widths: readonly number[]): number => widths.reduce((sum, width) => sum + width, 0)
+  if (total(ideal) <= available) return [...ideal]
+  if (total(minimum) <= available) {
+    const overflow = ideal.map((width, index) => width - (minimum[index] ?? MIN_COLUMN_WIDTH))
+    const totalOverflow = total(overflow)
+    if (totalOverflow === 0) return [...minimum]
+    const spare = available - total(minimum)
+    return minimum.map((width, index) => width + Math.floor(((overflow[index] ?? 0) / totalOverflow) * spare))
+  }
+  const scale = available / total(minimum)
+  const scaled = minimum.map(width => Math.max(MIN_COLUMN_WIDTH, Math.floor(width * scale)))
+  // Scaling lands under `available`, but the floor on {@link MIN_COLUMN_WIDTH}
+  // lifts the narrow columns back up and can put the row over it again — which
+  // is the wall of stray pipes this whole layout exists to prevent. Take the
+  // excess off the widest column each time, so the wide cells that caused the
+  // scaling pay for it and no column drops below its floor. `available` is
+  // never less than one floor per column, so this always terminates in range.
+  for (let excess = total(scaled) - available; excess > 0; excess -= 1) {
+    let widest = 0
+    for (const [index, width] of scaled.entries()) {
+      if (width > (scaled[widest] ?? 0)) widest = index
+    }
+    const current = scaled[widest] ?? MIN_COLUMN_WIDTH
+    /* v8 ignore next -- `available >= columns * MIN_COLUMN_WIDTH`, so a row of floors always fits. */
+    if (current <= MIN_COLUMN_WIDTH) break
+    scaled[widest] = current - 1
+  }
+  return scaled
+}
+
+/** Wrap one cell to its column, as at least one line. */
+function wrapCell(content: string, width: number): string[] {
+  const lines = wrapTextWithAnsi(content.trimEnd(), Math.max(1, width)).filter(line => line !== '')
+  return lines.length > 0 ? lines : ['']
+}
+
+/**
+ * Render one table row, which may be several terminal rows tall when a cell
+ * wrapped. A cell shorter than the tallest one is centered against it, which is
+ * what keeps a one-word cell next to a wrapped paragraph readable.
+ */
+function formatRow(
+  row: readonly MeasuredCell[],
+  columnWidths: readonly number[],
+  align: ReadonlyArray<'center' | 'left' | 'right' | null>,
+): string {
+  const wrapped = row.map((cell, index) => wrapCell(cell.content, columnWidths[index] ?? MIN_COLUMN_WIDTH))
+  const height = Math.max(1, ...wrapped.map(lines => lines.length))
+  const offsets = wrapped.map(lines => Math.floor((height - lines.length) / 2))
+  let output = ''
+  for (let lineIndex = 0; lineIndex < height; lineIndex += 1) {
+    let line = '| '
+    wrapped.forEach((lines, index) => {
+      const text = lines[lineIndex - (offsets[index] ?? 0)] ?? ''
+      const width = columnWidths[index] ?? MIN_COLUMN_WIDTH
+      line += padAligned(text, displayWidth(text), width, align[index] ?? null) + ' | '
+    })
+    output += line.trimEnd() + EOL
+  }
+  return output
+}
+
+/**
+ * Render a GFM table as a monospace-aligned text block, laid out to
+ * {@link FormatContext.width}.
  *
  * Column widths are measured on the *visible* text, so a styled or CJK cell
- * still lines up. Alignment colons are not echoed into the separator row.
+ * still lines up, and a cell too wide for its column wraps inside it rather
+ * than pushing the row past the terminal — a row that overflows is re-wrapped
+ * by the caller, and a re-wrapped row loses every column boundary it had. The
+ * one case that still overflows is a terminal too narrow for three columns per
+ * cell, where there is nothing left to shrink. Alignment colons are not echoed
+ * into the separator row.
  * @param table - The table token.
- * @param ctx - Theme, highlighter, and hyperlink policy.
+ * @param ctx - Theme, highlighter, hyperlink policy, and render width.
  * @returns The rendered table, ending in a blank line.
  */
 function formatTable(table: Tokens.Table, ctx: FormatContext): string {
-  const rendered = [table.header, ...table.rows].map(row =>
+  const columns = table.header.length
+  if (columns === 0) return ''
+  const rendered: MeasuredCell[][] = [table.header, ...table.rows].map(row =>
     table.header.map((_, index) => {
       const content = cellContent(row[index], ctx)
-      return { content, width: visibleWidth(stripTerminalSequences(content)) }
+      const plain = stripTerminalSequences(content)
+      return { content, width: visibleWidth(plain), wordWidth: longestWordWidth(plain) }
     }),
   )
-  const columnWidths = table.header.map((_, index) =>
+  const ideal = table.header.map((_, index) =>
     Math.max(MIN_COLUMN_WIDTH, ...rendered.map(row => row[index]?.width ?? 0)),
   )
+  const minimum = table.header.map((_, index) =>
+    Math.max(MIN_COLUMN_WIDTH, ...rendered.map(row => row[index]?.wordWidth ?? 0)),
+  )
+  const available = Math.max(ctx.width - tableChromeWidth(columns), columns * MIN_COLUMN_WIDTH)
+  const columnWidths = fitColumns(ideal, minimum, available)
 
   let output = ''
   rendered.forEach((row, rowIndex) => {
-    let line = '| '
-    row.forEach((cell, index) => {
-      const width = columnWidths[index] ?? MIN_COLUMN_WIDTH
-      line += padAligned(cell.content, cell.width, width, table.align[index] ?? null) + ' | '
-    })
-    output += line.trimEnd() + EOL
+    output += formatRow(row, columnWidths, table.align)
     if (rowIndex === 0) {
       output += `|${columnWidths.map(width => '-'.repeat(width + 2)).join('|')}|${EOL}`
     }
@@ -617,6 +686,17 @@ function formatTable(table: Tokens.Table, ctx: FormatContext): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * Strip the blank lines around a block, but not the indent of its first line.
+ *
+ * A plain `trim()` would eat a fenced block's leading indent whenever the fence
+ * opens the block, which is the common case: ``` ```ts ``` right after a
+ * heading, or as the whole message.
+ */
+function trimBlankEdges(text: string): string {
+  return text.replace(/^(?:[^\S\n]*\n)+/u, '').replace(/\s+$/u, '')
+}
+
+/**
  * Split `text` into rendered blocks.
  *
  * A table becomes its own block; every run of other tokens accumulates into one
@@ -627,14 +707,14 @@ function buildBlocks(text: string, ctx: FormatContext): string[] {
   const blocks: string[] = []
   let pending = ''
   const flush = (): void => {
-    const trimmed = pending.trim()
+    const trimmed = trimBlankEdges(pending)
     if (trimmed !== '') blocks.push(trimmed)
     pending = ''
   }
   for (const token of lexMarkdown(text)) {
     if (token.type === 'table') {
       flush()
-      const rendered = formatToken(token, ctx, 0, null, null).trim()
+      const rendered = trimBlankEdges(formatToken(token, ctx, 0, null, null))
       if (rendered !== '') blocks.push(rendered)
       continue
     }
@@ -665,8 +745,9 @@ export function renderMarkdownAnsi(
   const usable = Math.max(1, Math.floor(width))
   const ctx: FormatContext = {
     theme,
-    highlight: options.highlight ?? sharedHighlighter,
+    highlight: options.highlight,
     hyperlinks: options.hyperlinks ?? true,
+    width: usable,
   }
   const rows: string[] = []
   for (const block of buildBlocks(text, ctx)) {

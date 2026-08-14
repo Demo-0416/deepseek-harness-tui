@@ -133,6 +133,19 @@ export interface TuiOverlayRequest {
   readonly options?: TuiOverlayOptions
   /** Optional request cancellation in addition to caller and TUI ownership. */
   readonly signal?: AbortSignal
+  /**
+   * Whether an arriving inline surface may take this one down.
+   *
+   * A view the user reads or picks from (a command panel, the model selector)
+   * is dismissable: it holds nothing open, so a permission prompt or a question
+   * that lands while it is up closes it and shows immediately. A surface that
+   * carries a decision the agent is blocked on is not, so concurrent asks keep
+   * queueing FIFO behind each other rather than replacing one another.
+   *
+   * Absent means not dismissable, which is what an extension overlay whose
+   * caller awaits an outcome needs.
+   */
+  readonly dismissable?: boolean
 }
 
 /** Stable reason an overlay stopped being queued or visible. */

@@ -8,6 +8,7 @@
 
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
@@ -30,6 +31,14 @@ const skipWithoutEntry = entryAvailable
   : 'requires src/index.ts to export createTuiChat(ctx, config, runtime)'
 
 type SmokeHarness = TuiHarness<HeadlessTerminal, (code: number) => void>
+
+/** `TuiController.submit` is the typed-line path; the harness handle only declares disposal. */
+interface SubmitHandle {
+  submit(text: string): void
+}
+
+/** A command handler settles through its own promise chain before the panel opens; outwait it. */
+const SETTLE_MS = 60
 
 /** The fail-closed tail of the answerer chain, standing in for the approval service's default. */
 function chainDefault(): Promise<ApprovalOutcome> {
@@ -169,6 +178,97 @@ describe('TUI approval', { skip: skipWithoutEntry }, () => {
 
       harness.terminal.send('2')
       assert.equal(await decision, 'rejected')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('takes an open panel down so the permission prompt is answerable', async () => {
+    const harness = await mount()
+    try {
+      // A panel is what the user is most likely to have left open while the
+      // agent works: `/hotkeys` here stands for `/status`, `/help`, `/palette`.
+      ;(harness.controller as unknown as SubmitHandle).submit('/hotkeys')
+      await delay(SETTLE_MS)
+      assert.match(harness.terminal.text(), /Enter send/, 'the panel is open before the request arrives')
+
+      const before = harness.terminal.frames
+      const decision = harness.ctx.waterfall('approval/request', {
+        agent: harness.agent,
+        toolName: 'bash',
+      }, chainDefault)
+      await harness.terminal.waitForFrame(before)
+
+      // Without this the panel kept the single inline slot, the prompt drew
+      // nothing, and the turn waited on a decision no one could see.
+      const frame = harness.terminal.text()
+      assert.match(frame, /Permission required/, `the prompt replaces the panel:\n${frame}`)
+      assert.doesNotMatch(frame, /Enter send/, `and the panel is gone, not stacked under it:\n${frame}`)
+
+      harness.terminal.send('2')
+      assert.equal(await decision, 'rejected')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('takes the model selector down as well: a picker holds nothing open', async () => {
+    const harness = await mount()
+    try {
+      // The selector is opened by its own controller, which receives the
+      // overlay manager rather than a per-request flag — so this is the case
+      // that fails if the marking view around that manager stops marking.
+      ;(harness.controller as unknown as SubmitHandle).submit('/model')
+      await delay(SETTLE_MS)
+      assert.match(harness.terminal.text(), /Select model/, 'the selector is open before the request arrives')
+
+      const before = harness.terminal.frames
+      const decision = harness.ctx.waterfall('approval/request', {
+        agent: harness.agent,
+        toolName: 'bash',
+      }, chainDefault)
+      await harness.terminal.waitForFrame(before)
+
+      const frame = harness.terminal.text()
+      assert.match(frame, /Permission required/, `the prompt replaces the selector:\n${frame}`)
+      assert.doesNotMatch(frame, /Select model/, `and the selector is gone, not stacked under it:\n${frame}`)
+
+      harness.terminal.send('2')
+      assert.equal(await decision, 'rejected')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('takes an open panel down for a question too, and gives the editor its focus back', async () => {
+    const harness = await mount()
+    try {
+      ;(harness.controller as unknown as SubmitHandle).submit('/hotkeys')
+      await delay(SETTLE_MS)
+      assert.match(harness.terminal.text(), /Enter send/)
+
+      const before = harness.terminal.frames
+      const answer = harness.ctx.userQuestions.ask({
+        questions: [{ id: 'q1', question: 'Which branch?', options: [{ label: 'main' }, { label: 'staging' }] }],
+      })
+      await harness.terminal.waitForFrame(before)
+      const asked = harness.terminal.text()
+      assert.match(asked, /Which branch\?/, `the question replaces the panel:\n${asked}`)
+      assert.doesNotMatch(asked, /Enter send/)
+
+      const answered = harness.terminal.frames
+      harness.terminal.send('\r')
+      assert.deepEqual((await answer).answers, [{ id: 'q1', selected: ['main'] }])
+      await harness.terminal.waitForFrame(answered)
+
+      // The dismissed panel does not come back, and the keyboard belongs to the
+      // editor again rather than to a surface that is no longer on screen.
+      const restored = harness.terminal.frames
+      harness.terminal.send('zz')
+      await harness.terminal.waitForFrame(restored)
+      const after = harness.terminal.text()
+      assert.ok(after.includes('zz'), `typing reaches the editor again:\n${after}`)
+      assert.doesNotMatch(after, /Enter send/)
     } finally {
       await unmount(harness)
     }

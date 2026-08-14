@@ -57,6 +57,8 @@ interface OverlayEntry {
   readonly resolveClosed: (outcome: TuiOverlayOutcome) => void
   readonly session: TuiOverlaySession
   readonly placement: TuiOverlayPlacement
+  /** Whether an arriving inline surface closes this one instead of queueing behind it. */
+  readonly dismissable: boolean
   state: TuiOverlayState
   component?: GuardedOverlayComponent
   handle?: TuiModalHandle
@@ -172,6 +174,13 @@ export class TuiOverlayManager {
 
   /**
    * Queue one modal without assigning Cordis ownership.
+   *
+   * An arriving inline request first takes down an active
+   * {@link TuiOverlayRequest.dismissable} surface, so a permission prompt or a
+   * question reaches the screen even when the user left a panel or a selector
+   * open. Without that, the single inline slot let a view the user was merely
+   * reading hide the decision a turn was blocked on, and the turn hung with
+   * nothing on screen to answer.
    * @param request - component factory, constraints, and request signal.
    * @param placement - terminal overlay for extensions, or inline for the built-in question panel.
    * @returns an internal session that can close with an ownership reason.
@@ -210,6 +219,7 @@ export class TuiOverlayManager {
       resolveClosed: deferred.resolve,
       session,
       placement,
+      dismissable: request.dismissable === true,
       state: 'queued',
     }
     if (requestSignal?.aborted === true) {
@@ -221,9 +231,19 @@ export class TuiOverlayManager {
       requestSignal.addEventListener('abort', onAbort, { once: true })
       entry.removeRequestAbort = () => { requestSignal.removeEventListener('abort', onAbort) }
     }
+    // Dismiss before queueing, so this request is the one the freed slot
+    // activates rather than landing behind the surface it just took down.
+    if (placement === 'inline') this.dismissActive()
     this.queue.push(entry)
     this.activateNext()
     return session
+  }
+
+  /** Close an active dismissable surface so an arriving inline one takes the slot. */
+  private dismissActive(): void {
+    const active = this.active
+    if (active === undefined || !active.dismissable) return
+    void this.close(active, outcome('closed'))
   }
 
   /** Stop accepting work and settle every active or queued overlay. */
@@ -346,6 +366,27 @@ export class TuiOverlayManager {
     queueMicrotask(() => { this.activateNext() })
     return entry.closed
   }
+}
+
+/**
+ * A forwarding view of one manager that marks every request it opens
+ * {@link TuiOverlayRequest.dismissable}.
+ *
+ * Sub-controllers (the model selector) receive the manager itself rather than a
+ * per-request flag, so the channel marks their whole surface where it hands the
+ * manager over. The view holds no state of its own — every method forwards to
+ * the one manager, which is why the cast is safe.
+ * @param manager - the single manager that owns the modal slot.
+ * @returns a manager view whose overlays yield to arriving decisions.
+ */
+export function dismissableOverlays(manager: TuiOverlayManager): TuiOverlayManager {
+  const view: Pick<TuiOverlayManager, 'open' | 'hasActiveOverlay' | 'beginShutdown' | 'dispose'> = {
+    open: (request, placement) => manager.open({ ...request, dismissable: true }, placement),
+    hasActiveOverlay: () => manager.hasActiveOverlay(),
+    beginShutdown: () => { manager.beginShutdown() },
+    dispose: () => manager.dispose(),
+  }
+  return view as TuiOverlayManager
 }
 
 /** Cordis service whose method effects bind to the calling plugin fiber. */

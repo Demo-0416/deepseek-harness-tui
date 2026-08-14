@@ -138,6 +138,45 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
   })
   resolveContextWindow(target.current)
 
+  /**
+   * Write the user's pick through to the default-model service, so the next
+   * process starts on it.
+   *
+   * The `/model` command only moved `target.current`, which is this process's
+   * memory: every restart re-read `agentDefaultModel.currentSelection()` and
+   * landed back on the configured default, so a selection never survived the
+   * session that made it. Saving here is what the web client's picker does,
+   * and it writes the user settings layer whenever a settings provider is
+   * mounted.
+   *
+   * Optional service, read exactly like `defaultModelSelection` in the entry:
+   * `agentDefaultModel` is not one of this bundle's injections, so it goes
+   * through the non-throwing accessor and is shape-checked rather than typed.
+   * An embedder that mounts the TUI without it keeps working with no
+   * persistence and no complaint.
+   *
+   * Fire-and-forget: the selection is already live for the next step, so the
+   * screen must not wait on a settings write to acknowledge it. A rejected
+   * write is a warning, not an error — what failed is the durability of the
+   * choice, not the choice.
+   * @param selection - the freshly committed route, reasoning effort included.
+   */
+  const persistDefaultSelection = (selection: ModelSelection): void => {
+    const save = async (): Promise<void> => {
+      const service = ctx.get('agentDefaultModel') as {
+        saveSelection?: (next: ModelSelection) => Promise<void>
+      } | undefined
+      // Called as a member so the service keeps its `this`; a synchronous
+      // throw from an out-of-contract implementation lands in the same catch.
+      if (typeof service?.saveSelection !== 'function') return
+      await service.saveSelection(selection)
+    }
+    void save().catch((error: unknown) => {
+      if (deps.isDisposed()) return
+      deps.appendNotice(`Selected model could not be saved as the default: ${errorChain(error)}`, 'warning')
+    })
+  }
+
   const selectModel = (
     selected: ModelChoice,
     explicitReasoning?: { effort: ReasoningEffortId | undefined },
@@ -151,15 +190,21 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
       deps.appendNotice(`Model is already ${targetLabel(selected)}${reasoning === undefined ? '' : ` with reasoning effort ${displayText(reasoning)}`}.`)
       return
     }
-    target.current = {
+    const next: ModelSelection = {
       provider: selected.provider,
       model: selected.model,
       ...reasoningEffort === undefined ? {} : { reasoningEffort },
     }
+    target.current = next
     // The user picked this route and is waiting on it, so from here a failed
     // resolution is reportable rather than startup noise.
     silentResolution = false
-    resolveContextWindow(target.current)
+    resolveContextWindow(next)
+    // Both entries reach here — the `/model <route>` text path and the
+    // selector's callback — so either way the pick outlives the process. The
+    // "already selected" early return above deliberately does not: it changed
+    // nothing to persist.
+    persistDefaultSelection(next)
     const reasoning = targetReasoningLabel(selected, reasoningEffort)
     deps.appendNotice([
       `Model selected: ${targetLabel(selected)}.`,

@@ -76,6 +76,7 @@ import type {} from '@deepseek-ai/dsh-user-questions'
 // terminal answerer below is registered for this TUI's own agent only.
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import {
+  dismissableOverlays,
   TuiExtensionServiceImpl,
   TuiOverlayManager,
 } from './extension/overlay-manager.ts'
@@ -154,6 +155,7 @@ import {
   SKILL_COMMAND_PREFIX,
 } from './chat/skill-invocation.ts'
 import { ReferenceAutocompleteProvider } from './chat/autocomplete.ts'
+import { clipboardPath, copyToClipboard } from './chat/clipboard.ts'
 import {
   BANNER_REVEAL_INTERVAL_MS,
   BANNER_REVEAL_STEPS,
@@ -338,11 +340,11 @@ function lastActivityTime(session: Session): number | undefined {
 const STATUS_FLASH_MS = 1_500
 
 /**
- * Most user-invocable skill names the opening banner lists. A workspace can
- * register hundreds; past this many the banner stops being an opening line and
- * becomes a catalog, so the rest are dropped rather than wrapped onto screen.
+ * How long a first Ctrl+C at an empty prompt stays armed for the second one
+ * that exits. Long enough to be a deliberate second press, short enough that a
+ * Ctrl+C typed minutes later is a fresh intent rather than a stale half of one.
  */
-const MAX_HEADER_SKILLS = 60
+const EXIT_CONFIRM_MS = 2_000
 
 /**
  * Smallest panel a short terminal still gets: three rows of chrome (the
@@ -356,7 +358,8 @@ const MIN_PANEL_ROWS = 5
 const KEYBOARD_SHORTCUTS: readonly string[] = [
   'Enter send • Shift/Alt+Enter newline • Up/Down prompt history',
   'Esc cancel turn • Ctrl+O cycle cards (collapse/expand/hide) • Ctrl+R toggle reasoning • Ctrl+L redraw',
-  'Ctrl+C cancel while running; clear input or exit while idle • Ctrl+D exit',
+  'Ctrl+X copy the last answer • Ctrl+D exit',
+  'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
 ]
 
 /**
@@ -387,6 +390,31 @@ function defaultModelSelection(ctx: Context): ModelSelection | undefined {
     // service boundary, and the adapter validates the value it accepts.
     ...typeof reasoningEffort === 'string' ? { reasoningEffort: reasoningEffort as ReasoningEffortId } : {},
   }
+}
+
+/**
+ * The permission preset every tool call in this session is decided under, when
+ * a permission service is mounted.
+ *
+ * Optional service: `approval` is not one of this bundle's injections (a
+ * deployment can run without any permission seam), so it is read through the
+ * non-throwing accessor and shape-checked rather than typed. The session's own
+ * logged override wins over the deployment default, which is the same order the
+ * service resolves an ask under. Nothing readable prints no row at all: an
+ * invented "unknown" would read like a policy.
+ * @param ctx - the runner context.
+ * @param session - the session whose override applies.
+ * @returns the preset name, or `undefined` when no service reports one.
+ */
+function approvalPreset(ctx: Context, session: Session): string | undefined {
+  const service = ctx.get('approval') as {
+    overrideOf?: (session: Session) => unknown
+    config?: { policy?: unknown }
+  } | undefined
+  if (service === undefined) return undefined
+  const override = typeof service.overrideOf === 'function' ? service.overrideOf(session) : undefined
+  const preset = typeof override === 'string' ? override : service.config?.policy
+  return typeof preset === 'string' && preset !== '' ? preset : undefined
 }
 
 /**
@@ -475,15 +503,17 @@ export function createTuiChat(
   const inputTemplate = parseTuiPromptTemplate(displayInlineText(resolved.theme.inputPrompt))
   const renderInputPrompt = (): string => renderTuiPromptTemplate(inputTemplate, valueName => ctx.tuiPrompt.get(valueName))
   // pi-tui 0.84.1 dropped the editor's own prompt slot (`EditorOptions.prompt`
-  // and `Editor.setPrompt`), so the input prompt renders as its own row
-  // directly above the editor and is refreshed by `requestRender`.
-  const inputPromptLine = new Text(renderInputPrompt(), 0, 0)
+  // and `Editor.setPrompt`), so `HintEditor` places the rendered prompt on the
+  // input frame's first content row itself — Claude's inline `❯ `, not a row of
+  // its own above the frame. `requestRender` re-renders the template there on
+  // the same schedule the separate row used to be refreshed on.
   const editor = new HintEditor(ui, {
     borderColor: palette.dim,
     selectList: selectTheme(palette),
   } satisfies EditorTheme, {
     paddingX: 1,
   })
+  editor.promptPrefix = renderInputPrompt()
   const todo = new TodoComponent(palette)
   /**
    * The row above the prompt: a live compaction's stopwatch while one runs,
@@ -493,6 +523,8 @@ export function createTuiChat(
    */
   const statusLine = new Text('', 0, 0)
   let flashingStatus: { text: string; timer: ReturnType<typeof setTimeout> } | undefined
+  /** Timer of an armed first Ctrl+C; while it runs, a second one exits. */
+  let exitArmed: ReturnType<typeof setTimeout> | undefined
   let showReasoning = resolved.showReasoning
   // Ctrl+O cycles collapsed -> expanded -> hidden. Codex-style: hidden drops
   // tool cards entirely, collapsed previews, expanded shows full bodies.
@@ -733,7 +765,6 @@ export function createTuiChat(
   ui.addChild(statusLine)
   ui.addChild(promptContext)
   ui.addChild(questionContainer)
-  ui.addChild(inputPromptLine)
   ui.addChild(editor)
   ui.setFocus(editor)
   const updateTerminalTitle = (): void => {
@@ -743,10 +774,40 @@ export function createTuiChat(
   }
   updateTerminalTitle()
 
+  /**
+   * The editor's rendered height, measured at most once per frame.
+   *
+   * Every surface that shares the screen with the input frame sizes itself
+   * against it, and each asks more than once per render (a panel derives its
+   * viewport, the clamp on its scroll offset, and its page size from the same
+   * budget) while `Editor.render` caches nothing. The measurement is dropped by
+   * `requestRender` and re-taken on either terminal dimension, so an edit or a
+   * resize cannot serve a stale height. Both dimensions, not just the width: a
+   * draft taller than the editor's own scroll budget is clipped to a share of
+   * the terminal's rows, so a purely vertical resize moves the height too, and
+   * pi-tui's resize path asks the screen to repaint without coming through
+   * `requestRender`.
+   */
+  let editorRowsFrame: { columns: number; terminalRows: number; rows: number } | undefined
+  const editorRowCount = (): number => {
+    const columns = runtime.terminal.columns
+    const terminalRows = runtime.terminal.rows
+    if (editorRowsFrame?.columns === columns && editorRowsFrame.terminalRows === terminalRows) {
+      return editorRowsFrame.rows
+    }
+    const rows = editor.render(columns).length
+    editorRowsFrame = { columns, terminalRows, rows }
+    return rows
+  }
+
   const requestRender = (): void => {
     if (disposed) return
     updatePromptValues()
-    inputPromptLine.setText(renderInputPrompt())
+    editor.promptPrefix = renderInputPrompt()
+    // The editor's own height is measured by the panel and question surfaces
+    // several times per frame; drop the last frame's measurement so the first
+    // reader of this one pays for it and the rest reuse it.
+    editorRowsFrame = undefined
     promptContext.invalidate()
     ui.requestRender()
   }
@@ -783,17 +844,70 @@ export function createTuiChat(
    * every time the user cycled Ctrl+O, which is exactly when they are reading
    * it. A later flash replaces an earlier one rather than queueing.
    * @param message - the confirmation to show.
+   * @param duration - how long to hold the row; a message that announces a
+   *   window the user can act inside must outlive that window rather than the
+   *   default, or the row goes quiet while the key it named is still armed.
    */
-  const flashStatus = (message: string): void => {
+  const flashStatus = (message: string, duration: number = STATUS_FLASH_MS): void => {
     clearFlash()
     flashingStatus = {
       text: message,
       timer: setTimeout(() => {
         flashingStatus = undefined
         requestRender()
-      }, STATUS_FLASH_MS),
+      }, duration),
     }
     requestRender()
+  }
+
+  /**
+   * The last answer this session produced, as plain text.
+   *
+   * Read from the store's own snapshot rather than the rendered rows: what the
+   * user wants on their clipboard is the model's text, not the markdown the
+   * terminal painted from it. Steps that produced only tool calls carry no
+   * text, so the search walks back to the last one that did.
+   * @returns the answer, or `undefined` before this session has one.
+   */
+  const lastAnswerText = (): string | undefined => {
+    const { nodes } = store.getSnapshot()
+    for (let index = nodes.length - 1; index >= 0; index -= 1) {
+      const node = nodes[index]
+      if (node?.kind !== 'assistant' || node.text.trim() === '') continue
+      return displayText(node.text)
+    }
+    return undefined
+  }
+
+  /**
+   * Put the last answer on the system clipboard (`/copy`, Ctrl+X).
+   *
+   * The escape sequence the clipboard port returns is written straight to the
+   * terminal, outside the frame: it is an instruction to the terminal
+   * emulator, not a cell the renderer owns, and a synchronized update would
+   * make it part of a frame that pi-tui may redraw. The confirmation names the
+   * path the copy actually took, because on a remote host "copied" and "loaded
+   * into the tmux buffer" are different things to the person reading it.
+   */
+  const copyLastAnswer = (): void => {
+    const text = lastAnswerText()
+    if (text === undefined) {
+      flashStatus('Nothing to copy yet.')
+      return
+    }
+    const path = clipboardPath()
+    void copyToClipboard(text).then((sequence) => {
+      if (disposed) return
+      runtime.terminal.write(sequence)
+      flashStatus(path === 'native'
+        ? `Copied ${String(text.length)} chars to clipboard.`
+        : path === 'tmux-buffer'
+          ? 'Copied to tmux buffer (prefix+] to paste).'
+          : 'Sent to clipboard via OSC 52.')
+    }, (error: unknown) => {
+      /* v8 ignore next 2 -- the clipboard port collapses every subprocess failure into an exit code. */
+      if (!disposed) appendNotice(`Copy failed: ${errorChain(error)}`, 'error')
+    })
   }
 
   const extensionTheme: TuiTheme = Object.freeze({
@@ -861,7 +975,10 @@ export function createTuiChat(
     ctx,
     resolved,
     palette,
-    overlayManager,
+    // The model selector is a picker, not a decision the agent waits on, so it
+    // yields the inline slot the same way the panels do. The controller takes
+    // the manager rather than a per-request flag, so the mark is applied here.
+    overlayManager: dismissableOverlays(overlayManager),
     target,
     appendNotice,
     requestRender,
@@ -896,6 +1013,9 @@ export function createTuiChat(
       compacting = undefined
     }
     clearFlash()
+    // The armed exit outlives the row that announced it, so teardown drops the
+    // timer too rather than holding the event loop open for its window.
+    disarmExit()
     clearTurnStatus()
   }
 
@@ -974,14 +1094,10 @@ export function createTuiChat(
     overlayManager,
     requestRender,
     isDisposed,
-    questionMaxHeight: () => {
-      const width = runtime.terminal.columns
-      const editorRows = editor.render(width).length
-      return Math.max(1, Math.min(
-        resolved.questionDialogMaxHeight,
-        runtime.terminal.rows - editorRows,
-      ))
-    },
+    questionMaxHeight: () => Math.max(1, Math.min(
+      resolved.questionDialogMaxHeight,
+      runtime.terminal.rows - editorRowCount(),
+    )),
   })
 
   /**
@@ -1093,6 +1209,31 @@ export function createTuiChat(
     void shutdown(true)
   }
 
+  /** Drop the armed first Ctrl+C, so the next one asks again instead of exiting. */
+  const disarmExit = (): void => {
+    if (exitArmed === undefined) return
+    clearTimeout(exitArmed)
+    exitArmed = undefined
+  }
+
+  /**
+   * Arm the second Ctrl+C for {@link EXIT_CONFIRM_MS} and say so.
+   *
+   * Ctrl+C at an empty prompt used to end the session on the first press, which
+   * is one mistyped Ctrl+V away from throwing away a conversation that is still
+   * on screen. Claude Code asks for the key twice, and so does this: the first
+   * press only arms the second, and the window closes on its own.
+   *
+   * The row holds the ask for the whole window rather than the default flash:
+   * a hint that vanished half a second early left the exit armed with nothing
+   * on screen saying so, which is the same surprise exit this replaced.
+   */
+  const armExit = (): void => {
+    disarmExit()
+    exitArmed = setTimeout(() => { exitArmed = undefined }, EXIT_CONFIRM_MS)
+    flashStatus('Press ctrl+c again to exit.', EXIT_CONFIRM_MS)
+  }
+
   /** Swap the palette and all derived themes for the given terminal color scheme. */
   const applyColorScheme = (scheme: TerminalColorScheme): void => {
     if (scheme === currentScheme) return
@@ -1165,6 +1306,9 @@ export function createTuiChat(
         () => { void session.close() },
       ),
       options: { width: resolved.detailsDialogWidth },
+      // A view of this screen's own settings: a permission prompt or a question
+      // that arrives while it is open takes the slot back.
+      dismissable: true,
       // Under the conversation, in the editor slot, like every other
       // interactive surface — not floating over the transcript it previews.
     }, 'inline')
@@ -1210,13 +1354,10 @@ export function createTuiChat(
    * Bounded by the inline slot's own clip, which is what actually decides how
    * much of a component the terminal shows.
    */
-  const panelRows = (): number => {
-    const editorRows = editor.render(runtime.terminal.columns).length
-    return Math.max(
-      MIN_PANEL_ROWS,
-      Math.min(resolved.questionDialogMaxHeight, runtime.terminal.rows - editorRows),
-    )
-  }
+  const panelRows = (): number => Math.max(
+    MIN_PANEL_ROWS,
+    Math.min(resolved.questionDialogMaxHeight, runtime.terminal.rows - editorRowCount()),
+  )
   // One panel at a time, in the same editor slot the question, approval, model,
   // and details surfaces use; opening another replaces it.
   let panelOverlay: TuiOverlaySession | undefined
@@ -1241,6 +1382,10 @@ export function createTuiChat(
         palette,
         () => { void session.close() },
       ),
+      // A panel is an answer the user reads, and it is the surface most often
+      // left open while the agent works: an arriving permission prompt or
+      // question closes it rather than waiting behind it forever.
+      dismissable: true,
     }, 'inline')
     panelOverlay = session
     void session.closed.then(() => {
@@ -1315,12 +1460,17 @@ export function createTuiChat(
     // compaction cannot move them. The unit is a deployment choice, so its row
     // is present only when the projection is.
     const stats = ctx.get('sessionProjections')?.snapshot(agent.session).values.sessionStats
+    // What every tool call in this session is decided under. Present only when
+    // a permission service reports it, so a deployment without one says nothing
+    // rather than implying a policy it does not enforce.
+    const preset = approvalPreset(ctx, agent.session)
     const groups: readonly (readonly StatusCardRow[])[] = [
       [
         ['Session', displayText(agent.session.id)],
         ['Title', displayText(sessionTitle ?? 'untitled')],
         ['Directory', displayText(cwd)],
         ['Model', `${model} ${palette.dim(`(effort ${effort}; reasoning blocks ${showReasoning ? 'shown' : 'hidden'})`)}`],
+        ...preset === undefined ? [] : [['Permission', displayText(preset)] as StatusCardRow],
         ...goalStatusRows(goalState.goal, goalState.roundsStarted),
       ],
       [
@@ -1415,10 +1565,11 @@ export function createTuiChat(
           argumentHint: skill.source.startsWith('project-') ? '(project)' : '(user)',
         }))
         // Same scan, second reader: the banner names what this workspace can
-        // invoke. A long catalog is truncated rather than allowed to grow the
-        // opening screen without bound.
+        // invoke. The whole catalog is handed over — the header packs it into
+        // its own row budget and counts the remainder itself, so a cut here
+        // only made its `+N more` lie about how many skills were left out.
         headerSkills.length = 0
-        headerSkills.push(...invocable.slice(0, MAX_HEADER_SKILLS).map(skill => skill.name))
+        headerSkills.push(...invocable.map(skill => skill.name))
         header.invalidate()
         refreshCommandAutocomplete()
         refreshVisibleSlashAutocomplete()
@@ -1457,6 +1608,11 @@ export function createTuiChat(
         modelController.queueModelCommand(rawInput)
         return { kind: 'success' }
       },
+    })
+    commandCtx.commands.register({
+      name: 'copy',
+      description: 'Copy the last answer to the system clipboard',
+      handler: () => { copyLastAnswer(); return { kind: 'success' } },
     })
     commandCtx.commands.register({
       name: 'clear',
@@ -1773,6 +1929,10 @@ export function createTuiChat(
       if (press) toggleReasoning()
       return { consume: true }
     }
+    if (matchesKey(data, Key.ctrl('x'))) {
+      if (press) copyLastAnswer()
+      return { consume: true }
+    }
     if (matchesKey(data, Key.ctrl('l'))) {
       if (press) {
         ui.invalidate()
@@ -1788,10 +1948,18 @@ export function createTuiChat(
       if (press) {
         if (agent.status === 'running') {
           agent.cancel({ kind: 'user' })
+          disarmExit()
         } else if (editor.getText() !== '') {
           editor.setText('')
-        } else {
+          disarmExit()
+          // `Editor.setText` mutates the buffer without asking for a redraw, so
+          // without this the cleared draft stays on screen until something else
+          // repaints — the discard has to be visible the moment it happens.
+          requestRender()
+        } else if (exitArmed !== undefined) {
           requestExit()
+        } else {
+          armExit()
         }
       }
       return { consume: true }

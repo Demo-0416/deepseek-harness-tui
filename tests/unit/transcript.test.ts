@@ -123,12 +123,25 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       const answer = rows.findIndex(row => row.includes('Running ls'))
       const card = rows.findIndex(row => row.includes('bash'))
       const output = rows.findIndex(row => row.includes('README.md'))
-      const timing = rows.findIndex(row => row.includes('Completed '))
       assert.ok(prompt >= 0 && answer > prompt, `prompt then answer expected:\n${rows.join('\n')}`)
       assert.ok(card > answer, `the tool card follows its step's message:\n${rows.join('\n')}`)
       assert.ok(output > card, `the result body follows the card header:\n${rows.join('\n')}`)
-      // The step's footer waits for the tool cards that step requested.
-      assert.ok(timing > output, `the timing footer trails the tool card:\n${rows.join('\n')}`)
+      // Claude Code prints no per-step timing at all, so the default transcript
+      // carries none either: this turn ran in milliseconds and reports nothing.
+      assert.ok(
+        !rows.some(row => row.includes('Completed ') || row.includes('Model wait')),
+        `the default transcript carries no per-step timing line:\n${rows.join('\n')}`,
+      )
+
+      // Ctrl+O (expanded) is where the run's own traffic lives, and there the
+      // breakdown is back — still at the tail of the step's output, after the
+      // tool cards that step requested.
+      harness.terminal.send('\x0f')
+      await delay(SETTLE_MS)
+      const opened = harness.terminal.text().split('\n').map(row => row.trimEnd())
+      const timing = opened.findIndex(row => row.includes('Completed '))
+      const body = opened.findIndex(row => row.includes('README.md'))
+      assert.ok(body >= 0 && timing > body, `the timing footer trails the tool card:\n${opened.join('\n')}`)
     } finally {
       await unmount(harness)
     }
@@ -187,7 +200,6 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       const at = (needle: string): number => rows.findIndex(row => row.includes(needle))
       const prompt = at('how are you doing')
       const answer = at('ANSWER-TEXT')
-      const timing = at('Completed ')
       const frame = rows.join('\n')
       assert.ok(prompt >= 0, `the prompt is on screen:\n${frame}`)
       // Collapsed is the default phase every session opens on, and injected
@@ -198,7 +210,9 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       assert.ok(!frame.includes('SANDBOX-POLICY'), `and none of its body:\n${frame}`)
       assert.ok(!frame.includes('SKILL-CATALOG-BODY'), `for either card:\n${frame}`)
       assert.ok(answer > prompt, `the answer follows the prompt with nothing between them:\n${frame}`)
-      assert.ok(timing > answer, `and its timing footer trails it:\n${frame}`)
+      // The per-step breakdown is traffic too: the default transcript is the
+      // conversation and nothing else.
+      assert.ok(!frame.includes('Completed '), `and no timing line trails it:\n${frame}`)
 
       // Ctrl+O (expanded) is where a user goes to see what the model was sent,
       // and there the cards open where the log recorded them: after the prompt
@@ -217,6 +231,8 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       const skillBody = opened('SKILL-CATALOG-BODY')
       assert.ok(skillBody > skillCard && skillBody < opened('ANSWER-TEXT'),
         `and still above the answer:\n${expanded.join('\n')}`)
+      assert.ok(opened('Completed ') > opened('ANSWER-TEXT'),
+        `and the step's timing breakdown trails the answer here:\n${expanded.join('\n')}`)
 
       // Ctrl+O again (hidden) takes context back off with the tool traffic.
       terminal.send('\x0f')
@@ -375,6 +391,11 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       await delay(SETTLE_MS)
       const footer = (): string | undefined =>
         terminal.text().split('\n').find(row => row.includes('Model wait'))?.trim()
+      // The breakdown lives on the expanded phase now, so that is where a live
+      // step's elapsed time has to keep moving.
+      assert.equal(footer(), undefined, 'the default phase shows no per-step timing')
+      terminal.send('\x0f')
+      await delay(SETTLE_MS)
       const before = footer()
       await delay(700)
       const after = footer()
@@ -479,7 +500,13 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       assert.ok(!cycled.includes('Tool cards hidden.'), `and not three:\n${cycled}`)
 
       // The confirmation is a transient status row, not a transcript node: it
-      // clears itself and leaves the conversation exactly as it was.
+      // clears itself and leaves the conversation exactly as it was. Compared
+      // over a full round of the cycle, because a phase legitimately changes
+      // what the transcript renders (the expanded phase adds the step's timing
+      // breakdown) while the confirmation must change nothing at all.
+      harness.terminal.send('\x0f')
+      await delay(SETTLE_MS)
+      harness.terminal.send('\x0f')
       await delay(1_700)
       const settled = harness.terminal.text()
       assert.ok(!settled.includes('Tool and context cards'), `the confirmation is transient:\n${settled}`)

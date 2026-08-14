@@ -103,7 +103,14 @@ const colorSchema = z.boolean().default(true)
 const truecolorSchema = z.boolean()
 const DEFAULT_LEFT_PROMPT = '${cwd}${git/worktree}${model}${token_meter/cache_hit_rate}${context}'
 const DEFAULT_RIGHT_PROMPT = '${queued}'
-const DEFAULT_INPUT_PROMPT = '${symbol} ${indicator}'
+/**
+ * Claude's inline caret, on the editor's first content row rather than a row of
+ * its own: one column of `❯` plus its gap, two columns total, so the text starts
+ * where every wrapped continuation row starts. Still a template — a deployment
+ * that wants the session name back writes `${symbol} ${indicator}`, and one that
+ * wants the caret to carry the running-phase glyph writes `${indicator}`.
+ */
+const DEFAULT_INPUT_PROMPT = '❯ '
 const DEFAULT_INPUT_PLACEHOLDER = 'press enter to steer and esc to cancel'
 const TuiThemeConfigSchema: z<TuiThemeConfig> = z.object({
   color: colorSchema,

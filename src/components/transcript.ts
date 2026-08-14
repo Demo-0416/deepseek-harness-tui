@@ -474,37 +474,62 @@ export class UserMessageComponent extends Container {
 }
 
 /**
- * Children of a settled assistant message: optional reasoning block then the
- * response text. Both are Markdown documents behind a Claude Code prefix — an
- * orange ` ● ` bullet for the response, a dim ` ∴ ` for reasoning — so the
- * message needs no role header at all: the bullet IS the marker, and its color
- * says which of the two kinds of assistant text a block is.
+ * Claude Code's thinking title: U+2234 and U+2026, dim and italic, on its own
+ * row (`AssistantThinkingMessage.tsx:62`). The block's body is dim but NOT
+ * italic and sits two columns in from the title, with one blank row between
+ * them — the product renders the pair as a `gap={1}` column, and the italic run
+ * is the title alone.
+ */
+const THINKING_TITLE = '∴ Thinking…'
+
+/**
+ * Indent of a thinking body: the transcript's own one-column left margin plus
+ * Claude Code's two (`<Box paddingLeft={2}>`), which also lands the body in the
+ * same column as an answer's text under its ` ● ` bullet.
+ */
+const THINKING_INDENT = '   '
+
+/**
+ * Children of a settled assistant message: the optional thinking block then the
+ * response text. The response is a Markdown document behind Claude Code's
+ * orange ` ● ` bullet, so the message needs no role header at all: the bullet IS
+ * the marker. The thinking block is the product's own two-part shape — the
+ * `∴ Thinking…` title, a blank row, and the indented dim body — so an aside
+ * never reads as a second voice answering.
  *
  * A step with nothing to show renders nothing, not even its leading gap: a step
  * that only calls tools is common, and its cards already open with a blank row
  * of their own.
+ * @param showThinking - Whether this step's thinking block renders at all;
+ * {@link StreamingAssistantComponent.showsThinking} decides it from the
+ * configured setting, the step's lifecycle, and the Ctrl+O phase.
  */
 function assistantMessageChildren(
   content: readonly ContentBlock[],
-  showReasoning: boolean,
+  showThinking: boolean,
   palette: Palette,
   mdTheme: MarkdownTheme,
   markdown: MarkdownPolicy,
 ): Component[] {
   const reasoning = displayText(textBlocks(content, 'reasoning').trim())
   const text = displayText(textBlocks(content, 'text').trim())
-  const showsReasoning = reasoning !== '' && showReasoning
-  if (!showsReasoning && text === '') return []
+  const showsThinking = reasoning !== '' && showThinking
+  if (!showsThinking && text === '') return []
   const children: Component[] = [new Spacer(1)]
-  if (showsReasoning) {
-    // The whole thinking block is one recessed tone, marker included, so it
+  if (showsThinking) {
+    // The whole thinking block is one recessed tone, title included, so it
     // reads as an aside rather than as a second voice. The document's own
-    // default style carries the dim tone, so the prefix adds no second wrapper:
+    // default style carries the dim tone, so the indent adds no second wrapper:
     // SGR has no color stack, and an inner span's close would drop it anyway.
-    const document = new Markdown(reasoning, 0, 0, mdTheme, { color: value => palette.dim(value), italic: true })
-    children.push(new PrefixedComponent(document, palette.dim(' ∴ '), '   '))
+    const document = new Markdown(reasoning, 0, 0, mdTheme, { color: value => palette.dim(value) })
+    children.push(new Text(palette.italic(palette.dim(` ${THINKING_TITLE}`)), 0, 0))
+    children.push(new Spacer(1))
+    children.push(new PrefixedComponent(document, THINKING_INDENT, THINKING_INDENT))
   }
   if (text !== '') {
+    // One blank row between the aside and the answer, the same gap Claude Code
+    // gives every message block.
+    if (showsThinking) children.push(new Spacer(1))
     // Only the response body moves to the claude pipeline. The thinking block
     // above stays a pi document under one recessed tone: its whole point is
     // that it is NOT typeset like an answer.
@@ -515,9 +540,100 @@ function assistantMessageChildren(
 }
 
 /**
+ * Claude Code's past-tense turn verbs, copied from its
+ * `src/constants/turnCompletionVerbs.ts`. One is sampled per turn and reads as
+ * `<verb> for <duration>`.
+ */
+export const TURN_COMPLETION_VERBS: readonly string[] = [
+  'Baked',
+  'Brewed',
+  'Churned',
+  'Cogitated',
+  'Cooked',
+  'Crunched',
+  'Sautéed',
+  'Worked',
+]
+
+/**
+ * Wall time a turn must exceed before it prints a completion row at all
+ * (`REPL.tsx:2974` — `turnDurationMs > 30000`). Anything shorter says nothing:
+ * the user watched it happen.
+ */
+export const TURN_FOOTER_MIN_MS = 30_000
+
+/**
+ * Claude Code's teardrop asterisk (`constants/figures.ts`), which the turn row
+ * puts in a two-column gutter (`<Box minWidth={2}>`).
+ */
+const TURN_GLYPH = '✻'
+
+/**
+ * Format a turn's wall time the way Claude Code's `formatDuration` does: whole
+ * seconds under a minute (`45s`), minutes and seconds above it (`1m 23s`), and
+ * hours ahead of both for a run long enough to need them. A rounding carry
+ * (59.6 s) is carried up rather than printed as `1m 60s`.
+ * @param ms - Elapsed wall time in milliseconds.
+ * @returns The formatted duration.
+ */
+export function formatTurnDuration(ms: number): string {
+  const elapsed = Math.max(0, ms)
+  if (elapsed < 60_000) return `${Math.floor(elapsed / 1000)}s`
+  let seconds = Math.round((elapsed % 60_000) / 1000)
+  let minutes = Math.floor((elapsed % 3_600_000) / 60_000)
+  let hours = Math.floor(elapsed / 3_600_000)
+  if (seconds === 60) {
+    seconds = 0
+    minutes += 1
+  }
+  if (minutes === 60) {
+    minutes = 0
+    hours += 1
+  }
+  return hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : `${minutes}m ${seconds}s`
+}
+
+/**
+ * One turn's verb, sampled uniformly like Claude Code's `sample()`. Sampled
+ * once per turn by the caller and held for that turn's whole life, so the row
+ * does not reword itself on a re-render.
+ * @returns One of {@link TURN_COMPLETION_VERBS}.
+ */
+export function turnCompletionVerb(): string {
+  return TURN_COMPLETION_VERBS[Math.floor(Math.random() * TURN_COMPLETION_VERBS.length)] ?? 'Worked'
+}
+
+/**
+ * Claude Code's turn completion row — `✻ Worked for 45s`, dim, the glyph in the
+ * two-column gutter the product gives it (`<Box minWidth={2}>`), which here is
+ * the column the assistant bullet occupies: this transcript indents every row
+ * one column further than the product does, and this row is part of the
+ * conversation rather than a diagnostic under it.
+ *
+ * It is the only timing the default transcript reports. Claude Code has no
+ * per-message timing line anywhere, and prints this one only for a turn that
+ * ran longer than {@link TURN_FOOTER_MIN_MS}.
+ * @param durationMs - The turn's wall time.
+ * @param palette - Active palette; the row is entirely in the recessed tone.
+ * @param verb - The turn's verb, sampled when omitted.
+ * @returns The row's styled text.
+ */
+export function turnFooterRow(
+  durationMs: number,
+  palette: Palette,
+  verb: string = turnCompletionVerb(),
+): string {
+  return palette.dim(` ${TURN_GLYPH} ${verb} for ${formatTurnDuration(durationMs)}`)
+}
+
+/**
  * A step's timing summary, rendered as a self-refreshing footer that stays at
  * the tail of the step's output. Kept separate from the assistant message so
  * the timing line trails any tool cards the step appends after its message.
+ *
+ * Claude Code has no per-step timing line at all, so this one renders only on
+ * the expanded phase of the Ctrl+O cycle — the phase a user opens to inspect
+ * the run. The default transcript keeps the per-turn row alone.
  */
 class StepTimingComponent extends Container {
   private completionTime: number | undefined
@@ -528,6 +644,7 @@ class StepTimingComponent extends Container {
     private readonly tracker: StepTimingTracker,
     private readonly now: () => number,
     private readonly palette: Palette,
+    private visibility: ToolCardVisibility,
   ) {
     super()
     this.rebuild()
@@ -538,6 +655,15 @@ class StepTimingComponent extends Container {
     this.rebuild()
   }
 
+  /**
+   * Set the Ctrl+O phase this footer renders under.
+   * @param visibility - Hidden, collapsed preview, or full body.
+   */
+  setVisibility(visibility: ToolCardVisibility): void {
+    this.visibility = visibility
+    this.rebuild()
+  }
+
   override invalidate(): void {
     this.rebuild()
     super.invalidate()
@@ -545,6 +671,9 @@ class StepTimingComponent extends Container {
 
   private rebuild(): void {
     this.clear()
+    // The per-step breakdown is an engineering detail the product does not
+    // ship; it stays available where the rest of the run's traffic is.
+    if (this.visibility !== 'expanded') return
     const totals = this.tracker.totalsAt(this.events(), this.position, this.completionTime ?? this.now())
     const timing = formatTimingTotals(totals, true)
     const header = this.completionTime === undefined
@@ -565,6 +694,10 @@ export class StreamingAssistantComponent extends Container {
   private settledContent: readonly ContentBlock[] | undefined
   /** The last folded text applied through {@link setFoldedText}, for idempotence. */
   private foldedText: { text: string; reasoning: string; settled: boolean } | undefined
+  /** Whether this step's `assistant/message` has landed. */
+  private settled = false
+  /** Whether the step closed, including one a cancelled turn closed unsettled. */
+  private closed = false
   /**
    * The step's timing footer. The renderer keeps it at the tail of the chat so
    * it trails any tool cards the step appends after this assistant message; it
@@ -579,12 +712,13 @@ export class StreamingAssistantComponent extends Container {
     tracker: StepTimingTracker,
     now: () => number,
     private showReasoning: boolean,
+    private visibility: ToolCardVisibility,
     private readonly palette: Palette,
     private readonly mdTheme: MarkdownTheme,
     private readonly markdown: MarkdownPolicy,
   ) {
     super()
-    this.timing = new StepTimingComponent(position, events, tracker, now, palette)
+    this.timing = new StepTimingComponent(position, events, tracker, now, palette, visibility)
     this.rebuild()
   }
 
@@ -602,6 +736,7 @@ export class StreamingAssistantComponent extends Container {
       && this.foldedText.reasoning === reasoning
       && this.foldedText.settled === settled) return
     this.foldedText = { text, reasoning, settled }
+    this.settled = settled
     // Reasoning first, then the response: the same order a step streams them,
     // which is the order the block indexes below preserve.
     const content: StreamingBlock[] = [
@@ -621,11 +756,14 @@ export class StreamingAssistantComponent extends Container {
   }
 
   /**
-   * Pin the step's timing footer to its completion time.
+   * Pin the step's timing footer to its completion time, and close the step:
+   * its thinking is history from here, so the default transcript drops it.
    * @param time - Step completion time in epoch milliseconds.
    */
   complete(time: number): void {
+    this.closed = true
     this.timing.complete(time)
+    this.rebuild()
   }
 
   override invalidate(): void {
@@ -643,6 +781,41 @@ export class StreamingAssistantComponent extends Container {
     this.rebuild()
   }
 
+  /**
+   * Set the Ctrl+O phase this step renders under: it decides whether a
+   * finished step's thinking is on screen, and whether its timing footer is.
+   * @param visibility - Hidden, collapsed preview, or full body.
+   */
+  setVisibility(visibility: ToolCardVisibility): void {
+    this.visibility = visibility
+    this.timing.setVisibility(visibility)
+    this.rebuild()
+  }
+
+  /**
+   * Whether this step's thinking block is on screen.
+   *
+   * Claude Code keeps thinking out of the default transcript entirely — a
+   * finished message's thinking is `null`, with no summary row standing in for
+   * it — and shows it only under ctrl+o (its transcript mode). The one window
+   * where it is live is the step itself: while the model streams, the block is
+   * what says work is happening, and this port keeps that text rather than the
+   * product's spinner-only line. So the block is on screen while the step runs,
+   * disappears with the step that produced it, and comes back whole on the
+   * expanded phase.
+   *
+   * A configured `showReasoning: false` still means never, in any phase: that
+   * setting predates the cycle and is a deployment saying this transcript does
+   * not show reasoning at all.
+   */
+  private showsThinking(): boolean {
+    if (!this.showReasoning) return false
+    if (this.visibility === 'expanded') return true
+    // A cancelled turn closes its step without settling the message, so both
+    // ends of the step's life are checked: neither alone retires every step.
+    return !this.settled && !this.closed
+  }
+
   /** The settled content when available, otherwise the streamed blocks in model order. */
   private presentedContent(): readonly ContentBlock[] {
     return this.settledContent ?? [...this.blocks.entries()]
@@ -658,7 +831,7 @@ export class StreamingAssistantComponent extends Container {
     this.clear()
     const children = assistantMessageChildren(
       this.presentedContent(),
-      this.showReasoning,
+      this.showsThinking(),
       this.palette,
       this.mdTheme,
       this.markdown,

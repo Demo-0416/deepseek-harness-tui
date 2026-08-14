@@ -15,31 +15,80 @@ import { fileURLToPath } from 'node:url'
 import {
   CURSOR_MARKER,
   Editor,
+  stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
 } from '@earendil-works/pi-tui'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 
-/** Editor that shows a placeholder without making it editable content. */
+/** The glyph pi-tui rules the editor's top and bottom frame rows with. */
+const EDITOR_FRAME_GLYPH = '─'
+
+/**
+ * Editor that carries its prompt inside the frame and shows a placeholder
+ * without making it editable content.
+ *
+ * Two pi-tui 0.84.1 render facts are load-bearing here, both pinned by
+ * `tests/unit/editor-prompt.test.ts` so an upgrade that moves them fails loudly:
+ *
+ * - `Editor.render(width)` returns `[top frame, ...content rows, bottom frame,
+ *   ...autocomplete rows]`. Row 0 is a rule (`─` repeated, or a `─── ↑ N more`
+ *   scroll indicator), never text, so the first content row is row 1.
+ * - Every content and autocomplete row opens with the editor's `paddingX`
+ *   spaces. With `paddingX >= 1` — what the mounted editor is constructed with —
+ *   a row whose first visible column is `─` can only be a frame row, which is
+ *   how the two rules are found among rows this class has to indent instead.
+ */
 export class HintEditor extends Editor {
   /** Placeholder shown in the empty input row; `undefined` hides it. */
   hint: string | undefined
-  /** Prompt text rendered before the placeholder, matching the live prompt width. */
-  hintPrefix = ''
+  /**
+   * Prompt rendered at the start of the first content row (Claude's `❯ `), ANSI
+   * allowed. Continuation rows and the autocomplete popup indent by its visible
+   * width and both rules grow by the same amount, so the frame keeps the full
+   * render width and the text column never moves between rows.
+   */
+  promptPrefix = ''
 
   override render(width: number): string[] {
+    const prefixWidth = visibleWidth(this.promptPrefix)
+    const inner = width - prefixWidth
+    // A frame with no room for the prompt plus one text column renders bare
+    // rather than overflowing; anything else lays the editor out inside what the
+    // prompt leaves. Rendering at the full width and prepending afterwards would
+    // push every filled row one column past the frame — a spurious second screen
+    // line — and leave `lastWidth`, which cursor navigation wraps against, wrong.
+    if (prefixWidth === 0 || inner < 1) return this.renderFrame(width)
+    const lines = this.renderFrame(inner)
+    const indent = ' '.repeat(prefixWidth)
+    const fill = this.borderColor(EDITOR_FRAME_GLYPH.repeat(prefixWidth))
+    return lines.map((line, index) => {
+      if (index === 0 || stripTerminalSequences(line).startsWith(EDITOR_FRAME_GLYPH)) return `${line}${fill}`
+      // The prompt lands ahead of pi-tui's zero-width cursor marker, and the TUI
+      // reads the hardware cursor column as the visible width before that marker,
+      // so the cursor follows the text right without any arithmetic here.
+      return index === 1 ? `${this.promptPrefix}${line}` : `${indent}${line}`
+    })
+  }
+
+  /**
+   * Render the editor frame, replacing the sole content row with the placeholder
+   * while the input is empty.
+   * @param width - Columns the frame occupies, with the prompt already deducted.
+   * @returns The rendered rows, prompt not yet applied.
+   */
+  private renderFrame(width: number): string[] {
     const lines = super.render(width)
     if (this.hint === undefined || this.getText() !== '') return lines
-    const content = lines[0]
-    /* v8 ignore next -- Editor always renders one content row. */
-    if (content === undefined) return lines
     const padding = ' '.repeat(this.getPaddingX())
     /* v8 ignore next -- the mounted editor is focused whenever its empty-input hint is rendered. */
     const marker = this.focused ? CURSOR_MARKER : ''
-    const available = Math.max(0, width - visibleWidth(padding) - visibleWidth(this.hintPrefix))
+    const available = Math.max(0, width - visibleWidth(padding))
     const placeholder = truncateToWidth(this.hint, available, '')
-    const used = visibleWidth(padding) + visibleWidth(this.hintPrefix) + visibleWidth(placeholder)
-    lines[0] = `${padding}${this.hintPrefix}${marker}${placeholder}${' '.repeat(Math.max(0, width - used))}`
+    const used = visibleWidth(padding) + visibleWidth(placeholder)
+    // Row 1, the first content row: row 0 is the top rule, and painting the
+    // placeholder over it used to erase the frame's own top border.
+    lines[1] = `${padding}${marker}${placeholder}${' '.repeat(Math.max(0, width - used))}`
     return lines
   }
 }

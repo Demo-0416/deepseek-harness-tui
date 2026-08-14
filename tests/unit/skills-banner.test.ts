@@ -5,8 +5,8 @@
  * The banner's own rendering is covered by the header suite; what is asserted
  * here is only what the entry decides — that the list is the user-invocable
  * skills, that it reaches a banner already on screen (discovery is
- * asynchronous while the header renders from mount), and that a catalog too
- * long to open a session with is cut off.
+ * asynchronous while the header renders from mount), and that the header is
+ * handed the whole catalog, which is what makes its `+N more` true.
  * @module dsh-tui/tests/unit/skills-banner
  */
 
@@ -32,8 +32,8 @@ const skipWithoutEntry = entryAvailable
 /** Skill discovery settles after the first frame; outwait it. */
 const SETTLE_MS = 60
 
-/** The entry's own cap on how many skill names the banner is handed. */
-const MAX_BANNER_SKILLS = 60
+/** A catalog far larger than any banner row budget, so a remainder is certain. */
+const CATALOG_SKILLS = 80
 
 type BannerHarness = TuiHarness<HeadlessTerminal, (code: number) => void>
 
@@ -98,20 +98,28 @@ describe('banner skill list', { skip: skipWithoutEntry }, () => {
     }
   })
 
-  it('truncates a catalog too long to open a session with', async () => {
-    const skills = Array.from({ length: 80 }, (_, index) => summary(`skill-${String(index + 1).padStart(2, '0')}`))
+  it('counts every skill it left out, so `+N more` is the whole catalog', async () => {
+    const skills = Array.from(
+      { length: CATALOG_SKILLS },
+      (_, index) => summary(`skill-${String(index + 1).padStart(2, '0')}`),
+    )
     const harness = await mount({ services: { skills: skillsService(skills) } })
     try {
       await delay(SETTLE_MS)
       const frame = harness.terminal.text()
       assert.match(frame, /skill-01/)
-      assert.doesNotMatch(frame, /skill-61/, `nothing past the cut may reach the banner:\n${frame}`)
-      // The banner counts the remainder from what it was handed, so the names
-      // on screen plus the remainder are the cut, not the catalog — whatever
-      // width-dependent packing the banner chose.
+      // The banner packs what fits its own row budget and counts the rest. The
+      // entry hands it the whole catalog: a cut on the way in made the header
+      // count a remainder against a list it had already been trimmed to, so a
+      // workspace with 80 skills was told 20 of them did not exist.
       const listed = [...frame.matchAll(/skill-\d\d/gu)].length
       const remainder = Number(/\+(\d+) more/u.exec(frame)?.[1] ?? '0')
-      assert.equal(listed + remainder, MAX_BANNER_SKILLS, `packed ${String(listed)} of a 60-name cut:\n${frame}`)
+      assert.ok(listed < CATALOG_SKILLS, `the banner is an opening line, not a catalog:\n${frame}`)
+      assert.equal(
+        listed + remainder,
+        CATALOG_SKILLS,
+        `packed ${String(listed)} and claimed ${String(remainder)} more of ${String(CATALOG_SKILLS)}:\n${frame}`,
+      )
     } finally {
       await disposeTuiTestHarness(harness)
       await harness.terminal.dispose()

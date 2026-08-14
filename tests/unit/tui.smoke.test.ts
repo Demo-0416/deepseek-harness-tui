@@ -11,6 +11,7 @@
 
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import {
   appendAssistant,
   appendUser,
@@ -33,6 +34,19 @@ import { Text, TuiMainScreen } from '@earendil-works/pi-tui'
 /** Literal editor prefix, so "the editor is on screen" does not depend on prompt-value registrations. */
 const INPUT_PROMPT = 'smoke> '
 
+/** Ctrl+C as the terminal delivers it. */
+const CTRL_C = '\x03'
+
+/** Shutdown and the exit hook settle across a few awaits; outwait them. */
+const SETTLE_MS = 60
+
+/**
+ * The status row's ordinary flash window (`STATUS_FLASH_MS` in the entry): how
+ * long a view-state confirmation stays up. The Ctrl+C ask is not one of those,
+ * which is what the case below pins.
+ */
+const DEFAULT_FLASH_MS = 1_500
+
 /** `src/index.ts` is landed by a separate port; without it the end-to-end suite cannot run. */
 const entryAvailable = await tuiEntryAvailable()
 const skipWithoutEntry = entryAvailable
@@ -41,14 +55,35 @@ const skipWithoutEntry = entryAvailable
 
 type SmokeHarness = TuiHarness<HeadlessTerminal, (code: number) => void>
 
+/**
+ * The editor frame's first content row and the rule above it.
+ *
+ * The prompt is rendered inside the input frame (Claude's inline `❯ `), not on
+ * a row of its own, so "the prompt is on screen" is an assertion about where in
+ * the frame it landed: directly under the top rule, ahead of the editor's own
+ * padding column.
+ * @param frame - the whole rendered screen.
+ * @returns the prompt row and the row above it, both right-trimmed.
+ */
+function editorPromptRow(frame: string): { readonly above: string; readonly row: string } {
+  const rows = frame.split('\n')
+  // Matched against the padded row, trimmed only on the way out: the prompt
+  // ends in the gap before the text column, which `trimEnd` would eat on an
+  // empty input frame.
+  const index = rows.findIndex(row => row.includes(INPUT_PROMPT))
+  assert.ok(index > 0, `the input frame must carry the prompt:\n${frame}`)
+  return { above: (rows[index - 1] ?? '').trimEnd(), row: (rows[index] ?? '').trimEnd() }
+}
+
 /** Mount the TUI on a headless terminal and wait for its first completed frame. */
 async function mount(
   options: TuiHarnessOptions = {},
   size: { columns?: number; rows?: number } = {},
+  exit: (code: number) => void = () => {},
 ): Promise<SmokeHarness> {
   const terminal = new HeadlessTerminal(size.columns ?? 96, size.rows ?? 32)
   const before = terminal.frames
-  const harness = await createTuiTestHarness(terminal, () => {}, {
+  const harness = await createTuiTestHarness(terminal, exit, {
     cwd: '/workspace/project',
     ...options,
     config: {
@@ -186,8 +221,11 @@ describe('TUI smoke', { skip: skipWithoutEntry }, () => {
       // Transcript: the replayed turn is on screen before any input arrives.
       assert.match(frame, /restored prompt/)
       assert.match(frame, /restored answer/)
-      // Editor: its configured first-line prefix is the last interactive row.
-      assert.ok(frame.includes(INPUT_PROMPT), `first frame must show the editor prompt:\n${frame}`)
+      // Editor: the configured prompt opens the frame's first content row,
+      // inside the border rather than on a row above it.
+      const prompt = editorPromptRow(frame)
+      assert.ok(prompt.row.startsWith(INPUT_PROMPT.trimEnd()), `the prompt opens the content row: ${JSON.stringify(prompt.row)}`)
+      assert.match(prompt.above, /^─+$/u, `and the row above it is the frame's top rule: ${JSON.stringify(prompt.above)}`)
       // `theme.color: false` must keep every cell inheriting the user's palette.
       assert.deepEqual(harness.terminal.themeViolations(), [])
     } finally {
@@ -247,13 +285,16 @@ describe('TUI smoke', { skip: skipWithoutEntry }, () => {
 
       await renderAfter(harness, () => { harness.terminal.send('hello42') })
 
-      // The input prompt renders on its own line above the editor (pi-tui
-      // 0.84.1 has no first-line prompt prefix), so typed text and prompt are
-      // asserted independently.
+      // The prompt and the draft share one row: the prompt opens the frame's
+      // first content row and the editor's padding column follows it, so typed
+      // text starts where every wrapped continuation row starts.
       const after = harness.terminal.text()
       assert.notEqual(after, before)
-      assert.ok(after.includes(INPUT_PROMPT), `prompt line must stay visible:\n${after}`)
-      assert.ok(after.includes('hello42'), `typed input must reach the editor:\n${after}`)
+      assert.equal(
+        editorPromptRow(after).row,
+        `${INPUT_PROMPT} hello42`,
+        `typed input must land on the prompt row:\n${after}`,
+      )
     } finally {
       await unmount(harness)
     }
@@ -273,7 +314,9 @@ describe('TUI smoke', { skip: skipWithoutEntry }, () => {
         ...harness.agent.steered,
       ].map(messageText)
       assert.deepEqual(delivered, ['hi'])
-      assert.ok(!harness.terminal.text().includes(`${INPUT_PROMPT}hi`))
+      // The submitted line left the input frame: its content row is the prompt
+      // and the padding column, with nothing after them.
+      assert.equal(editorPromptRow(harness.terminal.text()).row, INPUT_PROMPT.trimEnd())
     } finally {
       await unmount(harness)
     }
@@ -294,5 +337,83 @@ describe('TUI smoke', { skip: skipWithoutEntry }, () => {
     const harness = await mount()
     await unmount(harness)
     assert.equal(harness.terminal.stopped, 1)
+  })
+})
+
+describe('TUI ctrl+c', { skip: skipWithoutEntry }, () => {
+  it('asks for a second press before it ends an idle session', async () => {
+    const exits: number[] = []
+    const harness = await mount({}, {}, (code) => { exits.push(code) })
+    try {
+      await renderAfter(harness, () => { harness.terminal.send(CTRL_C) })
+      // The first press only arms the second: an accidental Ctrl+C at an empty
+      // prompt must not take a live conversation down with it.
+      assert.match(harness.terminal.text(), /Press ctrl\+c again to exit\./)
+      assert.deepEqual(exits, [])
+
+      harness.terminal.send(CTRL_C)
+      await delay(SETTLE_MS)
+      assert.deepEqual(exits, [0], 'the second press inside the window exits')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('holds the ask on screen past the status row’s ordinary flash', async () => {
+    const harness = await mount()
+    try {
+      await renderAfter(harness, () => { harness.terminal.send(CTRL_C) })
+      await delay(DEFAULT_FLASH_MS + 120)
+
+      // A view-state confirmation may fade after a beat; this one names a key
+      // that is still armed, so it must not. Letting it expire on the shared
+      // flash timer left the exit live with an empty status row above it —
+      // the second press then read as a first one and ended the session.
+      assert.match(
+        harness.terminal.text(),
+        /Press ctrl\+c again to exit\./,
+        'the ask outlives the default flash because the armed window does',
+      )
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('clears a draft on the first press and arms nothing', async () => {
+    const exits: number[] = []
+    const harness = await mount({}, {}, (code) => { exits.push(code) })
+    try {
+      await renderAfter(harness, () => { harness.terminal.send('draft') })
+      await renderAfter(harness, () => { harness.terminal.send(CTRL_C) })
+      const cleared = harness.terminal.text()
+      assert.equal(editorPromptRow(cleared).row, INPUT_PROMPT.trimEnd(), `the draft is gone:\n${cleared}`)
+      // Clearing is its own outcome, so the press that did it cannot be half of
+      // an exit: the next one starts the two-press sequence from the beginning.
+      assert.doesNotMatch(cleared, /Press ctrl\+c again to exit\./)
+
+      harness.terminal.send(CTRL_C)
+      await delay(SETTLE_MS)
+      assert.deepEqual(exits, [], 'the press after a clear only arms the exit')
+      assert.match(harness.terminal.text(), /Press ctrl\+c again to exit\./)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('cancels the active turn while running, and exits neither time', async () => {
+    const exits: number[] = []
+    const harness = await mount({}, {}, (code) => { exits.push(code) })
+    try {
+      await renderAfter(harness, () => { setAgentStatus(harness.agent, 'running') })
+      harness.terminal.send(CTRL_C)
+      harness.terminal.send(CTRL_C)
+      await delay(SETTLE_MS)
+
+      assert.deepEqual(harness.agent.cancelled.map(record => record.cause), [{ kind: 'user' }, { kind: 'user' }])
+      assert.deepEqual(exits, [], 'a running turn keeps Ctrl+C as cancel, however many times it is pressed')
+      assert.doesNotMatch(harness.terminal.text(), /Press ctrl\+c again to exit\./)
+    } finally {
+      await unmount(harness)
+    }
   })
 })

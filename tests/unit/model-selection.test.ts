@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import {
   createTuiTestHarness,
   disposeTuiTestHarness,
@@ -66,6 +67,116 @@ async function adaptersUpdated(harness: Harness): Promise<string> {
   await delay(SETTLE_MS)
   return harness.terminal.text()
 }
+
+/** The route the harness catalog advertises alongside the seeded default. */
+const OTHER_ROUTE = 'deepseek-official/deepseek-v4-pro'
+
+/** The route the seeded default-model service reports, so a switch is a real change. */
+const SEEDED: ModelSelection = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+
+/** Type the `/model <route>` command into the editor and let it settle. */
+async function runModelCommand(harness: Harness, argument: string): Promise<string> {
+  harness.terminal.send(`/model ${argument}`)
+  harness.terminal.send('\r')
+  await delay(SETTLE_MS)
+  return harness.terminal.text()
+}
+
+describe('model selection persistence', { skip: skipWithoutEntry }, () => {
+  it('saves the picked route, reasoning effort included, as the new default', async () => {
+    // Without this the pick lived only in this process: the next start re-read
+    // the service and landed back on the configured default.
+    const saved: ModelSelection[] = []
+    const harness = await mount({
+      catalog: {
+        providers: [{ id: 'deepseek-official', name: 'DeepSeek' }],
+        models: [
+          { provider: 'deepseek-official', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+          { provider: 'deepseek-official', id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+        ],
+        resolveModelInfo: async () => ({
+          context: { contextWindow: 128_000 },
+          reasoning: {
+            efforts: [{ id: ReasoningEffortId('high'), name: 'High' }],
+            defaultEffort: ReasoningEffortId('high'),
+          },
+        }),
+      },
+      services: {
+        agentDefaultModel: {
+          currentSelection: () => SEEDED,
+          saveSelection: async (next: ModelSelection) => { saved.push(next) },
+        },
+      },
+    })
+    try {
+      await runModelCommand(harness, OTHER_ROUTE)
+      assert.deepEqual(saved, [{
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-pro',
+        reasoningEffort: 'high',
+      }], 'the whole selection is persisted, not just the route')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('selects normally when no default-model service is mounted', async () => {
+    // An embedder may mount the TUI without the service; persistence is the
+    // only thing it should lose.
+    const harness = await mount()
+    try {
+      const frame = await runModelCommand(harness, OTHER_ROUTE)
+      assert.match(frame, /Model selected/)
+      assert.ok(
+        !frame.includes('could not be saved'),
+        `an absent service is not a failed save:\n${frame}`,
+      )
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('warns but keeps the selection when the save is rejected', async () => {
+    const harness = await mount({
+      services: {
+        agentDefaultModel: {
+          currentSelection: () => SEEDED,
+          saveSelection: async () => { throw new Error('settings file is read-only') },
+        },
+      },
+    })
+    try {
+      const frame = await runModelCommand(harness, OTHER_ROUTE)
+      assert.match(frame, /could not be saved/)
+      assert.match(frame, /settings file is read-only/)
+      // The route the next step runs under moved regardless: what failed is
+      // the durability of the choice, not the choice.
+      assert.match(frame, /deepseek-v4-pro/)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('writes nothing when the picked model is already selected', async () => {
+    const saved: ModelSelection[] = []
+    const harness = await mount({
+      services: {
+        agentDefaultModel: {
+          currentSelection: () => SEEDED,
+          saveSelection: async (next: ModelSelection) => { saved.push(next) },
+        },
+      },
+    })
+    try {
+      const frame = await runModelCommand(harness, 'deepseek-official/deepseek-v4-flash')
+      assert.match(frame, /already/)
+      assert.deepEqual(saved, [], 'the early return changed nothing to persist')
+    } finally {
+      await unmount(harness)
+    }
+  })
+})
 
 describe('model selection', { skip: skipWithoutEntry }, () => {
   it('follows the default-model service instead of the route captured at mount', async () => {

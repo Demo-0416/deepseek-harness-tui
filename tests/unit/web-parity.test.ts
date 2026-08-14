@@ -343,6 +343,59 @@ describe('TUI /status extras', { skip: skipWithoutEntry }, () => {
       assert.match(frame, /Session status/)
       assert.doesNotMatch(frame, /Goal state/)
       assert.doesNotMatch(frame, /Session totals/)
+      // No permission service is mounted here, so the preset row says nothing
+      // rather than inventing a policy this deployment does not enforce.
+      assert.doesNotMatch(frame, /Permission:/)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('names the permission preset the session decides tool calls under', async () => {
+    const harness = await mount({
+      services: {
+        approval: {
+          config: { policy: 'ask' },
+          // The session's own logged override is what an ask resolves under, so
+          // it is what the panel reports — not the deployment default beneath it.
+          overrideOf: () => 'never',
+        },
+      },
+    })
+    try {
+      await delay(SETTLE_MS)
+      ;(harness.controller as unknown as SubmitHandle).submit('/status')
+      await delay(SETTLE_MS)
+      assert.match(harness.terminal.text(), /Permission:\s+never/, `the preset row:\n${harness.terminal.text()}`)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('falls back to the deployment default when the session never switched', async () => {
+    const harness = await mount({
+      services: { approval: { config: { policy: 'ask' }, overrideOf: () => undefined } },
+    })
+    try {
+      await delay(SETTLE_MS)
+      ;(harness.controller as unknown as SubmitHandle).submit('/status')
+      await delay(SETTLE_MS)
+      assert.match(harness.terminal.text(), /Permission:\s+ask/)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('prints no row for a permission service that reports no preset at all', async () => {
+    // A service from another version: the reader shape-checks rather than
+    // trusting the seam, so an unreadable preset degrades to silence.
+    const harness = await mount({ services: { approval: { policyOf: () => 'ask' } } })
+    try {
+      await delay(SETTLE_MS)
+      ;(harness.controller as unknown as SubmitHandle).submit('/status')
+      await delay(SETTLE_MS)
+      assert.match(harness.terminal.text(), /Session status/)
+      assert.doesNotMatch(harness.terminal.text(), /Permission:/)
     } finally {
       await unmount(harness)
     }

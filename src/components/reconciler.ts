@@ -32,6 +32,9 @@ import {
   ContextCardComponent,
   StreamingAssistantComponent,
   ToolCardComponent,
+  turnCompletionVerb,
+  turnFooterRow,
+  TURN_FOOTER_MIN_MS,
   UserMessageComponent,
   type MarkdownPolicy,
   type ToolCardVisibility,
@@ -92,6 +95,47 @@ type NodeView =
   | { kind: 'tool'; version: number; component: ToolCardComponent; argsRaw: string }
   | { kind: 'plain'; version: number; component: Component }
 
+/**
+ * Wall time of each turn, replayed from the log's `turn/start`/`turn/end` pair.
+ *
+ * The turn's own bracket is the measurement, not the sum of its steps: the row
+ * it feeds answers "how long did this take me", which includes the gaps between
+ * steps that no step's timing bucket owns. Like {@link StepTimingTracker} it
+ * advances a cursor over the appended tail rather than replaying the log per
+ * query, so a transcript of T turns costs one pass over the events in total.
+ */
+class TurnDurationTracker {
+  private scanned = 0
+  private readonly turns = new Map<number, { start: number; end: number | undefined }>()
+
+  /**
+   * Advance over events appended since the previous query, then read one turn's
+   * wall time.
+   * @param events - Current session event log (append-only).
+   * @param turn - The turn index to measure.
+   * @returns Elapsed milliseconds, or `undefined` while the turn is still open.
+   */
+  durationOf(events: readonly SessionEvent[], turn: number): number | undefined {
+    for (; this.scanned < events.length; this.scanned += 1) {
+      const event = events[this.scanned] as SessionEvent
+      if (event.type === 'turn/start') {
+        // First bracket wins on both ends: a resumed log can carry a stale
+        // start, and the turn the transcript renders is the first one opened
+        // under that index.
+        if (!this.turns.has(event.data.turn)) this.turns.set(event.data.turn, { start: event.time, end: undefined })
+      } else if (event.type === 'turn/end') {
+        const state = this.turns.get(event.data.turn)
+        if (state !== undefined) state.end ??= event.time
+      }
+    }
+    const state = this.turns.get(turn)
+    if (state?.end === undefined) return undefined
+    // A backward wall-clock step clamps at zero rather than reporting a
+    // negative turn, matching how the step buckets treat the same log.
+    return Math.max(0, state.end - state.start)
+  }
+}
+
 /** A leading blank row plus the row itself, the transcript's block spacing. */
 function block(child: Component): Container {
   const container = new Container()
@@ -120,6 +164,22 @@ export class TranscriptReconciler {
   private showReasoning: boolean
   /** The open step's component, so an animation tick refreshes only that step. */
   private openStep: StreamingAssistantComponent | undefined
+  /** Wall time of every turn in the log, for the per-turn completion row. */
+  private readonly turnDurations = new TurnDurationTracker()
+  /**
+   * One completion row per turn, built once the turn ends. Held rather than
+   * rebuilt so the sampled verb — and with it the row's wording — stays put
+   * across the re-renders every later snapshot triggers.
+   */
+  private readonly turnFooters = new Map<number, Component>()
+  /**
+   * The verb each turn's row was worded with, kept apart from the rows.
+   *
+   * A palette change remounts every row, and a re-sample there would reword
+   * turns the user already read — the wording is a property of the turn, not of
+   * the row that happens to be mounted for it.
+   */
+  private readonly turnVerbs = new Map<number, string>()
 
   constructor(
     private readonly chat: Container,
@@ -148,6 +208,15 @@ export class TranscriptReconciler {
       children.push(footer.component)
       footer = undefined
     }
+    // The turn a step belongs to, tracked so the turn's completion row lands
+    // after everything that turn rendered — its last step's footer included.
+    let turn: number | undefined
+    const flushTurn = (): void => {
+      if (turn === undefined) return
+      const row = this.turnFooter(turn)
+      if (row !== undefined) children.push(row)
+      turn = undefined
+    }
     const emitLocals = (anchor: number): void => {
       const rows = this.locals.get(anchor)
       if (rows === undefined) return
@@ -170,6 +239,11 @@ export class TranscriptReconciler {
         continue
       }
       flushFooter()
+      // A new turn opens at its first step, or at the prompt that asked for it
+      // (the fold logs the prompt above the step it entered), so either one is
+      // where the previous turn's row is due.
+      if (node.kind === 'user-message' || (node.kind === 'assistant' && node.turn !== turn)) flushTurn()
+      if (node.kind === 'assistant') turn = node.turn
       switch (node.kind) {
         case 'assistant': {
           const view = this.assistantView(node)
@@ -230,6 +304,7 @@ export class TranscriptReconciler {
       }
     }
     flushFooter()
+    flushTurn()
     emitLocals(nodes.length)
 
     for (const [key] of this.views) {
@@ -271,6 +346,7 @@ export class TranscriptReconciler {
     )
     this.locals.clear()
     this.views.clear()
+    this.turnFooters.clear()
     this.chat.clear()
   }
 
@@ -283,21 +359,25 @@ export class TranscriptReconciler {
   reset(): void {
     this.views.clear()
     this.locals.clear()
+    // The rows hold the palette they were built with, so they remount too.
+    this.turnFooters.clear()
     this.chat.clear()
   }
 
   /**
    * Set the Ctrl+O card visibility on every mounted card.
    *
-   * Only tool cards carry the phase: a context card has no collapsed form, so
-   * the reconcile below is what mounts it on the expanded phase and drops it
-   * again on the other two.
+   * A tool card and an assistant step both carry the phase — the step's
+   * finished thinking and its timing footer are on screen only where the tool
+   * bodies are. A context card has no collapsed form, so the reconcile below is
+   * what mounts it on the expanded phase and drops it again on the other two.
    * @param visibility - hidden, collapsed preview, or full body.
    */
   setVisibility(visibility: ToolCardVisibility): void {
     this.visibility = visibility
     for (const view of this.views.values()) {
       if (view.kind === 'tool') view.component.setVisibility(visibility)
+      else if (view.kind === 'assistant') view.component.setVisibility(visibility)
     }
     this.reconcile(this.nodes)
   }
@@ -321,6 +401,29 @@ export class TranscriptReconciler {
    */
   invalidateOpenStep(): void {
     this.openStep?.invalidate()
+  }
+
+  /**
+   * One turn's completion row, or `undefined` when that turn prints none.
+   *
+   * This is Claude Code's only timing report on the transcript: one dim
+   * `✻ <verb> for <duration>` at the end of a turn, and only for a turn that
+   * ran longer than {@link TURN_FOOTER_MIN_MS} — a turn the user watched
+   * complete needs no receipt. It renders on every phase of the Ctrl+O cycle,
+   * because unlike the per-step breakdown it is part of the conversation.
+   * @param turn - The turn index to report.
+   * @returns The mounted row, or `undefined` while the turn is open or short.
+   */
+  private turnFooter(turn: number): Component | undefined {
+    const existing = this.turnFooters.get(turn)
+    if (existing !== undefined) return existing
+    const elapsed = this.turnDurations.durationOf(this.deps.events(), turn)
+    if (elapsed === undefined || elapsed <= TURN_FOOTER_MIN_MS) return undefined
+    const verb = this.turnVerbs.get(turn) ?? turnCompletionVerb()
+    this.turnVerbs.set(turn, verb)
+    const component = block(new Text(turnFooterRow(elapsed, this.deps.palette, verb), 0, 0))
+    this.turnFooters.set(turn, component)
+    return component
   }
 
   /** Whether one call belongs to a step `/clear` hid while it was open. */
@@ -383,6 +486,7 @@ export class TranscriptReconciler {
       this.deps.tracker,
       this.deps.now,
       this.showReasoning,
+      this.visibility,
       this.deps.palette,
       this.deps.mdTheme,
       this.deps.markdown,
