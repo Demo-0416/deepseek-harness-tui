@@ -207,26 +207,35 @@ interface StoredProfile {
 }
 
 /**
- * Read the provider profiles one namespace's section currently stores.
+ * Read one namespace's resolved section, absorbing the unregistered case.
  * @param settings - the settings service.
  * @param ns - namespace to read.
+ * @returns the section, or undefined when nothing stores one.
+ */
+function readSection(settings: ProviderSettingsService | undefined, ns: string): unknown {
+  if (settings === undefined) return undefined
+  try {
+    return settings.get(ns)
+  } catch {
+    // An unregistered namespace may throw rather than answering empty. That is
+    // a deployment fact, not a user error: the roster still lists whatever the
+    // adapter directory advertises, and the write path reports it for real.
+    return undefined
+  }
+}
+
+/**
+ * Read the provider profiles one section's `providers` map stores.
+ *
+ * This is the pi-ai layout, where one namespace holds many routes. A namespace
+ * whose directory entry declares another layout is read through
+ * {@link profileAt} instead; this map only enumerates routes the directory
+ * never mentioned, such as ones added by `/provider add`.
+ * @param section - the namespace's resolved section.
  * @returns route key to stored profile, empty when the section holds none.
  */
-function storedProfiles(
-  settings: ProviderSettingsService | undefined,
-  ns: string,
-): ReadonlyMap<string, StoredProfile> {
+function storedProfiles(section: unknown): ReadonlyMap<string, StoredProfile> {
   const profiles = new Map<string, StoredProfile>()
-  if (settings === undefined) return profiles
-  let section: unknown
-  try {
-    section = settings.get(ns)
-  } catch {
-    // An unregistered namespace throws rather than answering empty. That is a
-    // deployment fact, not a user error: the roster still lists whatever the
-    // adapter directory advertises, and the write path reports it for real.
-    return profiles
-  }
   if (typeof section !== 'object' || section === null) return profiles
   const declared = (section as { providers?: unknown }).providers
   if (typeof declared !== 'object' || declared === null) return profiles
@@ -239,6 +248,28 @@ function storedProfiles(
 /** Narrow one stored profile field to a non-empty string, or drop it. */
 function storedString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/**
+ * Read the profile object a directory entry's path points at.
+ *
+ * The path is the entry's own declaration, walked as declared: `[]` means the
+ * namespace's section root IS the profile, which is how a single-route adapter
+ * such as llm-deepseek registers itself — its `apiKeyEnv` lives at the root of
+ * its own config, not under a `providers` map it does not have. Resolving the
+ * path here rather than assuming the pi-ai layout is what makes `/login` write
+ * where that adapter actually reads.
+ * @param section - the namespace's resolved section.
+ * @param path - the entry's declared path from the section root.
+ * @returns the profile object, or undefined when the path leads nowhere.
+ */
+function profileAt(section: unknown, path: readonly string[]): StoredProfile | undefined {
+  let cursor: unknown = section
+  for (const segment of path) {
+    if (typeof cursor !== 'object' || cursor === null) return undefined
+    cursor = (cursor as Record<string, unknown>)[segment]
+  }
+  return typeof cursor === 'object' && cursor !== null ? cursor as StoredProfile : undefined
 }
 
 /** The LLM service surface the roster reads, kept to what it actually calls. */
@@ -275,20 +306,15 @@ export function readProviderRoster(ctx: Context): readonly ProviderRosterEntry[]
   const registered = new Map(llm.listProviders().map(provider => [provider.id, provider.name]))
   const namespaces = new Set(directory.map(entry => entry.settingsNs))
   if (namespaces.size === 0) namespaces.add(FALLBACK_SETTINGS_NAMESPACE)
-  const sections = new Map([...namespaces].map(ns => [ns, storedProfiles(settings, ns)] as const))
+  const sections = new Map([...namespaces].map(ns => [ns, readSection(settings, ns)] as const))
 
   const rows = new Map<string, ProviderRosterEntry>()
-  const add = (entry: ProviderRosterEntry): void => {
-    // A stored route wins over a directory row for the same key: it carries
-    // the endpoint and credential this terminal would actually be editing.
-    const existing = rows.get(entry.provider)
-    if (existing !== undefined && existing.configured && !entry.configured) return
-    rows.set(entry.provider, entry)
-  }
 
   for (const entry of directory) {
-    const profile = sections.get(entry.settingsNs)?.get(entry.provider)
-    add({
+    // The entry's own declared path decides where its profile lives: `[]`
+    // means the section root, the layout a single-route adapter registers.
+    const profile = profileAt(sections.get(entry.settingsNs), entry.settingsPath)
+    rows.set(entry.provider, {
       provider: entry.provider,
       displayName: registered.get(entry.provider) ?? entry.displayName,
       settingsNs: entry.settingsNs,
@@ -297,9 +323,14 @@ export function readProviderRoster(ctx: Context): readonly ProviderRosterEntry[]
       ...profile === undefined ? {} : profileFacts(profile),
     })
   }
-  for (const [ns, profiles] of sections) {
-    for (const [route, profile] of profiles) {
-      add({
+  for (const [ns, section] of sections) {
+    for (const [route, profile] of storedProfiles(section)) {
+      // A directory row wins: it read its stored facts through its own
+      // declared path, while this enumeration assumes the pi-ai layout — in a
+      // root-profile namespace a stray `providers` subtree is stale data, not
+      // a route this terminal should offer to edit.
+      if (rows.has(route)) continue
+      rows.set(route, {
         provider: route,
         displayName: storedString(profile.displayName) ?? registered.get(route) ?? route,
         settingsNs: ns,
@@ -429,7 +460,12 @@ export async function saveProviderLogin(
     throw new Error('this deployment has no writable settings, so a provider cannot be saved')
   }
   await credentials.set(credentialRef, key)
-  const path = entry.settingsPath.length === 0 ? ['providers', entry.provider] : entry.settingsPath
+  // The entry's declared path, taken as declared: `[]` addresses the section
+  // root, where a single-route adapter like llm-deepseek reads `apiKeyEnv`.
+  // Substituting a `providers.<route>` subtree here would store the reference
+  // where no adapter looks, which is exactly the login that "worked" and then
+  // failed its first request with a missing-credential error.
+  const path = entry.settingsPath
   const ops: ProviderSettingsOp[] = [{ op: 'set', path: [...path, 'apiKeyEnv'], value: credentialRef }]
   for (const [field, value] of Object.entries(draft)) {
     if (value === undefined) continue

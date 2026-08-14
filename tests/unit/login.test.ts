@@ -263,6 +263,65 @@ describe('/login key entry', { skip: skipWithoutEntry }, () => {
     }
   })
 
+  it('writes a root-profile route where its adapter reads, not into a providers map', async () => {
+    // llm-deepseek's shape: one dedicated route, `settingsPath: []`, and an
+    // `apiKeyEnv` at the section root that the resolved settings already carry
+    // as a schema default. The section also holds the stale `providers`
+    // subtree an older login wrote, which must neither be offered as a route
+    // nor receive the new write.
+    const settingsWrites: SettingsWrite[] = []
+    const credentialWrites: CredentialWrite[] = []
+    const officialSection = {
+      apiKeyEnv: 'DEEPSEEK_API_KEY',
+      providers: { 'deepseek-official': { apiKeyEnv: 'DEEPSEEK_OFFICIAL_API_KEY' } },
+    }
+    const harness = await mount({
+      catalog: {
+        providers: [],
+        models: [],
+        configurableProviders: [{
+          provider: 'deepseek-official',
+          displayName: 'DeepSeek',
+          settingsNs: 'llm-deepseek',
+          settingsPath: [],
+          declared: false,
+        }],
+      },
+      services: {
+        settings: {
+          get: (ns: string) => ns === 'llm-deepseek' ? officialSection : {},
+          mutate: async (ns: string, ops: SettingsWrite['ops']) => {
+            settingsWrites.push({ ns, ops: [...ops] })
+          },
+          describe: () => [{ ns: 'llm-deepseek', applies: 'live' }],
+        },
+        credentials: {
+          set: async (ref: string, value: string) => { credentialWrites.push([ref, value]) },
+        },
+      },
+    })
+    try {
+      const roster = await run(harness, '/login')
+      assert.match(roster, /key in DEEPSEEK_API_KEY/u,
+        `the root profile's own credential reference is what the row names:\n${roster}`)
+      assert.doesNotMatch(roster, /DEEPSEEK_OFFICIAL_API_KEY/u,
+        `the stale subtree is not resurrected as a route:\n${roster}`)
+
+      await press(harness, '\r')
+      await press(harness, FAKE_KEY)
+      await press(harness, '\r')
+
+      assert.deepEqual(credentialWrites, [['DEEPSEEK_API_KEY', FAKE_KEY]],
+        'the secret goes to the reference the adapter actually resolves')
+      assert.deepEqual(settingsWrites, [{
+        ns: 'llm-deepseek',
+        ops: [{ op: 'set', path: ['apiKeyEnv'], value: 'DEEPSEEK_API_KEY' }],
+      }], 'the profile write lands at the section root the adapter reads')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
   it('refuses a key the endpoint rejected, and writes nothing at all', async () => {
     // The distinction this rests on is only in the message text: the adapter
     // codes a refused credential and an unreachable host identically.
