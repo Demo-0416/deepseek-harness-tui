@@ -30,6 +30,7 @@ import {
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { displayInlineText, displayText } from './text.ts'
 import type { Palette } from './theme.ts'
+import { t } from '../i18n/index.ts'
 import { CLAUDE_COLORS, fg as paintFg } from '../render/palette.ts'
 
 /**
@@ -100,17 +101,11 @@ interface ApprovalOption {
  * affordance that is not on the list is an affordance nobody finds.
  */
 const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
-  { action: 'allow-once', label: () => 'Yes, allow once' },
-  { action: 'allow-session', label: toolName => `Yes, and don't ask again for ${toolName} this session` },
-  { action: 'reject-with-feedback', label: () => 'No, and tell the agent what to do differently' },
-  { action: 'reject', label: () => 'No, reject' },
+  { action: 'allow-once', label: () => t('approval.allowOnce') },
+  { action: 'allow-session', label: toolName => t('approval.allowSession', { tool: toolName }) },
+  { action: 'reject-with-feedback', label: () => t('approval.rejectWithFeedback') },
+  { action: 'reject', label: () => t('approval.reject') },
 ]
-
-/** The label in the dialog's top edge. */
-const APPROVAL_TITLE = 'Permission required'
-
-/** The prompt above the feedback box, in the refusal's own words. */
-const FEEDBACK_PROMPT = 'Tell the agent what to do differently:'
 
 /**
  * Paint text in the fixed permission tone, or leave it bare when the palette has
@@ -206,7 +201,7 @@ export class ApprovalDialog implements Component, Focusable {
     // Claude Code's permission frame draws its top edge only; the body is padded
     // by one column on each side instead of being ruled.
     const inner = Math.max(1, outer - 2)
-    const head = `─ ${APPROVAL_TITLE} `
+    const head = `─ ${t('approval.title')} `
     const top = permissionAccent(
       this.palette,
       `╭${head}${'─'.repeat(Math.max(0, outer - 2 - visibleWidth(head)))}╮`,
@@ -241,9 +236,9 @@ export class ApprovalDialog implements Component, Focusable {
   private renderFeedback(inner: number): string[] {
     this.input.focused = this.focused
     return [
-      this.palette.text(FEEDBACK_PROMPT),
+      this.palette.text(t('approval.feedbackPrompt')),
       ...this.input.render(inner),
-      this.palette.dim('Enter reject with this feedback • Esc back to the answers'),
+      this.palette.dim(t('approval.feedbackHint')),
     ]
   }
 

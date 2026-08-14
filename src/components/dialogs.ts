@@ -34,6 +34,7 @@ import {
   renderTuiPromptTemplate,
   type TuiPromptTemplateToken,
 } from '../prompt.ts'
+import { t } from '../i18n/index.ts'
 
 /** A selectable model advertised by a provider, with its display name, description, and reasoning metadata. */
 export interface ModelChoice extends ModelSelection {
@@ -271,8 +272,15 @@ export class PromptContextComponent implements Component {
  */
 export const CUSTOM_ANSWER_KEYS = 'Tab/c'
 
-/** The custom-answer row as the question dialog's footer and the shortcut list both print it. */
-export const CUSTOM_ANSWER_HINT = `${CUSTOM_ANSWER_KEYS} custom answer`
+/**
+ * The custom-answer row as the question dialog's footer and the shortcut list
+ * both print it, in English.
+ *
+ * The rendering surfaces read `dialog.question.customAnswer` per frame, so
+ * `/lang` moves what the user sees; this constant is the English form the docs
+ * suite holds the README to, which is a document that has no locale.
+ */
+export const CUSTOM_ANSWER_HINT = t('dialog.question.customAnswer', { keys: CUSTOM_ANSWER_KEYS }, 'en')
 
 /** A user's answer to one question: chosen option labels and an optional custom answer. */
 export interface QuestionSelection {
@@ -461,20 +469,22 @@ export class ModelDialog implements Component {
   private renderEffortRow(): string {
     const selectedItem = this.list.getSelectedItem()
     /* v8 ignore next -- the dialog is opened only for a non-empty catalog. */
-    if (selectedItem === null) return this.palette.dim('◇ No model focused')
+    if (selectedItem === null) return this.palette.dim(`◇ ${t('dialog.model.noFocus')}`)
     const choice = this.choices.get(selectedItem.value)
     if (choice?.reasoning === undefined) {
-      const name = choice === undefined ? '' : ` for ${displayText(choice.modelName)}`
-      return this.palette.dim(`◇ Reasoning effort not supported${name}`)
+      return this.palette.dim(`◇ ${choice === undefined
+        ? t('dialog.model.effortUnsupported')
+        : t('dialog.model.effortUnsupportedFor', { model: displayText(choice.modelName) })}`)
     }
     const effort = this.efforts.get(selectedItem.value)
     const name = effort === undefined
-      ? 'Provider default'
+      ? t('dialog.model.providerDefault')
       : displayText(targetReasoningLabel(choice, effort) ?? effort)
     // Marked only against a default the model actually advertises: calling the
     // provider's own fallback "(default)" would name a rung that is not there.
     const isDefault = choice.reasoning.defaultEffort !== undefined && effort === choice.reasoning.defaultEffort
-    return `${this.palette.accent('◆')} ${name} effort${isDefault ? ' (default)' : ''}  ${this.palette.dim('←/→ to adjust')}`
+    return `${this.palette.accent('◆')} ${t('dialog.model.effortRow', { effort: name })}${
+      isDefault ? ` ${t('dialog.model.effortDefault')}` : ''}  ${this.palette.dim(t('dialog.model.adjust'))}`
   }
 
   invalidate(): void {
@@ -529,19 +539,19 @@ export class ModelDialog implements Component {
     this.filter.focused = true
     const results = this.filteredItems()
     const filterContent = truncateToWidth(this.filter.render(innerWidth).join(''), innerWidth, '')
-    return renderDialog('Select model', [
+    return renderDialog(t('dialog.model.title'), [
       filterContent,
       '',
       ...results.length === 0
-        ? [this.palette.dim('  No models match the filter')]
+        ? [this.palette.dim(`  ${t('dialog.model.noMatch')}`)]
         : this.list.render(innerWidth),
       '',
       ...results.length === 0 ? [] : [this.renderEffortRow(), ''],
       // Two rows: the first is how you move, the second is what each way of
       // leaving commits to. Folded into one line they truncate, and the line
       // that gets cut is the one naming the write.
-      this.palette.dim('type to filter • ↑/↓ move • ←/→ reasoning effort'),
-      this.palette.dim('Enter save as default • Ctrl+S this session only • Esc cancel'),
+      this.palette.dim(t('dialog.model.hintMove')),
+      this.palette.dim(t('dialog.model.hintCommit')),
     ], width, this.palette)
   }
 }
@@ -702,14 +712,14 @@ export class PresetDialog implements Component {
     this.filter.focused = true
     const results = this.filteredItems()
     const filterContent = truncateToWidth(this.filter.render(innerWidth).join(''), innerWidth, '')
-    return renderDialog('Select agent preset', [
+    return renderDialog(t('dialog.preset.title'), [
       filterContent,
       '',
       ...results.length === 0
-        ? [this.palette.dim('  No presets match the filter')]
+        ? [this.palette.dim(`  ${t('dialog.preset.noMatch')}`)]
         : this.list.render(innerWidth),
       '',
-      this.palette.dim('type to filter • ↑/↓ move • Enter select • Esc'),
+      this.palette.dim(t('dialog.preset.hint')),
     ], width, this.palette)
   }
 }
@@ -740,8 +750,8 @@ export class DetailsDialog implements Component {
     private readonly apply: (selection: DetailsSelection) => void,
     private readonly close: () => void,
   ) {
-    this.toolsItem = { value: 'tools', label: 'Tool cards', description: visibility }
-    this.reasoningItem = { value: 'reasoning', label: 'Reasoning', description: this.reasoningLabel() }
+    this.toolsItem = { value: 'tools', label: t('dialog.details.tools'), description: visibility }
+    this.reasoningItem = { value: 'reasoning', label: t('dialog.details.reasoning'), description: this.reasoningLabel() }
     this.list = new SelectList([this.toolsItem, this.reasoningItem], 2, dialogSelectTheme(palette))
     this.list.onSelect = close
   }
@@ -779,10 +789,10 @@ export class DetailsDialog implements Component {
 
   render(width: number): string[] {
     const innerWidth = Math.max(1, width - 4)
-    return renderDialog('Transcript details', [
+    return renderDialog(t('dialog.details.title'), [
       ...this.list.render(innerWidth),
       '',
-      this.palette.dim('↑/↓ move • Tab toggle • Enter/Esc close'),
+      this.palette.dim(t('dialog.details.hint')),
     ], width, this.palette)
   }
 }
@@ -992,8 +1002,8 @@ export class ResumePicker implements Component, Focusable {
       this.error = ''
     } else if (matchesKey(data, Key.enter)) {
       const selected = filtered[this.selectedIndex]
-      if (this.candidates === undefined) this.error = 'Sessions are still loading.'
-      else if (selected === undefined) this.error = 'No session matches this search.'
+      if (this.candidates === undefined) this.error = t('dialog.resume.stillLoading')
+      else if (selected === undefined) this.error = t('dialog.resume.noSessionMatch')
       else if (selected.disabledReason !== undefined) this.error = selected.disabledReason
       else this.done(selected)
     } else {
@@ -1016,11 +1026,11 @@ export class ResumePicker implements Component, Focusable {
     const candidates = this.candidates ?? []
     const inWorkspace = candidates.filter(candidate => candidate.currentWorkspace).length
     const active = this.scope === 'workspace'
-      ? `this workspace ${displayText(this.workspaceLabel)}`
-      : `all workspaces (${candidates.length})`
+      ? t('dialog.resume.scopeWorkspace', { label: displayText(this.workspaceLabel) })
+      : t('dialog.resume.scopeAll', { count: candidates.length })
     const other = this.scope === 'workspace'
-      ? `all workspaces (${candidates.length})`
-      : `this workspace (${inWorkspace})`
+      ? t('dialog.resume.scopeAll', { count: candidates.length })
+      : t('dialog.resume.scopeWorkspaceCount', { count: inWorkspace })
     return `${this.palette.accent(active)}${this.palette.dim(`  ⇥ ${other}`)}`
   }
 
@@ -1035,8 +1045,8 @@ export class ResumePicker implements Component, Focusable {
     const selected = filtered[this.selectedIndex]
     const position = selected === undefined ? 0 : this.selectedIndex + 1
     const title = this.candidates === undefined
-      ? 'Resume session'
-      : `Resume session (${position} of ${filtered.length})`
+      ? t('dialog.resume.title')
+      : t('dialog.resume.titleCounted', { position, total: filtered.length })
     const lines: string[] = [
       '',
       `${indent}${this.palette.bold(this.palette.accent(title))}`,
@@ -1078,20 +1088,20 @@ export class ResumePicker implements Component, Focusable {
       // Only the all-workspaces scope mixes directories, so the per-row
       // workspace is redundant in the scope that already names one.
       if (this.scope === 'all') {
-        push(this.palette.dim(`  workspace ${displayText(candidate.workspaceLabel)}`))
+        push(this.palette.dim(`  ${t('dialog.resume.workspaceRow', { label: displayText(candidate.workspaceLabel) })}`))
       }
       if (candidate.disabledReason !== undefined) {
-        push(this.palette.warning(`  unavailable: ${displayText(candidate.disabledReason)}`))
+        push(this.palette.warning(`  ${t('dialog.resume.unavailable', { reason: displayText(candidate.disabledReason) })}`))
       }
     }
-    if (this.candidates === undefined) push(this.palette.dim('Loading sessions…'))
-    else if (filtered.length === 0) push(this.palette.warning('No matching sessions.'))
+    if (this.candidates === undefined) push(this.palette.dim(t('dialog.resume.loading')))
+    else if (filtered.length === 0) push(this.palette.warning(t('dialog.resume.noMatch')))
     if (this.error !== '') {
       lines.push('')
       push(this.palette.error(displayText(this.error)))
     }
 
-    const footer = `${indent}${this.palette.dim('Type to search  •  ↑/↓ navigate  •  Tab scope  •  Enter resume  •  Esc clear/cancel')}`
+    const footer = `${indent}${this.palette.dim(t('dialog.resume.hint'))}`
     while (lines.length < height - 2) lines.push('')
     lines.push(footer, '')
     return lines.slice(0, height)
@@ -1184,7 +1194,7 @@ export class QuestionDialog implements Component, Focusable {
         : [options[this.selectedIndex]?.label].filter((label): label is string => label !== undefined)
       const custom = this.question.multiSelect ? this.input.getValue().trim() : ''
       if (selected.length === 0 && custom === '') {
-        this.error = `Select at least one option, or press ${CUSTOM_ANSWER_KEYS} for a custom answer.`
+        this.error = t('dialog.question.selectOne', { keys: CUSTOM_ANSWER_KEYS })
         return
       }
       this.done({ selected, ...(custom === '' ? {} : { custom }) })
@@ -1200,7 +1210,7 @@ export class QuestionDialog implements Component, Focusable {
   private submitCustom(value: string): void {
     const custom = value.trim()
     if (custom === '') {
-      this.error = 'Enter an answer before submitting.'
+      this.error = t('dialog.question.emptyAnswer')
       return
     }
     this.done({
@@ -1257,7 +1267,11 @@ export class QuestionDialog implements Component, Focusable {
     this.input.focused = this.focused
     const horizontalPadding = Math.min(2, Math.max(0, Math.floor((width - 1) / 2)))
     const innerWidth = Math.max(1, width - horizontalPadding * 2)
-    const header = `Question ${this.position}/${this.total} (${this.unanswered} unanswered)${this.question.header === undefined ? '' : ` · ${displayText(this.question.header)}`}`
+    const header = `${t('dialog.question.header', {
+      position: this.position,
+      total: this.total,
+      unanswered: this.unanswered,
+    })}${this.question.header === undefined ? '' : ` · ${displayText(this.question.header)}`}`
     const questionLines = wrapTextWithAnsi(
       this.palette.text(displayText(this.question.question)),
       innerWidth,
@@ -1280,9 +1294,11 @@ export class QuestionDialog implements Component, Focusable {
     headerLines.push('')
 
     const customControls = [
-      ...(this.options.length > 0 && this.question.multiSelect ? [`${this.selected.size} selected`] : []),
-      'Enter submit',
-      this.options.length > 0 ? 'Esc options' : 'Esc cancel',
+      ...(this.options.length > 0 && this.question.multiSelect
+        ? [t('dialog.question.selectedCount', { count: this.selected.size })]
+        : []),
+      t('dialog.question.submit'),
+      t(this.options.length > 0 ? 'dialog.question.escOptions' : 'dialog.question.escCancel'),
     ]
     const customHint = this.palette.dim(customControls.join(' • '))
     const footerLines: string[] = []
@@ -1294,11 +1310,11 @@ export class QuestionDialog implements Component, Focusable {
         // Both keys are named because both are bound: `c` is the one a hand
         // already on the option list reaches for, and a shortcut nobody is
         // told about is a shortcut nobody uses.
-        CUSTOM_ANSWER_HINT,
-        ...(this.options.length > 1 ? ['↑/↓ navigate'] : []),
-        ...(this.question.multiSelect ? ['Space toggle'] : []),
-        'Enter submit',
-        'Esc interrupt',
+        t('dialog.question.customAnswer', { keys: CUSTOM_ANSWER_KEYS }),
+        ...(this.options.length > 1 ? [t('dialog.question.navigate')] : []),
+        ...(this.question.multiSelect ? [t('dialog.question.spaceToggle')] : []),
+        t('dialog.question.submit'),
+        t('dialog.question.escInterrupt'),
       ]
       const hint = this.palette.dim(controls.join(' • '))
       for (const line of wrapTextWithAnsi(hint, innerWidth)) footerLines.push(line)
@@ -1326,11 +1342,11 @@ export class QuestionDialog implements Component, Focusable {
     } else {
       const optionBlocks = this.options.map((option, index) => this.renderOptionBlock(option, index, innerWidth))
       const { visibleBlocks, hiddenBefore, hiddenAfter } = this.windowBlocks(optionBlocks, availableForOptions, innerWidth)
-      if (hiddenBefore > 0) optionLines.push(this.palette.dim(`↑ ${hiddenBefore} more`))
+      if (hiddenBefore > 0) optionLines.push(this.palette.dim(t('dialog.question.moreAbove', { count: hiddenBefore })))
       for (const block of visibleBlocks) {
         for (const line of block) optionLines.push(line)
       }
-      if (hiddenAfter > 0) optionLines.push(this.palette.dim(`↓ ${hiddenAfter} more`))
+      if (hiddenAfter > 0) optionLines.push(this.palette.dim(t('dialog.question.moreBelow', { count: hiddenAfter })))
       for (const line of optionLines) body.push(line)
       for (const line of positionLines) body.push(line)
       for (const line of footerLines) body.push(line)

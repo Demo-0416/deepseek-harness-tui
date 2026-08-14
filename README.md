@@ -98,6 +98,7 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/copy` | copy the last answer to the system clipboard |
 | `/new` | start a blank session in this workspace; the current one keeps its history and stays resumable |
 | `/clear` | clear the transcript view; the session log is unchanged |
+| `/lang [en\|zh]` | show or switch the interface language; the choice is remembered for the next session |
 | `/palette` | every color and attribute role this terminal renders |
 | `/export [path]` | write this session's log to a file and report the path; an existing file is replaced only after you confirm |
 | `/plugins` | search and inspect the Loader's plugin entries |
@@ -110,6 +111,12 @@ left. Every other binding is configurable — see `keybindings` below.
 
 Those are this bundle's own commands. Whatever else the profile mounts registers
 its own on top of them, and `/help` lists what the running session actually has.
+
+`/lang` switches this terminal's own text — commands, panels, hints, dialog
+buttons — between English (the default) and Chinese; the conversation itself is
+never translated. The choice is written to the Host's `locale` settings section
+when a settings provider owns one, which is the same preference the web client
+reads, and to `$DSH_HOME/tui-locale.json` (`~/.dsh/tui-locale.json`) otherwise.
 
 ### `@` file references
 
