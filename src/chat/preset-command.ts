@@ -188,17 +188,29 @@ export function createPresetController(deps: PresetControllerDeps): PresetContro
         return
       }
       if (deps.isDisposed()) return
+      // Headline first, reason second, on their own lines: what happened has to
+      // survive the notice column, and what did NOT happen is the follow-up.
       deps.appendNotice([
-        `This session has already started, so its preset is fixed at ${sessionAgentPreset(agent.session) ?? 'the one it was created with'}.`,
         `Preset saved as the default. New sessions will use ${id}.`,
-      ].join(' '))
+        'This session has already started, so its own preset is fixed.',
+      ].join('\n'))
       return
     }
     if (sessionAgentPreset(agent.session) === id) {
       deps.appendNotice(`Preset is already ${id}.`)
       return
     }
-    const preset = await presets.recompose(agent.ctx, id)
+    let preset: { id: string }
+    try {
+      preset = await presets.recompose(agent.ctx, id)
+    } catch (error: unknown) {
+      if (deps.isDisposed()) return
+      // The roster refuses an unknown id and an unusable composition in its own
+      // words — one carries the ids that do exist, the other the reason
+      // discovery read — and both are more useful than anything restated here.
+      deps.appendNotice(`Could not select preset "${id}": ${errorChain(error)}`, 'error')
+      return
+    }
     if (deps.isDisposed()) return
     // Recorded only after the swap committed, the way the Host records it: the
     // log states what the agent RUNS, and a rejected mount leaves the previous
@@ -331,6 +343,11 @@ export function createPresetController(deps: PresetControllerDeps): PresetContro
 
   return {
     currentPreset(): string | undefined {
+      // Gated on the roster being mounted, not on the log alone: a log written
+      // under a profile that composed presets can be resumed under one that
+      // does not, and naming a composition nothing mounts would describe a
+      // layer that is not there — the same rule the Permission row follows.
+      if (ctx.get('agentPresets') === undefined) return undefined
       return sessionAgentPreset(agent.session)
     },
     queuePresetCommand(raw: string): void {

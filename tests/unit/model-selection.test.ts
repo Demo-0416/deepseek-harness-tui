@@ -178,6 +178,147 @@ describe('model selection persistence', { skip: skipWithoutEntry }, () => {
   })
 })
 
+/**
+ * The catalog the picker tests open: two routes, one with a reasoning ladder.
+ *
+ * The dialog is widened past its 76-column default because these assertions are
+ * about what the row SAYS; at the default width the description column is
+ * narrower than the sentence and the test would be measuring truncation.
+ */
+const PICKER_OPTIONS: TuiHarnessOptions = {
+  config: { modelDialogWidth: 96 },
+  catalog: {
+    providers: [{ id: 'deepseek-official', name: 'DeepSeek' }],
+    models: [
+      { provider: 'deepseek-official', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', description: 'Quick answers' },
+      { provider: 'deepseek-official', id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', description: 'Complex work' },
+    ],
+    resolveModelInfo: async () => ({
+      context: { contextWindow: 128_000 },
+      reasoning: {
+        efforts: [
+          { id: ReasoningEffortId('low'), name: 'Low' },
+          { id: ReasoningEffortId('high'), name: 'High' },
+        ],
+        defaultEffort: ReasoningEffortId('low'),
+      },
+    }),
+  },
+}
+
+/** Open the `/model` picker and settle the catalog read it waits on. */
+async function openPicker(harness: Harness): Promise<string> {
+  harness.terminal.send('/model')
+  harness.terminal.send('\r')
+  await delay(SETTLE_MS)
+  const frame = harness.terminal.text()
+  assert.match(frame, /Select model/, `the picker is open:\n${frame}`)
+  return frame
+}
+
+describe('model selector', { skip: skipWithoutEntry }, () => {
+  it('lists numbered routes with their descriptions and an adjustable effort row', async () => {
+    const harness = await mount({
+      ...PICKER_OPTIONS,
+      services: { agentDefaultModel: { currentSelection: () => SEEDED } },
+    })
+    try {
+      const frame = await openPicker(harness)
+      // Claude Code's picker shape: an ordinal per row, the provider's own
+      // sentence beside it, and the effort on a line of its own.
+      // The route survives the column it sits in: it is the identity
+      // `/model <route>` takes, so a truncated one names nothing.
+      assert.match(frame, /1\. deepseek-official\/deepseek-v4-flash/)
+      assert.match(frame, /2\. deepseek-official\/deepseek-v4-pro/)
+      assert.match(frame, /current — DeepSeek V4 Flash/, 'the running route is badged, in the description column')
+      assert.match(frame, /DeepSeek V4 Pro — Complex work/)
+      assert.match(frame, /Low effort \(default\)/)
+      assert.match(frame, /←\/→ to adjust/)
+      // Both writes are named where the keys that perform them are.
+      assert.match(frame, /Enter save as default/)
+      assert.match(frame, /Ctrl\+S this session only/)
+
+      const adjusted = harness.terminal.frames
+      harness.terminal.send('\x1b[C')
+      await harness.terminal.waitForFrame(adjusted)
+      assert.match(harness.terminal.text(), /High effort/, 'the arrow moves the focused row\'s effort')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('saves the default on Enter and says which layer moved', async () => {
+    const saved: ModelSelection[] = []
+    const harness = await mount({
+      ...PICKER_OPTIONS,
+      services: {
+        agentDefaultModel: {
+          currentSelection: () => SEEDED,
+          saveSelection: async (next: ModelSelection) => { saved.push(next) },
+        },
+      },
+    })
+    try {
+      await openPicker(harness)
+      harness.terminal.send('\x1b[B')
+      harness.terminal.send('\r')
+      await delay(SETTLE_MS)
+      const frame = harness.terminal.text()
+      assert.match(frame, /Saved as your default/, `the global write is disclosed:\n${frame}`)
+      assert.deepEqual(saved.map(selection => selection.model), ['deepseek-v4-pro'])
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('applies a Ctrl+S pick to this session without touching the default', async () => {
+    // The picker used to have one commit key, and it always wrote the user
+    // settings layer: trying a model for one task changed every future session.
+    const saved: ModelSelection[] = []
+    const harness = await mount({
+      ...PICKER_OPTIONS,
+      services: {
+        agentDefaultModel: {
+          currentSelection: () => SEEDED,
+          saveSelection: async (next: ModelSelection) => { saved.push(next) },
+        },
+      },
+    })
+    try {
+      await openPicker(harness)
+      harness.terminal.send('\x1b[B')
+      harness.terminal.send('\x13')
+      await delay(SETTLE_MS)
+      const frame = harness.terminal.text()
+      assert.match(frame, /This session only/)
+      assert.deepEqual(saved, [], 'a session-scoped pick writes no settings layer')
+      // The route still moved for the steps that follow.
+      assert.match(frame, /deepseek-v4-pro/)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('closes on Ctrl+C, filter or no filter', async () => {
+    const harness = await mount({
+      ...PICKER_OPTIONS,
+      services: { agentDefaultModel: { currentSelection: () => SEEDED } },
+    })
+    try {
+      await openPicker(harness)
+      harness.terminal.send('pro')
+      await delay(SETTLE_MS)
+      const closed = harness.terminal.frames
+      harness.terminal.send('\x03')
+      await harness.terminal.waitForFrame(closed)
+      const frame = harness.terminal.text()
+      assert.doesNotMatch(frame, /Select model/, `Ctrl+C closes outright, unlike Esc:\n${frame}`)
+    } finally {
+      await unmount(harness)
+    }
+  })
+})
+
 describe('model selection', { skip: skipWithoutEntry }, () => {
   it('follows the default-model service instead of the route captured at mount', async () => {
     // The service's user layer arrives with an asynchronous settings load, so

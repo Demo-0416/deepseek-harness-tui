@@ -18,6 +18,7 @@ import {
   targetReasoningLabel,
   type ModelChoice,
   type ModelDialogSelection,
+  type ModelSelectionScope,
 } from '../components/dialogs.ts'
 import type { ChannelNotice, ChannelPendingHint, ChatChannelDeps } from './channel.ts'
 
@@ -177,9 +178,22 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
     })
   }
 
+  /**
+   * Commit one pick.
+   *
+   * `scope` is what the user chose to write, not a preference this controller
+   * infers: `'default'` also saves through the default-model service, so the
+   * next process starts on it, and `'session'` moves this process only. The
+   * notice says which happened, because a picker that writes the user's global
+   * default without saying so is indistinguishable from one that does not.
+   * @param selected - the picked route with its advertised metadata.
+   * @param explicitReasoning - the effort the picker resolved, when it resolved one.
+   * @param scope - how far the pick reaches; the text `/model <route>` path saves the default.
+   */
   const selectModel = (
     selected: ModelChoice,
     explicitReasoning?: { effort: ReasoningEffortId | undefined },
+    scope: ModelSelectionScope = 'default',
   ): void => {
     const sameRoute = target.current?.provider === selected.provider && target.current.model === selected.model
     const reasoningEffort = explicitReasoning === undefined
@@ -201,15 +215,20 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
     silentResolution = false
     resolveContextWindow(next)
     // Both entries reach here — the `/model <route>` text path and the
-    // selector's callback — so either way the pick outlives the process. The
-    // "already selected" early return above deliberately does not: it changed
-    // nothing to persist.
-    persistDefaultSelection(next)
+    // selector's callback — and both default to outliving the process; only
+    // the selector's session-scoped key opts out. The "already selected" early
+    // return above deliberately persists nothing: it changed nothing.
+    if (scope === 'default') persistDefaultSelection(next)
     const reasoning = targetReasoningLabel(selected, reasoningEffort)
     deps.appendNotice([
       `Model selected: ${targetLabel(selected)}.`,
       ...reasoning === undefined ? [] : [`Reasoning effort: ${displayText(reasoning)}.`],
-      'New steps will use it.',
+      // The write is named, not implied. Saving the default changes every
+      // future session in every project, so it is the part of this sentence a
+      // user has to be able to act on later.
+      scope === 'default'
+        ? 'Saved as your default model; new steps use it.'
+        : 'This session only; your default model is unchanged.',
     ].join(' '))
   }
 
@@ -228,7 +247,7 @@ export function createModelController(deps: ModelControllerDeps): ModelControlle
         palette,
         (selection: ModelDialogSelection) => {
           void session.close()
-          selectModel(selection.choice, { effort: selection.reasoningEffort })
+          selectModel(selection.choice, { effort: selection.reasoningEffort }, selection.scope)
         },
         () => { void session.close() },
       ),

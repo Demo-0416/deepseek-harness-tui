@@ -1228,6 +1228,23 @@ export function createTuiChat(
   })
 
   /**
+   * Tools the user granted for the rest of this session, by tool name.
+   *
+   * Terminal-side by necessity: rc.6's approval vocabulary is one-shot only
+   * (`allowed-once` with no `allow-always`, no rule table, no grant store —
+   * `@deepseek-ai/dsh-user-approval` README, "Only one-shot grants exist"), and
+   * its session policy is the single `ask`/`never` switch `/permission` moves.
+   * So "don't ask again" is remembered here and spent as one `'allowed-once'`
+   * per later ask, which is exactly what the seam would have received had the
+   * user answered each prompt by hand.
+   *
+   * Process-lifetime and this-agent only: it is not logged, so resuming the
+   * session or opening it in another client starts from asking again. That is
+   * the honest scope for a grant no durable layer can revoke.
+   */
+  const sessionApprovals = new Set<string>()
+
+  /**
    * Interactive answerer for this agent's permission questions. The dialog goes
    * through the same single-modal slot as the ask-user-question queue, so an
    * approval and a question can never occupy the prompt area at once and
@@ -1246,6 +1263,10 @@ export function createTuiChat(
     // A shutting-down TUI can no longer show anything; the rest of the chain
     // (finally the fail-closed default) owns the answer.
     if (disposed) return next()
+    // A grant the user already gave answers without redrawing the prompt. The
+    // tool card still reports the call, so the run stays visible; what is gone
+    // is the question the user already answered.
+    if (sessionApprovals.has(req.toolName)) return Promise.resolve<ApprovalOutcome>('allowed-once')
     return new Promise<ApprovalOutcome>((resolveOutcome) => {
       let settled = false
       let overlay: TuiOverlaySession | undefined
@@ -1264,7 +1285,29 @@ export function createTuiChat(
             ...req.reason === undefined ? {} : { reason: req.reason },
           },
           palette,
-          (decision) => { settle(decision) },
+          (decision) => {
+            settle(decision.outcome)
+            if (decision.outcome === 'allowed-once') {
+              if (!decision.remember) return
+              sessionApprovals.add(req.toolName)
+              // Said once, where the grant was made: a permission that stops
+              // asking must announce its own scope, or the silence afterwards
+              // reads as the tool never having needed approval at all.
+              appendNotice(
+                `Allowing ${displayText(req.toolName)} for the rest of this session in this terminal. `
+                + 'Restarting or resuming asks again.',
+              )
+              return
+            }
+            // The refusal itself carries no user text — `approval/decided` has
+            // room for an outcome and nothing else, and the model sees the
+            // seam's fixed `the user rejected tool "<name>"`. The instruction
+            // therefore rides the one channel that does reach the model: a user
+            // turn, steered into the running driver's next step, so it lands
+            // beside the denial rather than a turn later.
+            if (decision.feedback === undefined) return
+            dispatchMessage([{ type: 'text', text: decision.feedback }])
+          },
         ),
         options: {
           width: resolved.questionDialogWidth,
@@ -1804,7 +1847,9 @@ export function createTuiChat(
     })
     commandCtx.commands.register({
       name: 'model',
-      description: 'Show or switch this session\'s model',
+      // Named for what it writes: with a route it saves the default, and the
+      // picker it opens without one offers the session-scoped pick as well.
+      description: 'Switch the model and save it as your default',
       input: { hint: '[[provider/]model]' },
       handler: ({ rawInput }) => {
         modelController.queueModelCommand(rawInput)
@@ -2704,6 +2749,11 @@ async function composeResumedPreset(ctx: Context, sessionId: SessionId): Promise
 
 /**
  * Create or resume the single agent this terminal drives.
+ *
+ * Exported for the same reason {@link startupFailureMessage} is: the boot path
+ * settles facts a mounted chat can no longer be asked about — which preset the
+ * creation header records, and which composition a resumed session is rebuilt
+ * under — and both are decided before any terminal exists.
  * @param ctx - the runner context.
  * @param startup - the parsed command line.
  * @param agentOptions - resolved model route, when one was selected.
@@ -2711,7 +2761,7 @@ async function composeResumedPreset(ctx: Context, sessionId: SessionId): Promise
  * @throws when `--resume`/`--continue` names no loadable session, or when
  * `--preset` names one the roster does not supply.
  */
-async function openStartupAgent(
+export async function openStartupAgent(
   ctx: Context,
   startup: TuiStartupValues,
   agentOptions: AgentOptions | undefined,

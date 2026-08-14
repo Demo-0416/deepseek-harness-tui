@@ -43,11 +43,23 @@ export interface ModelChoice extends ModelSelection {
 }
 
 /**
- * The provider/model route and selected reasoning effort resolved from a model dialog.
+ * How far a pick reaches: to the default-model layer every future session
+ * starts from, or to this session alone.
+ *
+ * Two keys rather than one because the two are genuinely different decisions —
+ * "this is my model now" and "just for this piece of work" — and a picker that
+ * silently wrote the user's global default on every Enter made the second one
+ * unavailable.
+ */
+export type ModelSelectionScope = 'default' | 'session'
+
+/**
+ * The provider/model route, reasoning effort, and reach resolved from a model dialog.
  */
 export interface ModelDialogSelection {
   choice: ModelChoice
   reasoningEffort: ReasoningEffortId | undefined
+  scope: ModelSelectionScope
 }
 
 /**
@@ -278,7 +290,28 @@ export function renderDialog(
   return lines
 }
 
-/** Keyboard model selector rendered as a bordered overlay, with a filter box and per-model reasoning-effort cycling. */
+/**
+ * Widest the route column grows before a row is truncated, leaving the rest of
+ * a default-width dialog for the description beside it.
+ */
+const MODEL_ROUTE_COLUMN = 44
+
+/**
+ * Keyboard model selector: Claude Code's numbered picker — one row per route,
+ * its description in a right-hand column, and the focused model's reasoning
+ * effort on a line of its own under the list — over a filter box this
+ * deployment needs and Claude Code does not, because a harness advertises every
+ * model of every registered provider rather than a hand-written shortlist.
+ *
+ * The row numbers are ordinals, not shortcuts. Model names are full of digits
+ * (`deepseek-v4-pro`), so a digit belongs to the filter; binding it to a row
+ * would make the third character of a search jump the cursor somewhere else.
+ *
+ * Which is also why the session-only pick is `Ctrl+S` rather than `s`: every
+ * printable key is a search character. The two writes are otherwise deliberately
+ * symmetric — `Enter` saves the pick as the default, `Ctrl+S` spends it on this
+ * session only, and the footer says both.
+ */
 export class ModelDialog implements Component {
   private list: SelectList
   private readonly filter = new Input()
@@ -311,6 +344,8 @@ export class ModelDialog implements Component {
       )
       this.items.set(value, {
         value,
+        // Numbered by `filteredItems`, which is the only place that knows a
+        // row's position among the rows actually on screen.
         label: displayText(value),
         description: this.describeChoice(choice, isCurrent),
       })
@@ -321,62 +356,109 @@ export class ModelDialog implements Component {
   /** Build a SelectList over the currently filtered items, selecting `selectValue` when present. */
   private buildList(selectValue: string | undefined): SelectList {
     const items = this.filteredItems()
-    const list = new SelectList(items, this.maxVisible, dialogSelectTheme(this.palette))
+    // A route is the identity `/model <route>` takes, so the column has to be
+    // wide enough to hold one: the list's 32-column default cut
+    // `provider/model` pairs down to their shared provider prefix, which is the
+    // half that does not tell two rows apart.
+    const list = new SelectList(items, this.maxVisible, dialogSelectTheme(this.palette), {
+      minPrimaryColumnWidth: 24,
+      maxPrimaryColumnWidth: MODEL_ROUTE_COLUMN,
+    })
     const index = selectValue === undefined ? 0 : items.findIndex(item => item.value === selectValue)
     list.setSelectedIndex(Math.max(0, index))
-    list.onSelect = (item) => { this.confirm(item) }
+    // The list's own Enter is the default-saving pick; the session-only one is
+    // taken above it, before the key ever reaches the list.
+    list.onSelect = (item) => { this.confirm(item, 'default') }
     list.onCancel = this.cancel
     return list
   }
 
-  /** Items matching the filter box, as a case-insensitive substring over the label, model name, and description. */
+  /**
+   * Items matching the filter box, as a case-insensitive substring over the
+   * label, model name, and description, numbered in the order they appear.
+   *
+   * The numbering is applied here rather than at construction because a filtered
+   * list that keeps its original ordinals reads as a broken list: the reader
+   * counts rows, not catalog positions.
+   */
   private filteredItems(): SelectItem[] {
     const query = this.filter.getValue().trim().toLocaleLowerCase()
-    if (query === '') return [...this.items.values()]
-    return [...this.items.values()].filter((item) => {
-      const choice = this.choices.get(item.value)
-      /* v8 ignore next -- items and choices share the same keys. */
-      if (choice === undefined) return false
-      return [item.value, choice.modelName, choice.description ?? '']
-        .some(field => field.toLocaleLowerCase().includes(query))
-    })
+    const matches = query === ''
+      ? [...this.items.values()]
+      : [...this.items.values()].filter((item) => {
+        const choice = this.choices.get(item.value)
+        /* v8 ignore next -- items and choices share the same keys. */
+        if (choice === undefined) return false
+        return [item.value, choice.modelName, choice.description ?? '']
+          .some(field => field.toLocaleLowerCase().includes(query))
+      })
+    for (const [index, item] of matches.entries()) {
+      item.label = `${String(index + 1)}. ${displayText(item.value)}`
+    }
+    return matches
   }
 
-  private confirm(item: SelectItem): void {
+  private confirm(item: SelectItem, scope: ModelSelectionScope): void {
     const selected = this.choices.get(item.value)
     /* v8 ignore next -- SelectList only returns values built from `choices`. */
     if (selected === undefined) return
-    this.done({ choice: selected, reasoningEffort: this.efforts.get(item.value) })
+    this.done({ choice: selected, reasoningEffort: this.efforts.get(item.value), scope })
   }
 
+  /**
+   * The row's right-hand column: what the route is, in the provider's own
+   * words. The reasoning effort is deliberately absent — it belongs to the
+   * focused row alone and has its own adjustable line under the list, where it
+   * cannot be truncated away by a long description.
+   */
   private describeChoice(choice: ModelChoice, isCurrent: boolean): string {
-    const effortLabel = targetReasoningLabel(choice, this.efforts.get(targetLabel(choice)))
     return [
+      ...isCurrent ? ['current'] : [],
       displayText(choice.modelName),
       ...choice.description === undefined ? [] : [displayText(choice.description)],
-      ...effortLabel === undefined ? [] : [displayText(effortLabel)],
-      ...isCurrent ? ['current'] : [],
     ].join(' — ')
   }
 
-  private cycleReasoningEffort(): void {
+  /** Move the focused model's reasoning effort one step through its advertised ladder. */
+  private cycleReasoningEffort(step: 1 | -1): void {
     const selectedItem = this.list.getSelectedItem()
     /* v8 ignore next -- the dialog is opened only for a non-empty catalog. */
     if (selectedItem === null) return
     const choice = this.choices.get(selectedItem.value)
     if (choice?.reasoning === undefined) return
     const current = this.efforts.get(selectedItem.value)
+    // "Whatever the provider does" is only on the ladder when the model
+    // advertises no default of its own; otherwise its default IS a rung.
     const efforts: Array<ReasoningEffortId | undefined> = [
       ...choice.reasoning.defaultEffort === undefined ? [undefined] : [],
       ...choice.reasoning.efforts.map(effort => effort.id),
     ]
     const currentIndex = efforts.indexOf(current)
-    const next = efforts[(currentIndex + 1) % efforts.length]
+    const next = efforts[(currentIndex + step + efforts.length) % efforts.length]
     this.efforts.set(selectedItem.value, next)
-    const item = this.items.get(selectedItem.value)
-    /* v8 ignore next -- items and choices are constructed from the same values. */
-    if (item === undefined) return
-    item.description = this.describeChoice(choice, selectedItem.value === this.currentValue)
+  }
+
+  /**
+   * The focused model's reasoning effort, stated as a line the arrow keys act
+   * on — Claude Code's effort row — or as the reason there is nothing to adjust.
+   */
+  private renderEffortRow(): string {
+    const selectedItem = this.list.getSelectedItem()
+    /* v8 ignore next -- the dialog is opened only for a non-empty catalog. */
+    if (selectedItem === null) return this.palette.dim('◇ No model focused')
+    const choice = this.choices.get(selectedItem.value)
+    if (choice?.reasoning === undefined) {
+      const name = choice === undefined ? '' : ` for ${displayText(choice.modelName)}`
+      return this.palette.dim(`◇ Reasoning effort not supported${name}`)
+    }
+    const effort = this.efforts.get(selectedItem.value)
+    const name = effort === undefined
+      ? 'Provider default'
+      : displayText(targetReasoningLabel(choice, effort) ?? effort)
+    // Marked only against a default the model actually advertises: calling the
+    // provider's own fallback "(default)" would name a rung that is not there.
+    const isDefault = choice.reasoning.defaultEffort !== undefined && effort === choice.reasoning.defaultEffort
+    return `${this.palette.accent('◆')} ${name} effort${isDefault ? ' (default)' : ''}  ${this.palette.dim('←/→ to adjust')}`
   }
 
   invalidate(): void {
@@ -385,8 +467,23 @@ export class ModelDialog implements Component {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, Key.shift(Key.tab))) {
-      this.cycleReasoningEffort()
+    // Closing beats filtering: `Esc` first clears a typed query, but `Ctrl+C`
+    // is the terminal's universal "take this off my screen" and every other
+    // surface here honours it.
+    if (matchesKey(data, Key.ctrl('c'))) {
+      this.cancel()
+      return
+    }
+    // The arrows adjust the effort rather than the filter's cursor. A query
+    // here is a few characters typed to reach one row, edited from its end;
+    // the reasoning effort is the thing on screen that asks to be nudged.
+    if (matchesKey(data, Key.left)) {
+      this.cycleReasoningEffort(-1)
+    } else if (matchesKey(data, Key.right) || matchesKey(data, Key.shift(Key.tab))) {
+      this.cycleReasoningEffort(1)
+    } else if (matchesKey(data, Key.ctrl('s'))) {
+      const selectedItem = this.list.getSelectedItem()
+      if (selectedItem !== null) this.confirm(selectedItem, 'session')
     } else if (matchesKey(data, Key.escape)) {
       if (this.filter.getValue() === '') this.cancel()
       else {
@@ -423,7 +520,12 @@ export class ModelDialog implements Component {
         ? [this.palette.dim('  No models match the filter')]
         : this.list.render(innerWidth),
       '',
-      this.palette.dim('type to filter • ↑/↓ move • Shift+Tab reasoning • Enter select • Esc'),
+      ...results.length === 0 ? [] : [this.renderEffortRow(), ''],
+      // Two rows: the first is how you move, the second is what each way of
+      // leaving commits to. Folded into one line they truncate, and the line
+      // that gets cut is the one naming the write.
+      this.palette.dim('type to filter • ↑/↓ move • ←/→ reasoning effort'),
+      this.palette.dim('Enter save as default • Ctrl+S this session only • Esc cancel'),
     ], width, this.palette)
   }
 }
@@ -520,21 +622,26 @@ export class PresetDialog implements Component {
   }
 
   /**
-   * The row's description column: why the preset is unusable if it is, then
-   * what it is, then how this deployment relates to it.
+   * The row's description column: why the preset is unusable if it is, then how
+   * this deployment relates to it, then what it says about itself.
    *
-   * The blocker leads because the column is truncated from the right, and a
-   * reason pushed behind a description is the one fact a reader cannot afford
-   * to lose.
+   * Badges lead and prose follows because the column is truncated from the
+   * right. `current` and `default` are the two facts a reader is scanning the
+   * list FOR — which composition is running and which one a new session would
+   * get — and a sentence long enough to push either off the edge would hide
+   * exactly the answer the picker was opened to give.
    */
   private describeChoice(choice: PresetChoice): string {
-    return [
-      ...choice.broken === undefined ? [] : [`unavailable: ${displayText(choice.broken)}`],
-      ...choice.name === undefined ? [] : [displayText(choice.name)],
-      ...choice.description === undefined ? [] : [displayText(choice.description)],
+    const badges = [
       ...choice.id === this.current ? ['current'] : [],
       ...choice.id === this.defaultId ? ['default'] : [],
-      ...choice.trust === 'system' ? ['built-in'] : [],
+      ...choice.trust === 'system' ? ['built-in'] : ['local'],
+    ].join(' · ')
+    return [
+      ...choice.broken === undefined ? [] : [`unavailable: ${displayText(choice.broken)}`],
+      badges,
+      ...choice.name === undefined ? [] : [displayText(choice.name)],
+      ...choice.description === undefined ? [] : [displayText(choice.description)],
     ].join(' — ')
   }
 
@@ -544,6 +651,12 @@ export class PresetDialog implements Component {
   }
 
   handleInput(data: string): void {
+    // Same rule as the model picker: `Esc` clears a typed query first, while
+    // `Ctrl+C` closes outright from wherever the user is.
+    if (matchesKey(data, Key.ctrl('c'))) {
+      this.cancel()
+      return
+    }
     if (matchesKey(data, Key.escape)) {
       if (this.filter.getValue() === '') this.cancel()
       else {
@@ -1010,6 +1123,15 @@ export class QuestionDialog implements Component, Focusable {
       this.pageForward()
       return
     }
+    // Interrupt before the mode branch, so it works in the custom editor too.
+    // `Esc` there is the editor's own "back to the options" (see `onEscape`),
+    // which left the dialog with no way out at all once the option list had
+    // been traded for the box: every key the editor does not claim is a
+    // character it types.
+    if (matchesKey(data, Key.ctrl('c'))) {
+      this.cancel()
+      return
+    }
     if (this.mode === 'custom') {
       this.input.focused = this.focused
       this.input.handleInput(data)
@@ -1031,7 +1153,7 @@ export class QuestionDialog implements Component, Focusable {
         : [options[this.selectedIndex]?.label].filter((label): label is string => label !== undefined)
       const custom = this.question.multiSelect ? this.input.getValue().trim() : ''
       if (selected.length === 0 && custom === '') {
-        this.error = 'Select at least one option, or press Tab for a custom answer.'
+        this.error = 'Select at least one option, or press Tab/c for a custom answer.'
         return
       }
       this.done({ selected, ...(custom === '' ? {} : { custom }) })
@@ -1039,7 +1161,7 @@ export class QuestionDialog implements Component, Focusable {
       this.mode = 'custom'
       this.selectedBlockPage = { offset: 0, size: 1, maxOffset: 0 }
       this.error = ''
-    } else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
+    } else if (matchesKey(data, Key.escape)) {
       this.cancel()
     }
   }
@@ -1138,7 +1260,10 @@ export class QuestionDialog implements Component, Focusable {
       for (const line of wrapTextWithAnsi(customHint, innerWidth)) footerLines.push(line)
     } else {
       const controls = [
-        'Tab custom answer',
+        // Both keys are named because both are bound: `c` is the one a hand
+        // already on the option list reaches for, and a shortcut nobody is
+        // told about is a shortcut nobody uses.
+        'Tab/c custom answer',
         ...(this.options.length > 1 ? ['↑/↓ navigate'] : []),
         ...(this.question.multiSelect ? ['Space toggle'] : []),
         'Enter submit',

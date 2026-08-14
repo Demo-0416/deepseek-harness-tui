@@ -84,7 +84,9 @@ describe('TUI approval', { skip: skipWithoutEntry }, () => {
       assert.match(frame, /bash/)
       assert.match(frame, /Deleting files needs confirmation/)
       assert.match(frame, /1\. Yes, allow once/)
-      assert.match(frame, /2\. No, reject/)
+      assert.match(frame, /2\. Yes, and don't ask again for bash this session/)
+      assert.match(frame, /3\. No, and tell the agent what to do differently/)
+      assert.match(frame, /4\. No, reject/)
       // The prompt row stays reachable underneath, so the dialog is inline chrome
       // rather than a takeover screen.
       assert.ok(frame.includes(INPUT_PROMPT), `editor prompt must stay visible:\n${frame}`)
@@ -95,13 +97,128 @@ describe('TUI approval', { skip: skipWithoutEntry }, () => {
       const moved = harness.terminal.frames
       harness.terminal.send('\x1b[B')
       await harness.terminal.waitForFrame(moved)
-      assert.match(harness.terminal.text(), /❯ 2\. No, reject/)
+      assert.match(harness.terminal.text(), /❯ 2\. Yes, and don't ask again/)
 
       const shown = harness.terminal.frames
       harness.terminal.send('1')
       assert.equal(await decision, 'allowed-once')
       await harness.terminal.waitForFrame(shown)
       assert.doesNotMatch(harness.terminal.text(), /Permission required/)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('stops asking about a tool the user granted for the session, and says so', async () => {
+    // rc.6 grants are one-shot: the seam has no `allow-always`, so "don't ask
+    // again" only exists if the terminal remembers it and answers the later
+    // asks itself.
+    const harness = await mount()
+    try {
+      const before = harness.terminal.frames
+      const first = harness.ctx.waterfall('approval/request', {
+        agent: harness.agent,
+        toolName: 'bash',
+      }, chainDefault)
+      await harness.terminal.waitForFrame(before)
+
+      const granted = harness.terminal.frames
+      harness.terminal.send('2')
+      assert.equal(await first, 'allowed-once')
+      await harness.terminal.waitForFrame(granted)
+      const notice = harness.terminal.text()
+      assert.match(notice, /Allowing bash for the rest of this session/, `the scope is disclosed:\n${notice}`)
+      assert.doesNotMatch(notice, /Permission required/)
+
+      // The second ask is answered without drawing anything: no dialog, and the
+      // outcome is the same one-shot grant the user would have given by hand.
+      const second = harness.ctx.waterfall('approval/request', {
+        agent: harness.agent,
+        toolName: 'bash',
+      }, chainDefault)
+      assert.equal(await second, 'allowed-once')
+      await harness.terminal.flush()
+      assert.doesNotMatch(harness.terminal.text(), /Permission required/)
+
+      // The grant is per tool, not a blanket policy.
+      const other = harness.terminal.frames
+      const third = harness.ctx.waterfall('approval/request', {
+        agent: harness.agent,
+        toolName: 'edit',
+      }, chainDefault)
+      await harness.terminal.waitForFrame(other)
+      assert.match(harness.terminal.text(), /Permission required/)
+      harness.terminal.send('4')
+      assert.equal(await third, 'rejected')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('rejects with the feedback the user typed, delivered as a steered turn', async () => {
+    // The approval seam carries an outcome and nothing else, so the only way
+    // the model hears "do it this way instead" is a user turn beside the denial.
+    const harness = await mount({ status: 'running' })
+    try {
+      const before = harness.terminal.frames
+      const decision = harness.ctx.waterfall('approval/request', {
+        agent: harness.agent,
+        toolName: 'bash',
+      }, chainDefault)
+      await harness.terminal.waitForFrame(before)
+
+      const opened = harness.terminal.frames
+      harness.terminal.send('3')
+      await harness.terminal.waitForFrame(opened)
+      const editor = harness.terminal.text()
+      assert.match(editor, /Tell the agent what to do differently/, `the box replaces the list:\n${editor}`)
+      assert.doesNotMatch(editor, /1\. Yes, allow once/)
+
+      const typed = harness.terminal.frames
+      harness.terminal.send('use rg instead')
+      await harness.terminal.waitForFrame(typed)
+      harness.terminal.send('\r')
+      assert.equal(await decision, 'rejected')
+      await delay(SETTLE_MS)
+      assert.deepEqual(
+        harness.agent.steered.map(message => message.content.map(block => block.type === 'text' ? block.text : '').join('')),
+        ['use rg instead'],
+        'the instruction reaches the running driver at its next step',
+      )
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('returns to the answers on Esc in the feedback box, and fails closed on Ctrl+C', async () => {
+    const harness = await mount()
+    try {
+      const before = harness.terminal.frames
+      const decision = harness.ctx.waterfall('approval/request', {
+        agent: harness.agent,
+        toolName: 'bash',
+      }, chainDefault)
+      await harness.terminal.waitForFrame(before)
+
+      const opened = harness.terminal.frames
+      harness.terminal.send('3')
+      await harness.terminal.waitForFrame(opened)
+      assert.match(harness.terminal.text(), /Tell the agent what to do differently/)
+
+      // Esc is the one place in this dialog that does not refuse: opening the
+      // box by mistake has decided nothing.
+      const back = harness.terminal.frames
+      harness.terminal.send('\x1b')
+      await harness.terminal.waitForFrame(back)
+      const list = harness.terminal.text()
+      assert.match(list, /1\. Yes, allow once/, `the answers come back:\n${list}`)
+      assert.doesNotMatch(list, /Tell the agent what to do differently:/)
+
+      harness.terminal.send('3')
+      await harness.terminal.flush()
+      harness.terminal.send('\x03')
+      assert.equal(await decision, 'rejected')
+      assert.deepEqual(harness.agent.steered, [], 'an abandoned box sends no instruction')
     } finally {
       await unmount(harness)
     }
@@ -176,7 +293,7 @@ describe('TUI approval', { skip: skipWithoutEntry }, () => {
       await harness.terminal.waitForFrame(answered)
       assert.match(harness.terminal.text(), /Permission required/)
 
-      harness.terminal.send('2')
+      harness.terminal.send('4')
       assert.equal(await decision, 'rejected')
     } finally {
       await unmount(harness)
@@ -205,7 +322,7 @@ describe('TUI approval', { skip: skipWithoutEntry }, () => {
       assert.match(frame, /Permission required/, `the prompt replaces the panel:\n${frame}`)
       assert.doesNotMatch(frame, /Enter send/, `and the panel is gone, not stacked under it:\n${frame}`)
 
-      harness.terminal.send('2')
+      harness.terminal.send('4')
       assert.equal(await decision, 'rejected')
     } finally {
       await unmount(harness)
@@ -233,7 +350,7 @@ describe('TUI approval', { skip: skipWithoutEntry }, () => {
       assert.match(frame, /Permission required/, `the prompt replaces the selector:\n${frame}`)
       assert.doesNotMatch(frame, /Select model/, `and the selector is gone, not stacked under it:\n${frame}`)
 
-      harness.terminal.send('2')
+      harness.terminal.send('4')
       assert.equal(await decision, 'rejected')
     } finally {
       await unmount(harness)

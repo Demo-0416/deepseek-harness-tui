@@ -11,11 +11,14 @@
  *
  * The dialog decides nothing on its own: it reports one {@link ApprovalDecision}
  * and leaves closing the overlay, auditing, and the `'cancelled'`/`'unavailable'`
- * outcomes to the front door that opened it.
+ * outcomes to the front door that opened it — along with the two answers the
+ * approval protocol cannot express, remembering a session grant and delivering
+ * rejection feedback to the agent.
  * @module @deepseek-ai/dsh-tui/components/approval
  */
 
 import {
+  Input,
   Key,
   matchesKey,
   truncateToWidth,
@@ -30,11 +33,30 @@ import type { Palette } from './theme.ts'
 import { CLAUDE_COLORS, fg as paintFg } from '../render/palette.ts'
 
 /**
- * The outcomes this dialog can produce. The remaining {@link ApprovalOutcome}
- * members are decided without the user: `'cancelled'` when the request is
- * withdrawn, `'unavailable'` when no answerer ever saw it.
+ * What the user answered, in the two outcomes a person can produce. The
+ * remaining {@link ApprovalOutcome} members are decided without them:
+ * `'cancelled'` when the request is withdrawn, `'unavailable'` when no answerer
+ * ever saw it.
+ *
+ * Both extras are the dialog's alone to report and the front door's alone to
+ * honour, because the approval seam carries neither: rc.6's vocabulary has no
+ * `allow-always` and its `approval/decided` event has no room for user text
+ * (`@deepseek-ai/dsh-user-approval` README, "Only one-shot grants exist"). A
+ * remembered grant is therefore a terminal-side allow list, and feedback is a
+ * user turn delivered beside the refusal — never a fifth outcome smuggled into
+ * the protocol.
  */
-export type ApprovalDecision = Extract<ApprovalOutcome, 'allowed-once' | 'rejected'>
+export type ApprovalDecision =
+  | {
+    readonly outcome: Extract<ApprovalOutcome, 'allowed-once'>
+    /** Whether every later ask about this tool in this session is granted too. */
+    readonly remember: boolean
+  }
+  | {
+    readonly outcome: Extract<ApprovalOutcome, 'rejected'>
+    /** What the user told the agent to do instead; absent for a bare refusal. */
+    readonly feedback?: string
+  }
 
 /**
  * One pending decision as the dialog presents it: the request's presentation
@@ -49,20 +71,46 @@ export interface ApprovalPrompt {
   readonly reason?: string
 }
 
-/** One answer row: its decision and the label Claude Code gives it. */
+/** What answering one row does, before the tool name is folded into its label. */
+type ApprovalAction =
+  /** Grant this request only. */
+  | 'allow-once'
+  /** Grant this request and every later ask about the same tool this session. */
+  | 'allow-session'
+  /** Refuse, then say what the agent should do instead. */
+  | 'reject-with-feedback'
+  /** Refuse and say nothing. */
+  | 'reject'
+
+/** One answer row: what it does and the label Claude Code gives it. */
 interface ApprovalOption {
-  readonly decision: ApprovalDecision
-  readonly label: string
+  readonly action: ApprovalAction
+  /** Built per prompt because two rows name the tool they are about. */
+  readonly label: (toolName: string) => string
 }
 
-/** The answer rows, in Claude Code's order: the grant first, the refusal second. */
+/**
+ * The answer rows, in Claude Code's order: allow once, allow for the session,
+ * then the refusals — narrowest grant first, so the safe answer is the one the
+ * cursor already sits on.
+ *
+ * Claude Code hides "and tell Claude what to do differently" behind `Tab` on
+ * the refusal row. Here it is a row of its own: this terminal has no hover, no
+ * placeholder text, and no second chance to advertise a modifier, so an
+ * affordance that is not on the list is an affordance nobody finds.
+ */
 const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
-  { decision: 'allowed-once', label: 'Yes, allow once' },
-  { decision: 'rejected', label: 'No, reject' },
+  { action: 'allow-once', label: () => 'Yes, allow once' },
+  { action: 'allow-session', label: toolName => `Yes, and don't ask again for ${toolName} this session` },
+  { action: 'reject-with-feedback', label: () => 'No, and tell the agent what to do differently' },
+  { action: 'reject', label: () => 'No, reject' },
 ]
 
 /** The label in the dialog's top edge. */
 const APPROVAL_TITLE = 'Permission required'
+
+/** The prompt above the feedback box, in the refusal's own words. */
+const FEEDBACK_PROMPT = 'Tell the agent what to do differently:'
 
 /**
  * Paint text in the fixed permission tone, or leave it bare when the palette has
@@ -75,23 +123,59 @@ function permissionAccent(palette: Palette, text: string): string {
 
 /**
  * Inline dialog for one approval request: a tool identity, the asker's reason,
- * and the two answers. `Esc` (and `Ctrl+C`) reject, because a permission prompt
+ * and the four answers. `Esc` (and `Ctrl+C`) reject, because a permission prompt
  * that is dismissed must fail closed.
+ *
+ * The refusal-with-feedback row swaps the answer list for a one-line editor
+ * rather than opening a second surface: the request is still unanswered while
+ * the user types, so the prompt must keep owning the single inline slot the
+ * front door gave it. `Esc` there goes back to the list — the only place in
+ * this dialog where `Esc` does not refuse — because a user who opened the box
+ * by mistake has not decided anything yet.
  */
 export class ApprovalDialog implements Component, Focusable {
   private selectedIndex = 0
   private decided = false
+  /** Whether the feedback editor has replaced the answer list. */
+  private feedback = false
+  private readonly input = new Input()
   focused = false
 
   constructor(
     private readonly prompt: ApprovalPrompt,
     private readonly palette: Palette,
     private readonly done: (decision: ApprovalDecision) => void,
-  ) {}
+  ) {
+    // An empty box submits a bare refusal instead of trapping the user in a
+    // surface they can only leave by typing: the answer was already "no", and
+    // the text is the optional part.
+    this.input.onSubmit = (value) => {
+      const text = value.trim()
+      this.settle({ outcome: 'rejected', ...text === '' ? {} : { feedback: text } })
+    }
+    this.input.onEscape = () => {
+      this.feedback = false
+      this.input.setValue('')
+    }
+  }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.input.invalidate()
+  }
 
   handleInput(data: string): void {
+    // Fail closed from anywhere, editor included: `Ctrl+C` on a permission
+    // prompt means "get me out", and the only safe exit is a refusal.
+    if (matchesKey(data, Key.ctrl('c'))) {
+      this.settle({ outcome: 'rejected' })
+      return
+    }
+    if (this.feedback) {
+      this.input.focused = this.focused
+      this.input.handleInput(data)
+      this.invalidate()
+      return
+    }
     if (matchesKey(data, Key.up)) {
       this.selectedIndex = this.selectedIndex === 0 ? APPROVAL_OPTIONS.length - 1 : this.selectedIndex - 1
       return
@@ -104,8 +188,8 @@ export class ApprovalDialog implements Component, Focusable {
       this.choose(this.selectedIndex)
       return
     }
-    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
-      this.settle('rejected')
+    if (matchesKey(data, Key.escape)) {
+      this.settle({ outcome: 'rejected' })
       return
     }
     // Number shortcuts answer immediately, the way Claude Code's permission
@@ -136,15 +220,31 @@ export class ApprovalDialog implements Component, Focusable {
       body.push(...wrapTextWithAnsi(this.palette.text(displayText(reason)), inner))
     }
     body.push('')
-    for (const [index, option] of APPROVAL_OPTIONS.entries()) {
+    for (const line of this.feedback ? this.renderFeedback(inner) : this.renderOptions()) body.push(line)
+    return ['', top, ...body.map(row => row === '' ? '' : ` ${truncateToWidth(row, inner, '…')}`)]
+  }
+
+  /** The answer list, cursor on the selected row. */
+  private renderOptions(): string[] {
+    const toolName = displayInlineText(this.prompt.toolName)
+    return APPROVAL_OPTIONS.map((option, index) => {
       const selected = index === this.selectedIndex
       // `Esc` is advertised on the row it performs, the way Claude Code marks
       // the refusal, so the shortcut needs no separate hint row.
-      const suffix = option.decision === 'rejected' ? ' (esc)' : ''
-      const row = `${selected ? '❯' : ' '} ${index + 1}. ${option.label}${suffix}`
-      body.push(selected ? this.palette.bold(permissionAccent(this.palette, row)) : row)
-    }
-    return ['', top, ...body.map(row => row === '' ? '' : ` ${truncateToWidth(row, inner, '…')}`)]
+      const suffix = option.action === 'reject' ? ' (esc)' : ''
+      const row = `${selected ? '❯' : ' '} ${index + 1}. ${option.label(toolName)}${suffix}`
+      return selected ? this.palette.bold(permissionAccent(this.palette, row)) : row
+    })
+  }
+
+  /** The feedback editor and its two keys, in place of the answer list. */
+  private renderFeedback(inner: number): string[] {
+    this.input.focused = this.focused
+    return [
+      this.palette.text(FEEDBACK_PROMPT),
+      ...this.input.render(inner),
+      this.palette.dim('Enter reject with this feedback • Esc back to the answers'),
+    ]
   }
 
   /** Answer with the option at `index`; an out-of-range index cannot occur. */
@@ -152,7 +252,24 @@ export class ApprovalDialog implements Component, Focusable {
     const option = APPROVAL_OPTIONS[index]
     /* v8 ignore next -- every caller derives `index` from APPROVAL_OPTIONS itself. */
     if (option === undefined) return
-    this.settle(option.decision)
+    switch (option.action) {
+      case 'allow-once': {
+        this.settle({ outcome: 'allowed-once', remember: false })
+        return
+      }
+      case 'allow-session': {
+        this.settle({ outcome: 'allowed-once', remember: true })
+        return
+      }
+      case 'reject-with-feedback': {
+        this.feedback = true
+        this.invalidate()
+        return
+      }
+      case 'reject': {
+        this.settle({ outcome: 'rejected' })
+      }
+    }
   }
 
   /** Report the decision exactly once: a settled dialog is already closing. */

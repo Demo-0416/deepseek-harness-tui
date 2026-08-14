@@ -113,6 +113,7 @@ describe('startup failure reporting', () => {
   it('names the session --resume could not open, and the way to start without it', () => {
     const message = startupFailureMessage({
       model: undefined,
+      preset: undefined,
       resume: 'session-typo',
       continueLatest: false,
       print: undefined,
@@ -127,6 +128,7 @@ describe('startup failure reporting', () => {
   it('answers --continue in its own terms', () => {
     const message = startupFailureMessage({
       model: undefined,
+      preset: undefined,
       resume: undefined,
       continueLatest: true,
       print: undefined,
@@ -139,6 +141,7 @@ describe('startup failure reporting', () => {
   it('falls back to a plain start failure when no session was selected', () => {
     const message = startupFailureMessage({
       model: undefined,
+      preset: undefined,
       resume: undefined,
       continueLatest: false,
       print: undefined,
