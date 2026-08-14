@@ -27,8 +27,10 @@ import * as sessionLogDownload from '@deepseek-ai/dsh-session-log-export'
 import { MarkdownBodyComponent, type MarkdownPolicy } from '../../src/components/transcript.ts'
 import { claudeMarkdownTheme, type MarkdownAnsiTheme } from '../../src/render/markdown.ts'
 import {
+  PLUGINS_EMPTY,
+  PLUGINS_NO_MATCH,
   PLUGINS_UNAVAILABLE,
-  renderPluginInventory,
+  PluginsPanel,
 } from '../../src/components/plugins-panel.ts'
 import { createPalette, markdownTheme } from '../../src/components/theme.ts'
 import { formatGoalPrompt, formatSessionStats, GOAL_PROMPT_MAX_WIDTH } from '../../src/chat/session-summary.ts'
@@ -206,26 +208,106 @@ describe('assistant body renderer selection', { skip: skipWithoutEntry }, () => 
   })
 })
 
+/** Mount the panel over a fixed 20-row budget and a close spy. */
+function pluginsPanel(snapshot: PluginInventorySnapshot | undefined): { panel: PluginsPanel; closed: () => number } {
+  let closes = 0
+  const panel = new PluginsPanel(snapshot, () => 20, palette, () => { closes += 1 })
+  return { panel, closed: () => closes }
+}
+
+/** The panel's rows at 80 columns, cursor markers stripped, right-trimmed. */
+function panelRows(panel: PluginsPanel): string[] {
+  return panel.render(80).map(line => stripTerminalSequences(line).trimEnd())
+}
+
 describe('plugin inventory panel', () => {
   it('names the plugin to mount when the inventory is absent', () => {
-    assert.deepEqual(renderPluginInventory(undefined, palette), [PLUGINS_UNAVAILABLE])
+    const { panel, closed } = pluginsPanel(undefined)
+    const rows = panelRows(panel)
+    assert.equal(rows[1], ' /plugins')
+    assert.equal(rows.at(-1), ' esc close')
+    // The message soft-wraps to the panel width, so it is compared re-joined.
+    const body = rows.slice(2, -1).map(row => row.trim()).join(' ')
+    assert.equal(body, PLUGINS_UNAVAILABLE)
+    panel.handleInput('\x1b')
+    assert.equal(closed(), 1)
   })
 
   it('reports no entries as an answer, not as an empty page', () => {
-    assert.deepEqual(renderPluginInventory({ entries: [] }, palette), ['The Loader reports no plugin entries.'])
+    const { panel } = pluginsPanel({ entries: [] })
+    assert.ok(panelRows(panel).includes(` ${PLUGINS_EMPTY}`))
   })
 
-  it('lists every entry in Loader order with its state and id', () => {
-    const rows = renderPluginInventory(SAMPLE_INVENTORY, palette)
-    assert.equal(rows[0], '3 entries · 1 active')
-    assert.equal(rows[1], '')
+  it('lists every entry in Loader order behind a filter box and a count', () => {
+    const { panel } = pluginsPanel(SAMPLE_INVENTORY)
+    const rows = panelRows(panel)
+    assert.ok(rows[2]?.startsWith(' filter:'), `the Web tab's search box, keyboard-shaped:\n${rows.join('\n')}`)
+    assert.equal(rows[3], ' 3/3 entries · 1 active')
     // A disabled entry reports `disabled` whatever its Fiber last did, and an
-    // enabled one holding no root Fiber is `inactive` rather than blank.
-    assert.deepEqual(rows.slice(2), [
-      'active    @deepseek-ai/dsh-agent-loop  aaa111',
-      'disabled  @deepseek-ai/dsh-web-search  bbb222',
-      'failed    @deepseek-ai/dsh-broken      ccc333',
+    // enabled one holding no root Fiber is `inactive` rather than blank; the
+    // selection bar opens on the first row.
+    assert.deepEqual(rows.slice(4, 7), [
+      ' → active    @deepseek-ai/dsh-agent-loop',
+      '   disabled  @deepseek-ai/dsh-web-search',
+      '   failed    @deepseek-ai/dsh-broken',
     ])
+  })
+
+  it('filters by module name or entry id, case-insensitively', () => {
+    const { panel } = pluginsPanel(SAMPLE_INVENTORY)
+    for (const char of 'WEB') panel.handleInput(char.toLowerCase())
+    let rows = panelRows(panel)
+    assert.equal(rows[3], ' 1/3 entries · 1 active')
+    assert.ok(rows.some(row => row.includes('dsh-web-search')))
+    assert.ok(!rows.some(row => row.includes('dsh-agent-loop')))
+
+    // Entry ids match too — that is what the Web tab's search covers.
+    panel.handleInput('\x1b')
+    for (const char of 'ccc3') panel.handleInput(char)
+    rows = panelRows(panel)
+    assert.equal(rows[3], ' 1/3 entries · 1 active')
+    assert.ok(rows.some(row => row.includes('dsh-broken')))
+
+    panel.handleInput('\x1b')
+    for (const char of 'nothing-here') panel.handleInput(char)
+    assert.ok(panelRows(panel).includes(` ${PLUGINS_NO_MATCH}`))
+  })
+
+  it('opens one entry\'s detail on Enter and collapses it when filtered away', () => {
+    const { panel } = pluginsPanel(SAMPLE_INVENTORY)
+    panel.handleInput('\r')
+    let rows = panelRows(panel)
+    // The detail block is the Web card's <dl>: raw entry id, configuration,
+    // and the Fiber phase the status word collapsed.
+    assert.deepEqual(rows.slice(5, 8), [
+      '       entry  aaa111',
+      '       config enabled',
+      '       cordis active',
+    ])
+
+    // A disabled entry's detail has no Fiber phase to report.
+    panel.handleInput('\r')
+    panel.handleInput('\x1b[B')
+    panel.handleInput('\r')
+    rows = panelRows(panel)
+    assert.ok(rows.some(row => row.includes('config disabled')))
+    assert.ok(!rows.some(row => row.includes('cordis')))
+
+    // Filtering the expanded row away collapses it, exactly like the Web tab.
+    for (const char of 'loop') panel.handleInput(char)
+    panel.handleInput('\x1b')
+    rows = panelRows(panel)
+    assert.ok(!rows.some(row => row.includes('config disabled')), `the hidden detail must not survive the filter:\n${rows.join('\n')}`)
+  })
+
+  it('clears the filter on the first Esc and closes on the second', () => {
+    const { panel, closed } = pluginsPanel(SAMPLE_INVENTORY)
+    for (const char of 'web') panel.handleInput(char)
+    panel.handleInput('\x1b')
+    assert.equal(closed(), 0)
+    assert.equal(panelRows(panel)[3], ' 3/3 entries · 1 active')
+    panel.handleInput('\x1b')
+    assert.equal(closed(), 1)
   })
 })
 
@@ -252,9 +334,24 @@ describe('TUI /plugins', { skip: skipWithoutEntry }, () => {
 
       const frame = harness.terminal.text()
       assert.match(frame, /\/plugins/, `the panel is titled with the command:\n${frame}`)
-      assert.match(frame, /3 entries · 1 active/)
+      assert.match(frame, /3\/3 entries · 1 active/)
       assert.match(frame, /@deepseek-ai\/dsh-web-search/)
       assert.match(frame, /esc close/)
+
+      // The panel holds the keyboard: typing reaches its filter box, not the
+      // editor, and the Esc ladder clears the filter before closing the panel.
+      harness.terminal.send('web')
+      await delay(SETTLE_MS)
+      const filtered = harness.terminal.text()
+      assert.match(filtered, /1\/3 entries · 1 active/)
+      assert.ok(!filtered.includes('dsh-agent-loop'), `the filter must hide non-matches:\n${filtered}`)
+
+      harness.terminal.send('\x1b')
+      await delay(SETTLE_MS)
+      assert.match(harness.terminal.text(), /3\/3 entries · 1 active/)
+      harness.terminal.send('\x1b')
+      await delay(SETTLE_MS)
+      assert.ok(!harness.terminal.text().includes('entries · 1 active'), 'the second Esc closes the panel')
     } finally {
       await unmount(harness)
     }

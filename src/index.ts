@@ -131,8 +131,7 @@ import {
 import { claudeMarkdownTheme } from './render/markdown.ts'
 import { ScrollablePanel } from './components/panel.ts'
 import {
-  PLUGINS_PANEL_TITLE,
-  renderPluginInventory,
+  PluginsPanel,
   type PluginInventoryReader,
 } from './components/plugins-panel.ts'
 import {
@@ -1423,10 +1422,27 @@ export function createTuiChat(
    *
    * `pluginInventory` is a host mount the TUI never requires, so this is a
    * `ctx.get` rather than an injection, and the panel explains its own absence.
+   * Unlike the pre-rendered panels above, this one keeps the keyboard for its
+   * own filter box and per-entry detail, so it mounts its own component in the
+   * same dismissable inline slot.
    */
   const showPlugins = (): void => {
     const inventory = ctx.get('pluginInventory') as PluginInventoryReader | undefined
-    showPanel(PLUGINS_PANEL_TITLE, renderPluginInventory(inventory?.list(), palette))
+    void panelOverlay?.close()
+    const session = overlayManager.open({
+      create: () => new PluginsPanel(
+        inventory?.list(),
+        panelRows,
+        palette,
+        () => { void session.close() },
+      ),
+      dismissable: true,
+    }, 'inline')
+    panelOverlay = session
+    void session.closed.then(() => {
+      if (panelOverlay === session) panelOverlay = undefined
+    })
+    requestRender()
   }
 
   const showStatus = async (signal: AbortSignal): Promise<void> => {
@@ -1644,7 +1660,7 @@ export function createTuiChat(
     })
     commandCtx.commands.register({
       name: 'plugins',
-      description: 'Show the Loader\'s plugin entries and their states',
+      description: 'Search and inspect the Loader\'s plugin entries',
       handler: () => { showPlugins(); return { kind: 'success' } },
     })
     commandCtx.commands.register({
