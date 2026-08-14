@@ -80,6 +80,27 @@ export interface AssistantNode extends NodeBase {
     usage?: TokenUsage;
     /** Log time the step closed; pins the timing footer. Absent while it runs. */
     completedAt?: number;
+    /**
+     * Wall time this step spent thinking, summed over the reasoning spans the
+     * fold has already closed. Absent on a step that never streamed reasoning.
+     *
+     * A span opens at the step's first reasoning delta and closes at whatever
+     * ends the thinking — the first text delta, the first tool call, the settled
+     * message, the step's own end — so this is the log's own measure of the
+     * phase, not a sample of it. The collapsed group row in `core/collapse.ts` is
+     * what reports it; the thinking *block* is unaffected and still disappears
+     * when the step finishes.
+     */
+    thinkingMs?: number;
+    /**
+     * Log time the currently open reasoning span started, absent whenever the
+     * step is not thinking.
+     *
+     * The fold reads no clock, so a running span is published as its start rather
+     * than as an elapsed value: the renderer accumulates it against its own
+     * clock, which is what lets a live row count up between two events.
+     */
+    thinkingSince?: number;
 }
 /** A tool result, kept in the shape the tool's own presenter consumes. */
 export interface ToolResultView {

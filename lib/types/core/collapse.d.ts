@@ -22,6 +22,37 @@
  * locale-dependent part of collapse: this module stays a pure derivation over
  * the node list, with no message table behind it, exactly like the rest of
  * `src/core`.
+ *
+ * ## Thinking is part of the group
+ *
+ * A run of calls opens with the model thinking about what to look at, so the
+ * group absorbs that thinking and reports it as its own first fragment
+ * (`Thought for 8s, searched for 3 patterns, read 2 files`). The fold measures
+ * the span ({@link ChatNode} → `AssistantNode.thinkingMs`/`thinkingSince`) and
+ * this module attributes it to the run it is *adjacent* to: the run still open
+ * above the step, or — when no run is open — the run the step goes on to open.
+ *
+ * Adjacency rather than "forward, always" because attribution has to hold still
+ * while the step streams. A step that thinks and then writes prose starts out
+ * indistinguishable from a step that thinks and then calls a tool (its text is
+ * empty either way), so a rule that reads the finished step would move the
+ * thinking off the row that had already been counting it up: the user watches
+ * `Thinking for 12s, read 2 files…` become `Read 2 files` the moment the answer
+ * starts arriving. The row a duration appeared on is the row that keeps it.
+ *
+ * That leaves three timing surfaces in the transcript, and they do not overlap:
+ *
+ * - **This row** — the thinking behind one run of read-only calls, on the
+ *   collapsed phase of the Ctrl+O cycle. It is the only place a default
+ *   transcript states a thinking duration at all, which is why the thinking
+ *   *block* itself needs no timer and keeps its own rule: it disappears when
+ *   the step finishes (Ctrl+T pins it, Ctrl+O expanded brings it back).
+ * - **The per-step timing footer** — every bucket of one step, `Thinking` among
+ *   them, on the expanded phase only. It never shares a screen with this row,
+ *   because expanded shows the group's own cards instead of the row.
+ * - **The turn footer** (`✻ Worked for 45s`, over 30 s only) — the whole turn's
+ *   wall time, on every phase. Different quantity, not a second opinion on this
+ *   one: a turn contains the thinking, the calls, and the gaps between them.
  * @module dsh-tui/core/collapse
  */
 import type { ChatNode } from './types.ts';
@@ -34,8 +65,12 @@ export declare const MAX_HINT_CHARS = 300;
 export type CollapseKind = 'search' | 'read' | 'list' | 'mcp';
 /** The last operation in a group, as the `⎿` row wants to show it. */
 export interface CollapseHint {
-    /** A file path (shown relative to the workspace), a pattern, or a command. */
-    readonly kind: 'path' | 'pattern' | 'command';
+    /**
+     * A file path (shown relative to the workspace), a pattern, a command, or —
+     * only until the group's first operation names one of those — the latest line
+     * of the thinking that led to the group.
+     */
+    readonly kind: 'path' | 'pattern' | 'command' | 'thinking';
     readonly value: string;
 }
 /** One tool call's read-only classification, or `undefined` when it writes. */
@@ -81,13 +116,56 @@ export interface CollapsedGroup {
     readonly mcpCallCount: number;
     /** Distinct MCP servers queried, in first-seen order. */
     readonly mcpServers: readonly string[];
-    /** Whether any member call is still running: the row is present-tense. */
+    /**
+     * Thinking time the group absorbed: every closed reasoning span of the steps
+     * adjacent to this run of calls, summed.
+     *
+     * A step that thought while this run was still open adds to it, whatever the
+     * step goes on to do — another read, or the sentence that ends the run. A
+     * step that thought with no run open belongs to the run it opens next, which
+     * is the shape a turn starts with (think, then go looking).
+     *
+     * The open span is not in here — see {@link CollapsedGroup.thinkingSince} —
+     * so a caller that wants the live total asks {@link groupThinkingMs}.
+     */
+    readonly thinkingMs: number;
+    /**
+     * Log time of the group's open thinking span, when the model is thinking
+     * right now. Present is what makes the row read as in progress even after
+     * every call it counts has settled.
+     */
+    readonly thinkingSince?: number;
+    /**
+     * Whether any member call is still running.
+     *
+     * Kept apart from {@link CollapsedGroup.active} because it is what the
+     * *counts* agree with: a group whose calls have all landed read 2 files, and
+     * says so in the past tense, even while the model thinks about what it found.
+     */
+    readonly running: boolean;
+    /**
+     * Whether the group is still in progress: any member call running, or the
+     * thinking it absorbed still open. The row keeps its bullet and its ellipsis
+     * while it is, because something in it is still going.
+     */
     readonly active: boolean;
     /** Whether any member call failed. */
     readonly failed: boolean;
     /** The most recent operation, for the `⎿` row under a running group. */
     readonly hint?: CollapseHint;
 }
+/**
+ * A group's thinking time at render clock `now`: what the fold measured plus
+ * whatever the open span has run since it opened.
+ *
+ * The clock is the caller's because this module holds none — the same reason
+ * the fold publishes a span's start rather than its length. Called without one
+ * (a settled row, a test), it reports the closed total alone.
+ * @param group - The planned group.
+ * @param now - Render clock, in epoch milliseconds.
+ * @returns Thinking time in milliseconds.
+ */
+export declare function groupThinkingMs(group: CollapsedGroup, now?: number): number;
 /**
  * Classify a shell command as search, read, or listing.
  *
@@ -134,6 +212,16 @@ export interface CollapseOptions {
     readonly from?: number;
     /** Reports a call the transcript is not rendering (a `/clear`ed step's). */
     readonly isHidden?: (callId: string) => boolean;
+    /**
+     * Whether the deployment shows reasoning at all (`showReasoning`), default
+     * true.
+     *
+     * False keeps the model's own words off the row: the group still reports how
+     * long it thought — a duration quotes nothing — but its `⎿` hint never falls
+     * back to a line of reasoning, because the one transcript that promised never
+     * to print reasoning must not print it on a summary row either.
+     */
+    readonly showReasoning?: boolean;
 }
 /**
  * Plan the collapsed groups over a folded node list.
@@ -143,6 +231,10 @@ export interface CollapseOptions {
  * only shows while the group is running), and "Read 1 file" is strictly less
  * than the `Read(src/a.ts)` card it replaced. The row earns its place from two
  * members up, which is where it starts saving rows instead of spending them.
+ * Absorbed thinking does not lower that threshold — `Thought for 8s, read 1
+ * file` still drops the path the card names — so a group's thinking is only
+ * ever reported next to two or more calls, and its thinking hint stands only
+ * until the first of those calls names something of its own.
  *
  * @param nodes - The snapshot's nodes, in log order.
  * @param options - Range and per-call exclusions.
@@ -154,7 +246,8 @@ export interface CollapseOptions {
 export declare function collapseToolGroups(nodes: readonly ChatNode[], options?: CollapseOptions): Map<number, CollapsedGroup>;
 /**
  * Render a group's `⎿` hint: the file's workspace-relative path, the quoted
- * pattern, or the `$ `-prefixed command, capped at {@link MAX_HINT_CHARS}.
+ * pattern, the `$ `-prefixed command, or — before the group's first operation —
+ * the bare line of thinking, all capped at {@link MAX_HINT_CHARS}.
  * @param hint - The group's latest operation.
  * @param displayPath - Shortens an absolute path for display.
  * @returns The hint row's text.

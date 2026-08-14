@@ -29,7 +29,16 @@
  * group absorbs that thinking and reports it as its own first fragment
  * (`Thought for 8s, searched for 3 patterns, read 2 files`). The fold measures
  * the span ({@link ChatNode} → `AssistantNode.thinkingMs`/`thinkingSince`) and
- * this module attributes it: forward, onto the run the thinking led to.
+ * this module attributes it to the run it is *adjacent* to: the run still open
+ * above the step, or — when no run is open — the run the step goes on to open.
+ *
+ * Adjacency rather than "forward, always" because attribution has to hold still
+ * while the step streams. A step that thinks and then writes prose starts out
+ * indistinguishable from a step that thinks and then calls a tool (its text is
+ * empty either way), so a rule that reads the finished step would move the
+ * thinking off the row that had already been counting it up: the user watches
+ * `Thinking for 12s, read 2 files…` become `Read 2 files` the moment the answer
+ * starts arriving. The row a duration appeared on is the row that keeps it.
  *
  * That leaves three timing surfaces in the transcript, and they do not overlap:
  *
@@ -266,13 +275,12 @@ export interface CollapsedGroup {
   readonly mcpServers: readonly string[]
   /**
    * Thinking time the group absorbed: every closed reasoning span of the steps
-   * that led to this run of calls, summed.
+   * adjacent to this run of calls, summed.
    *
-   * A step's thinking belongs to the calls it *leads to*, so it is carried
-   * forward onto the group that follows it rather than back onto the one it
-   * followed. A step that thought inside an open run (thinking again between
-   * two reads, with no prose in between) adds to that same run, because nothing
-   * ended it.
+   * A step that thought while this run was still open adds to it, whatever the
+   * step goes on to do — another read, or the sentence that ends the run. A
+   * step that thought with no run open belongs to the run it opens next, which
+   * is the shape a turn starts with (think, then go looking).
    *
    * The open span is not in here — see {@link CollapsedGroup.thinkingSince} —
    * so a caller that wants the live total asks {@link groupThinkingMs}.
@@ -285,9 +293,17 @@ export interface CollapsedGroup {
    */
   readonly thinkingSince?: number
   /**
+   * Whether any member call is still running.
+   *
+   * Kept apart from {@link CollapsedGroup.active} because it is what the
+   * *counts* agree with: a group whose calls have all landed read 2 files, and
+   * says so in the past tense, even while the model thinks about what it found.
+   */
+  readonly running: boolean
+  /**
    * Whether the group is still in progress: any member call running, or the
-   * thinking it absorbed still open. The row is present-tense while it is, and
-   * only then does it keep its bullet and its `⎿` hint.
+   * thinking it absorbed still open. The row keeps its bullet and its ellipsis
+   * while it is, because something in it is still going.
    */
   readonly active: boolean
   /** Whether any member call failed. */
@@ -588,7 +604,7 @@ interface GroupDraft {
   mcpServers: string[]
   thinkingMs: number
   thinkingSince: number | undefined
-  active: boolean
+  running: boolean
   failed: boolean
   hint: CollapseHint | undefined
 }
@@ -607,11 +623,13 @@ function sealGroup(draft: GroupDraft): CollapsedGroup {
     mcpCallCount: draft.mcpCallCount,
     mcpServers: draft.mcpServers,
     thinkingMs: draft.thinkingMs,
+    running: draft.running,
     // Thinking counts as work in progress: a run whose calls have all settled
     // is still going somewhere while the model is thinking about what to do
     // next, and a row that went past-tense there would freeze its own counter
-    // one second into the thought.
-    active: draft.active || draft.thinkingSince !== undefined,
+    // one second into the thought. What that does *not* change is the tense of
+    // the counts — see `running`.
+    active: draft.running || draft.thinkingSince !== undefined,
     failed: draft.failed,
     ...draft.thinkingSince === undefined ? {} : { thinkingSince: draft.thinkingSince },
     ...draft.hint === undefined ? {} : { hint: draft.hint },
@@ -645,15 +663,20 @@ function stepThinking(node: AssistantNode): ThinkingSpan | undefined {
   return { ms, since, line: latestThinkingLine(node.reasoning) }
 }
 
-/** Add one step's thinking to a group under construction. */
-function absorbThinking(draft: GroupDraft, thinking: ThinkingSpan): void {
+/**
+ * Add one step's thinking to a group under construction.
+ * @param draft - The group under construction.
+ * @param thinking - The step's span.
+ * @param quoteLine - Whether this deployment may put reasoning text on screen.
+ */
+function absorbThinking(draft: GroupDraft, thinking: ThinkingSpan, quoteLine: boolean): void {
   draft.thinkingMs += thinking.ms
   if (thinking.since !== undefined) draft.thinkingSince = thinking.since
   // The thinking's own last line stands in as the `⎿` hint only until the
   // group's first operation names a file, a pattern or a command, and never
   // takes the row back afterwards: once there is work to point at, pointing at
   // the reasoning instead would read as the group going backwards.
-  if (draft.hint === undefined && thinking.line !== undefined) {
+  if (quoteLine && draft.hint === undefined && thinking.line !== undefined) {
     draft.hint = { kind: 'thinking', value: thinking.line }
   }
 }
@@ -699,6 +722,16 @@ export interface CollapseOptions {
   readonly from?: number
   /** Reports a call the transcript is not rendering (a `/clear`ed step's). */
   readonly isHidden?: (callId: string) => boolean
+  /**
+   * Whether the deployment shows reasoning at all (`showReasoning`), default
+   * true.
+   *
+   * False keeps the model's own words off the row: the group still reports how
+   * long it thought — a duration quotes nothing — but its `⎿` hint never falls
+   * back to a line of reasoning, because the one transcript that promised never
+   * to print reasoning must not print it on a summary row either.
+   */
+  readonly showReasoning?: boolean
 }
 
 /**
@@ -727,6 +760,7 @@ export function collapseToolGroups(
 ): Map<number, CollapsedGroup> {
   const groups = new Map<number, CollapsedGroup>()
   const from = options.from ?? 0
+  const quoteThinking = options.showReasoning !== false
   let draft: GroupDraft | undefined
   let members: number[] = []
   /**
@@ -774,12 +808,12 @@ export function collapseToolGroups(
           mcpServers: [],
           thinkingMs: 0,
           thinkingSince: undefined,
-          active: false,
+          running: false,
           failed: false,
           hint: undefined,
         }
         // Whatever the model thought on its way here belongs to this run.
-        if (carried !== undefined) absorbThinking(draft, carried)
+        if (carried !== undefined) absorbThinking(draft, carried, quoteThinking)
         carried = undefined
       }
       absorb(draft, node, classification)
@@ -790,16 +824,19 @@ export function collapseToolGroups(
       continue
     }
     if (node.kind === 'assistant') {
-      // Prose ends the run above this step; the thinking that produced the
-      // prose is picked up *after* that flush, because it leads to whatever the
-      // model does next rather than back to the calls it already made.
-      if (breaksGroup(node)) flush()
       const thinking = stepThinking(node)
-      if (thinking === undefined) continue
-      if (draft === undefined) carried = mergeThinking(carried, thinking)
-      // A step that thought inside an open run (no prose between two reads)
-      // extends that run's thinking instead of starting a new claim.
-      else absorbThinking(draft, thinking)
+      if (draft !== undefined) {
+        // A step that thought while this run was open extends that run —
+        // settled *before* the prose flush, because the row has been counting
+        // this span up since the first reasoning delta and the step's first
+        // text delta must not take it back off the screen.
+        if (thinking !== undefined) absorbThinking(draft, thinking, quoteThinking)
+        if (breaksGroup(node)) flush()
+        continue
+      }
+      // With no run open, the thinking is what the next run opens with.
+      if (breaksGroup(node)) flush()
+      if (thinking !== undefined) carried = mergeThinking(carried, thinking)
       continue
     }
     if (breaksGroup(node)) flush()
@@ -811,7 +848,7 @@ export function collapseToolGroups(
 /** Fold one classified call into the group it joins. */
 function absorb(draft: GroupDraft, node: ToolCallNode, classification: CollapseClassification): void {
   draft.keys.push(node.key)
-  if (node.status === 'running') draft.active = true
+  if (node.status === 'running') draft.running = true
   if (node.status === 'error') draft.failed = true
   switch (classification.kind) {
     case 'search':

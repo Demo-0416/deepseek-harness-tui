@@ -9,7 +9,6 @@ import { type Component, type Focusable } from '@earendil-works/pi-tui';
 import type { Context } from '@deepseek-ai/cordis';
 import { type Agent, type ModelSelection } from '@deepseek-ai/dsh-agent';
 import type { LlmModelReasoningInfo, ReasoningEffortId } from '@deepseek-ai/dsh-llm';
-import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { SessionRecord } from '@deepseek-ai/dsh-session-query';
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions';
 import { type Palette, type ThemePreferenceId } from './theme.ts';
@@ -316,12 +315,54 @@ export interface ResumeCandidate {
     title: string;
     /** Last observed change: live last-event time or artifact mtime, falling back to creation. */
     lastActivityAt: number;
+    /**
+     * Size of the session's persisted artifact in bytes, when it has one. A
+     * session that lives in memory only has nothing to measure, and its row shows
+     * no size rather than a zero that would read as an empty log.
+     */
+    sizeBytes?: number;
     /** Whether the session's workspace is the one the current session runs in, which selects the picker scope that lists it. */
     currentWorkspace: boolean;
     /** The session's own workspace as a prompt-style label; the all-workspaces scope shows it per row. */
     workspaceLabel: string;
     disabledReason?: string;
 }
+/** What one metadata scan observed about a session's artifact, both parts optional. */
+export interface ResumeCandidateMetadata {
+    /** Live last-event time or artifact mtime; absent falls back to the header's creation time. */
+    lastActivityAt?: number;
+    /** The persisted artifact's size in bytes; absent when the session has no artifact. */
+    sizeBytes?: number;
+}
+/**
+ * A row's age in the coarsest unit that still says something: "just now" under
+ * a minute, then minutes, hours, and days, and a plain `YYYY-MM-DD` once a
+ * week has passed.
+ *
+ * An exact timestamp is the wrong unit for this list. Browsing asks "which of
+ * these is the one I was in", and an ISO string answers that only after the
+ * reader does the subtraction themselves. Past a week the arithmetic stops
+ * being useful in the other direction — "23 days ago" is not a date anyone
+ * navigates by — so the calendar day takes over.
+ *
+ * A timestamp in the future (a clock that moved backwards, a file touched by
+ * another machine) reads as "just now" rather than as a negative age.
+ * @param timestamp - the row's activity time, in epoch milliseconds.
+ * @param now - the current time, injectable so the wording can be tested.
+ * @returns the localized age, or the local calendar date past the threshold.
+ */
+export declare function formatResumeAge(timestamp: number, now?: number): string;
+/**
+ * A session artifact's size at one decimal place, in the largest unit that
+ * leaves a number below 1024, with a trailing `.0` dropped.
+ *
+ * Not localized: the units are the same three letters in every locale this
+ * terminal ships, and a translated `KB` would only make two identical lists
+ * look different.
+ * @param bytes - the artifact's size.
+ * @returns the size as a short display string, e.g. `354.1KB`.
+ */
+export declare function formatResumeSize(bytes: number): string;
 /**
  * Build one resume selector row from a record, its batch-folded title, and a
  * metadata-derived activity time, deriving the workspace scope and any reason
@@ -330,15 +371,19 @@ export interface ResumeCandidate {
  * that directory. Rows carry no per-log detail beyond the title — route and
  * replay validity are checked by the Enter-time preflight against the one
  * chosen log.
+ *
+ * The session being browsed from is not summarized here at all — the scan
+ * leaves it out of the list — so there is no "current session" reason: a row
+ * that cannot be resumed carries a real failure (a live twin, a missing
+ * workspace), and the picker paints those, and only those, as warnings.
  * @param record - The session record.
  * @param title - The session's batch-folded title, absent for an untitled log.
- * @param lastActivityAt - Metadata activity time; absent falls back to the header's creation time.
- * @param currentId - The current session id.
+ * @param metadata - What the metadata scan observed: activity time and artifact size, each optional.
  * @param cwd - The CURRENT session's workspace, which decides the picker scope this row falls in.
  * @param formatWorkspace - Renders THIS record's own cwd as its prompt-style label.
  * @returns The summarized resume candidate.
  */
-export declare function summarizeResumeCandidate(record: SessionRecord, title: string | undefined, lastActivityAt: number | undefined, currentId: SessionId, cwd: string | undefined, formatWorkspace: (cwd: string | undefined) => string): ResumeCandidate;
+export declare function summarizeResumeCandidate(record: SessionRecord, title: string | undefined, metadata: ResumeCandidateMetadata, cwd: string | undefined, formatWorkspace: (cwd: string | undefined) => string): ResumeCandidate;
 /** Which workspaces the resume picker currently lists. */
 export type ResumeScope = 'workspace' | 'all';
 /**

@@ -16,6 +16,7 @@
 import { KeybindingsManager, type KeybindingDefinitions, type KeybindingsConfig } from '@earendil-works/pi-tui';
 /** The actions this terminal binds, merged into pi-tui's global registry. */
 export interface AppKeybindings {
+    'app.mode.cycle': true;
     'app.tools.cycle': true;
     'app.history.search': true;
     'app.transcript.search': true;
@@ -39,6 +40,10 @@ export type AppKeybinding = keyof AppKeybindings;
  * whichever key is bound, so a rebound key never leaves the help lying.
  */
 export declare const APP_KEYBINDINGS: {
+    readonly 'app.mode.cycle': {
+        readonly defaultKeys: "shift+tab";
+        readonly description: "Cycle mode: normal, auto-accept, plan";
+    };
     readonly 'app.tools.cycle': {
         readonly defaultKeys: "ctrl+o";
         readonly description: "Cycle tool cards: preview, full, hidden";

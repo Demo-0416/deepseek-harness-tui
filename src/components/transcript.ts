@@ -31,6 +31,7 @@ import {
   formatCollapseHint,
   groupThinkingMs,
   type CollapsedGroup,
+  type CollapseHint,
 } from '../core/collapse.ts'
 import { plural, t } from '../i18n/index.ts'
 import { renderUnknownXml } from './xml-tool-output.ts'
@@ -1152,6 +1153,13 @@ export class ToolCardComponent extends CachedCardComponent {
     private readonly maxDiffEditLength: number,
     private readonly palette: Palette,
     private readonly mdTheme: MarkdownTheme,
+    /**
+     * The label of whichever key currently cycles tool cards, read per render
+     * for the same reason the collapsed row reads it: `app.tools.cycle` is
+     * rebindable, and a folded body that names the shipped default after a
+     * deployment moved the binding points at a key that does nothing.
+     */
+    private readonly expandKey: () => string,
   ) {
     super()
     this.callView = this.presentCall()
@@ -1434,8 +1442,9 @@ export class ToolCardComponent extends CachedCardComponent {
         displayText,
         text => this.palette.dim(text),
         text => this.palette.dim(text),
-        /* v8 ignore next -- renderUnknownXml calls the collapsed summary only when hidden XML children exceed this card's limit. */
-        count => this.palette.dim(`  … +${count} lines (Ctrl+O to expand)`),
+        count => this.palette.dim(
+          `  ${plural(count, 'transcript.xmlOmitted', { key: this.expandKey().toLowerCase() })}`,
+        ),
       )
       : undefined
     // An XML tree owns its own fold, so it is not folded a second time here.
@@ -1493,7 +1502,9 @@ export const COLLAPSE_THINKING_MIN_MS = 1_000
  * Present tense while the group runs (`Thinking for 4s, reading 1 file…`), past
  * tense once it settles (`Thought for 8s, searched for 2 patterns, read 1
  * file`). The first fragment opens with a capital, later ones do not, and each
- * fragment agrees with its own count.
+ * fragment agrees with its own count — and with its own clock: a group whose
+ * calls have all landed reads `Thinking for 4s, read 2 files…`, because the
+ * files are read and the thought is not finished.
  *
  * The thinking the run opened with leads the sentence, because that is the
  * order it happened in: the model thought, then it went looking. A group that
@@ -1511,13 +1522,18 @@ export const COLLAPSE_THINKING_MIN_MS = 1_000
  */
 export function collapsedSummary(group: CollapsedGroup, now?: number): string {
   const parts: string[] = []
-  const phase = group.active ? 'active' : 'settled'
+  // Each clause carries its own tense, because the two things a group does can
+  // end at different times: the calls are over the moment the last one lands,
+  // and `read 2 files` is then simply true, whatever the model is thinking
+  // about next. Only the trailing ellipsis speaks for the row as a whole.
+  const phase = group.running ? 'active' : 'settled'
   const fragment = (kind: 'search' | 'read' | 'list', count: number): void => {
     parts.push(opener(plural(count, `collapse.${kind}.${phase}`), parts.length === 0))
   }
   const thinking = groupThinkingMs(group, now)
   if (thinking >= COLLAPSE_THINKING_MIN_MS) {
-    parts.push(opener(t(`collapse.thinking.${phase}`, { duration: formatTurnDuration(thinking) }), true))
+    const tense = group.thinkingSince === undefined ? 'settled' : 'active'
+    parts.push(opener(t(`collapse.thinking.${tense}`, { duration: formatTurnDuration(thinking) }), true))
   }
   if (group.searchCount > 0) fragment('search', group.searchCount)
   if (group.readCount > 0) fragment('read', group.readCount)
@@ -1539,11 +1555,12 @@ export function collapsedSummary(group: CollapsedGroup, now?: number): string {
  *
  * The row is the transcript's default answer to "what has it been doing": a
  * sentence of counts (`Searched for 3 patterns, read 2 files`) rather than one
- * card per file. While the group runs it is present-tense, keeps a leading
- * bullet, and carries a `⎿` row naming the operation in flight; once every call
- * has settled the bullet goes and the whole row recedes, exactly as upstream.
- * The group's own cards come back on the expanded phase, where the reconciler
- * mounts them instead of this row.
+ * card per file. While a call of the group is running the counts are
+ * present-tense and a `⎿` row names the call in flight; while anything at all
+ * is still going — a call, or the thinking the row absorbed — it keeps its
+ * leading bullet and its ellipsis. Once both are over the bullet goes and the
+ * whole row recedes, exactly as upstream. The group's own cards come back on
+ * the expanded phase, where the reconciler mounts them instead of this row.
  *
  * The one addition to upstream's row: a group that contains a failed call keeps
  * its bullet, in the error color, after it settles. A collapsed row is the only
@@ -1614,9 +1631,10 @@ export class CollapsedGroupComponent extends CachedCardComponent {
     // The hint names whatever is in flight — the call, or the thinking that has
     // not reached one yet — so it belongs only to a group still in progress: a
     // settled one has nothing left to report but its counts.
-    if (group.active && group.hint !== undefined) {
+    const inFlight = this.hintInFlight()
+    if (inFlight !== undefined) {
       const inner = Math.max(20, width - RESULT_PREFIX_WIDTH)
-      const hint = formatCollapseHint(group.hint, this.displayPath)
+      const hint = formatCollapseHint(inFlight, this.displayPath)
       let lead = true
       for (const line of displayText(hint).split('\n')) {
         for (const row of wrapTextWithAnsi(this.palette.dim(line), inner)) {
@@ -1626,6 +1644,24 @@ export class CollapsedGroupComponent extends CachedCardComponent {
       }
     }
     return plainIfNoColor(this.palette, rows)
+  }
+
+  /**
+   * The group's `⎿` hint, when it still names something that is happening.
+   *
+   * A call's path, pattern or command holds the row only while a call is
+   * actually running; once they have all landed, the newest one is a finished
+   * operation and pointing at it would claim work that is over. A thinking line
+   * holds the row only while the thinking is open, for the same reason. A group
+   * whose calls have settled under an open thought therefore shows no hint at
+   * all unless the thought itself is what the group has to point at.
+   * @returns The hint to render, or `undefined` for no hint row.
+   */
+  private hintInFlight(): CollapseHint | undefined {
+    const { hint } = this.group
+    if (hint === undefined) return undefined
+    if (hint.kind === 'thinking') return this.group.thinkingSince === undefined ? undefined : hint
+    return this.group.running ? hint : undefined
   }
 }
 

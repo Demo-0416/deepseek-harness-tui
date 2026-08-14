@@ -86,6 +86,23 @@ function appendToolStep(session: Session, id: string, command: string, output: s
   session.append('step/end', position)
 }
 
+/** Append one complete step whose unknown tool answered with an XML document. */
+function appendXmlToolStep(session: Session, id: string, xml: string): void {
+  const callId = CallId(id)
+  const position = { turn: 1, step: 2 }
+  const args = JSON.stringify({ q: 'anything' })
+  session.append('step/start', position)
+  appendAssistant(session, [
+    { type: 'tool-call', id: callId, name: 'mystery_tool', arguments: args },
+  ], undefined, position)
+  session.append('tool/call', { ...position, callId, name: 'mystery_tool', arguments: args })
+  session.append('tool/result', {
+    ...position,
+    message: createToolResultMessage({ callId, content: [{ type: 'text', text: xml }], isError: false }),
+  }, { surfaceOp: 'append' })
+  session.append('step/end', position)
+}
+
 /** Settle the open step and land one tool card under it, closing the step. */
 function appendToolTail(session: Session, position: { turn: number; step: number }, callId: CallId): void {
   const args = JSON.stringify({ command: 'npm test' })
@@ -174,6 +191,21 @@ describe('the plan panel', () => {
 })
 
 describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
+  it('translates the folded-XML marker and names the key that actually expands', async () => {
+    const harness = await mount()
+    try {
+      const children = Array.from({ length: 12 }, (_, index) => `  <item>row ${String(index)}</item>`).join('\n')
+      appendXmlToolStep(harness.session, 'call-xml', `<results>\n${children}\n</results>`)
+      await delay(SETTLE_MS)
+      const rows = harness.terminal.text()
+      // The key comes from the keybinding manager, lower-cased like every other
+      // expand hint, rather than from a hard-coded `Ctrl+O` in the renderer.
+      assert.match(rows, /\+\d+ lines \(ctrl\+o to expand\)/u, rows)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
   it('renders a live turn and trails the step timing under its tool card', async () => {
     const harness = await mount()
     try {

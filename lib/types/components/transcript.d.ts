@@ -190,8 +190,8 @@ export declare class UserMessageComponent implements Component {
 }
 /**
  * The one permanent sign that this session is in plan mode: the badge Claude
- * Code keeps at the left of the row under its input frame
- * (`PromptInputFooterLeftSide.tsx:348-355`), in the theme's plan tone.
+ * Code keeps at the left of the row under its input frame, in the theme's plan
+ * tone.
  *
  * The mode reaches this terminal as a folded `plan/mode` event and nothing on
  * screen consumed it, so a session could sit in plan mode with the transcript
@@ -201,15 +201,32 @@ export declare class UserMessageComponent implements Component {
  * (`PromptInput.tsx:2214-2235` routes only bash and teammate colors), so a
  * colored frame here would be a signal the product does not have.
  *
- * Upstream's trailing `(shift+tab to cycle)` hint is not reproduced: plan mode
- * is set by the harness through the session log, and this terminal binds no key
- * that cycles permission modes. A hint naming a key that does nothing is worse
- * than no hint.
+ * Upstream's trailing `(shift+tab to cycle)` hint used to be dropped here,
+ * because plan mode was only ever set through the session log and this terminal
+ * bound no key that cycled modes. `app.mode.cycle` is that key, so the hint is
+ * back — named from the installed keybinding manager by the caller, never
+ * written out, so a deployment that rebinds the action gets its own key printed.
  * @param palette - Active role palette; decides whether the tone is emitted.
  * @param scheme - Terminal color scheme, which picks the plan tone.
+ * @param hint - The cycle hint, already parenthesised and translated.
  * @returns The badge row, ready to render above the prompt.
  */
-export declare function planModeRow(palette: Palette, scheme?: TerminalColorScheme): string;
+export declare function planModeRow(palette: Palette, scheme?: TerminalColorScheme, hint?: string): string;
+/**
+ * The sign that this session runs its tool calls without asking: the
+ * auto-accept preset's badge, in upstream's electric violet.
+ *
+ * Named `auto-accept` rather than upstream's `accept edits`, because the state
+ * behind it is wider than editing: the preset sets `approval/policy` to `never`,
+ * so every tool this agent has runs unattended inside the workspace sandbox, not
+ * just the file writers. A badge that promised only edits would understate what
+ * the user just switched on.
+ * @param palette - Active role palette; decides whether the tone is emitted.
+ * @param scheme - Terminal color scheme, which picks the auto-accept tone.
+ * @param hint - The cycle hint, already parenthesised and translated.
+ * @returns The badge row, ready to render above the prompt.
+ */
+export declare function autoAcceptRow(palette: Palette, scheme?: TerminalColorScheme, hint?: string): string;
 /**
  * Claude Code's past-tense turn verbs, copied from its
  * `src/constants/turnCompletionVerbs.ts`. One is sampled per turn and reads as
@@ -410,12 +427,26 @@ export declare class ToolCardComponent extends CachedCardComponent {
     private readonly maxDiffEditLength;
     private readonly palette;
     private readonly mdTheme;
+    /**
+     * The label of whichever key currently cycles tool cards, read per render
+     * for the same reason the collapsed row reads it: `app.tools.cycle` is
+     * rebindable, and a folded body that names the shipped default after a
+     * deployment moved the binding points at a key that does nothing.
+     */
+    private readonly expandKey;
     private result;
     private visibility;
     private callView;
     private resultView;
     private diffBodyCache;
-    constructor(name: string, parsed: ParsedArguments, definition: ToolDefinition | undefined, maxOutputLines: number, maxDiffEditLength: number, palette: Palette, mdTheme: MarkdownTheme);
+    constructor(name: string, parsed: ParsedArguments, definition: ToolDefinition | undefined, maxOutputLines: number, maxDiffEditLength: number, palette: Palette, mdTheme: MarkdownTheme, 
+    /**
+     * The label of whichever key currently cycles tool cards, read per render
+     * for the same reason the collapsed row reads it: `app.tools.cycle` is
+     * rebindable, and a folded body that names the shipped default after a
+     * deployment moved the binding points at a key that does nothing.
+     */
+    expandKey: () => string);
     private presentCall;
     /**
      * Record an already-projected tool result and derive its result view. Takes
@@ -503,42 +534,70 @@ export declare class ToolCardComponent extends CachedCardComponent {
     private dimBody;
 }
 /**
+ * Thinking a group has to have absorbed before its row says so.
+ *
+ * Under a second there is nothing to report: the duration prints as `0s`, and
+ * `Thought for 0s, read 2 files` spends a clause on a pause the user could not
+ * have noticed. The same floor applies while the thinking runs, so the fragment
+ * appears when the counter has something to count rather than flickering in at
+ * zero.
+ */
+export declare const COLLAPSE_THINKING_MIN_MS = 1000;
+/**
  * Word one collapsed group's summary row.
  *
- * Present tense while the group runs (`Searching for 2 patterns, reading 1
- * file…`), past tense once it settles (`Searched for 2 patterns, read 1 file`).
- * The first fragment opens with a capital, later ones do not, and each fragment
- * agrees with its own count.
+ * Present tense while the group runs (`Thinking for 4s, reading 1 file…`), past
+ * tense once it settles (`Thought for 8s, searched for 2 patterns, read 1
+ * file`). The first fragment opens with a capital, later ones do not, and each
+ * fragment agrees with its own count — and with its own clock: a group whose
+ * calls have all landed reads `Thinking for 4s, read 2 files…`, because the
+ * files are read and the thought is not finished.
+ *
+ * The thinking the run opened with leads the sentence, because that is the
+ * order it happened in: the model thought, then it went looking. A group that
+ * absorbed no thinking prints no such fragment and reads exactly as before.
+ * While the thinking is still open the row is in progress by definition, so
+ * `now` is what makes its counter move between two events — the group carries
+ * the span's start, not its length (see `groupThinkingMs`).
  *
  * Each fragment is one message rather than a verb and a noun joined here, so a
  * locale can move the count, drop the plural, or reorder the clause; the
  * capitalization is a no-op in a script without letter case.
  * @param group - The planned group.
+ * @param now - Render clock, for a group whose thinking is still running.
  * @returns The row's text, without the expand hint.
  */
-export declare function collapsedSummary(group: CollapsedGroup): string;
+export declare function collapsedSummary(group: CollapsedGroup, now?: number): string;
 /**
  * One run of read-only calls, rendered as the single row that replaces their
  * cards on the collapsed phase — Claude Code's `CollapsedReadSearchContent`.
  *
  * The row is the transcript's default answer to "what has it been doing": a
  * sentence of counts (`Searched for 3 patterns, read 2 files`) rather than one
- * card per file. While the group runs it is present-tense, keeps a leading
- * bullet, and carries a `⎿` row naming the operation in flight; once every call
- * has settled the bullet goes and the whole row recedes, exactly as upstream.
- * The group's own cards come back on the expanded phase, where the reconciler
- * mounts them instead of this row.
+ * card per file. While a call of the group is running the counts are
+ * present-tense and a `⎿` row names the call in flight; while anything at all
+ * is still going — a call, or the thinking the row absorbed — it keeps its
+ * leading bullet and its ellipsis. Once both are over the bullet goes and the
+ * whole row recedes, exactly as upstream. The group's own cards come back on
+ * the expanded phase, where the reconciler mounts them instead of this row.
  *
  * The one addition to upstream's row: a group that contains a failed call keeps
  * its bullet, in the error color, after it settles. A collapsed row is the only
  * thing on screen for those calls, and a failure that leaves no mark at all is
  * a failure the user never learns about.
+ *
+ * The row also opens with the thinking that led to the run (`Thought for 8s,
+ * read 2 files`), which is where this transcript states a thinking duration at
+ * all — the thinking block itself keeps its own rule and disappears with the
+ * step. While that thinking is still open the row re-renders per frame, so its
+ * counter moves with the clock rather than with the next event.
  */
 export declare class CollapsedGroupComponent extends CachedCardComponent {
     private group;
     private readonly palette;
     private readonly displayPath;
     private readonly expandKey;
+    private readonly now;
     /**
      * @param group - The planned group this row reports.
      * @param palette - Active role palette.
@@ -547,8 +606,12 @@ export declare class CollapsedGroupComponent extends CachedCardComponent {
      *   read per render: `app.tools.cycle` is rebindable, and a row that named
      *   the default key after a deployment moved it would send every reader to a
      *   key that does nothing.
+     * @param now - Render clock, read per render so a group still thinking counts
+     *   up; a group whose thinking has closed never consults it. Injected rather
+     *   than defaulted to `Date.now`, like every other clock in this bundle: a
+     *   row that reads the process clock cannot be rendered from a test.
      */
-    constructor(group: CollapsedGroup, palette: Palette, displayPath: (path: string) => string, expandKey: () => string);
+    constructor(group: CollapsedGroup, palette: Palette, displayPath: (path: string) => string, expandKey: () => string, now: () => number);
     /**
      * Apply the group's current counts; a running group re-seals on every
      * snapshot as its calls land.
@@ -556,6 +619,18 @@ export declare class CollapsedGroupComponent extends CachedCardComponent {
      */
     setGroup(group: CollapsedGroup): void;
     protected renderLines(width: number): string[];
+    /**
+     * The group's `⎿` hint, when it still names something that is happening.
+     *
+     * A call's path, pattern or command holds the row only while a call is
+     * actually running; once they have all landed, the newest one is a finished
+     * operation and pointing at it would claim work that is over. A thinking line
+     * holds the row only while the thinking is open, for the same reason. A group
+     * whose calls have settled under an open thought therefore shows no hint at
+     * all unless the thought itself is what the group has to point at.
+     * @returns The hint to render, or `undefined` for no hint row.
+     */
+    private hintInFlight;
 }
 /**
  * Injected context (plugin/goal source, e.g. `workspace-context`), rendered as a

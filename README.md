@@ -175,18 +175,26 @@ its four values, and `/resume` this workspace's recent sessions.
   row, and the prompt with its context line. A run of consecutive read-only
   calls — reads, greps, globs, `ls`/`cat`-shaped shell commands, MCP queries —
   reports as one row (`Thought for 8s, searched for 3 patterns, read 2 files`)
-  instead of one card each, and the row counts up while the run is still going
-  before it settles into the past tense; Ctrl+O opens the run back into its
-  cards. The thinking that led to the run opens the row and keeps counting while
-  the model is still thinking — the only thinking duration the default
-  transcript states, since the thinking block itself still goes with its step.
-  A call
+  instead of one card each; Ctrl+O opens the run back into its cards. A call
   that writes never joins one — `cat a > b` writes `b`, whatever its verb says —
   while a call that fails stays in the run and turns its bullet red, because a
   failure the reader cannot see is worse than a row that admits one. Each
   fragment of that row is a whole phrase per language rather than a verb and a
   noun joined at render time, so Chinese picks its own word order, measure
   words, and comma.
+- **Thinking on that row** — the run reports the thinking next to it as its
+  first clause (`Thinking for 12s, read 2 files…`), counting up against the
+  clock while the model is still thinking. It is the only thinking *duration* a
+  default transcript states: the thinking block itself keeps its own rule and
+  goes with the step that wrote it (Ctrl+T pins it, Ctrl+O expanded brings it
+  back). Every clause carries its own tense — the files are read while the
+  thought is still running — and the row a duration appeared on is the row that
+  keeps it, so a thought that ends in an answer rather than in another tool call
+  settles in place instead of vanishing off the screen. Until the run's first
+  call names a file, a pattern or a command, the `⎿` line under the row shows
+  the newest line of the thinking; `showReasoning: false` keeps that line off
+  the row like everywhere else, and the duration — which quotes nothing —
+  stays.
 - **Rewind** — `/rewind`, or a double Esc at an empty prompt: go back to an
   earlier prompt. With a host that can fork the session the conversation moves
   with it and the original stays resumable; otherwise the prompt comes back to
@@ -195,8 +203,11 @@ its four values, and `/resume` this workspace's recent sessions.
   workspace or (Tab) in all of them. A row is its title over how long ago it was
   touched and how big its log is (`2 hours ago · 354.1KB`); the session you are
   in is not listed, because resuming into it is not a destination. The id is
-  matched by the search box but printed on no row, and exiting prints the
-  command that brings the session you just left back.
+  matched by the search box but printed on no row. With nothing typed and
+  nothing to list the panel says there is no other session to resume, rather
+  than reporting a search that missed — the empty list is the answer, not a
+  failed query. Leaving the terminal prints the command that brings the session
+  you just left back, so the way in is on screen at the moment you walk out.
 - **Session search** — `/search [query]`, or Ctrl+G: every message this session
   holds, filtered as you type, with the hit shown in place and the whole message
   one Enter away. It is a panel rather than a jump because the transcript above
@@ -236,7 +247,7 @@ Values on the bundle row (`tui-runner`), all optional.
 | `initialSkill` | — | skill auto-invoked as the session's first turn, as if `/skill:<name>` were typed; set by a launcher, not by a person |
 | `initialDraft` | — | text the editor opens with, unsent; set by a rewind handoff |
 | `experimentalCommands` | `false` | register the developer commands (`/reload` today) |
-| `showReasoning` | `true` | may this transcript render reasoning blocks at all; `false` hides them in every phase and turns both Ctrl+T and the `/config` Thinking display row off |
+| `showReasoning` | `true` | may this transcript render reasoning text at all; `false` hides the blocks in every phase, keeps the model's words off a collapsed row's `⎿` hint (the duration stays), and turns both Ctrl+T and the `/config` Thinking display row off |
 | `markdownRenderer` | `claude` | `claude` (this bundle's renderer) or `pi` (pi-tui's `Markdown`); a `claude` render that throws falls back to `pi` for the rest of the process |
 | `maxToolOutputLines` | `6` | body lines kept in a collapsed tool card's head/tail preview |
 | `maxDiffEditLength` | `1000` | added and removed lines explored while deriving an exact line diff |
@@ -295,9 +306,12 @@ selected through `ctx.permissionPresets` (the `auto-accept` entry is added to
 the table by this bundle's `cordis.patch.yml`) and plan mode through
 `ctx.planMode`, so `/permission`, `/plan`, a resumed log, and the key all report
 the same state. A mode that is on says so above the prompt — `⏸ plan mode on`,
-`⏵⏵ auto-accept on` — with the key that cycles it named beside the badge. A
-deployment that composes no preset table, or no plan mode, keeps the rungs it
-has: the key cycles what is mounted.
+`⏵⏵ auto-accept on` — with the key that cycles it named beside the badge. Both
+badges can be up at once, reached with `/permission auto-accept` and `/plan`
+rather than with the key; the hint then rides the last one alone, because one
+key repeated on two stacked rows reads as two keys to press. A deployment that
+composes no preset table, or no plan mode, keeps the rungs it has: the key
+cycles what is mounted, and says so once there is nothing left to cycle.
 
 ## Development
 

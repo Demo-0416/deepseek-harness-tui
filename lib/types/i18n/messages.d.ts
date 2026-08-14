@@ -58,6 +58,7 @@ export declare const EN_MESSAGES: {
     readonly 'hotkeys.entry': "@ reference a file • / run a command • /skill:<name> load a skill • ? this list";
     readonly 'hotkeys.history': "{search} search prompt history backwards • {transcript} search this session's messages";
     readonly 'hotkeys.cards': "{cycle} cycle tool cards (preview/full/hidden) • {thinking} show or hide thinking blocks";
+    readonly 'hotkeys.modes': "{mode} cycle mode: normal → auto-accept → plan (danger-full-access stays a /permission switch)";
     readonly 'hotkeys.copy': "{todos} expand or collapse the plan • {copy} copy the last answer • {redraw} redraw";
     readonly 'hotkeys.cancel': "{cancel} cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind";
     readonly 'hotkeys.exit': "{exit} exit on an empty prompt • Shift+Ctrl+D session debug panel";
@@ -212,6 +213,7 @@ export declare const EN_MESSAGES: {
     readonly 'dialog.resume.titleCounted': "Resume session ({position} of {total})";
     readonly 'dialog.resume.loading': "Loading sessions…";
     readonly 'dialog.resume.noMatch': "No matching sessions.";
+    readonly 'dialog.resume.noOthers': "No other session to resume.";
     readonly 'dialog.resume.stillLoading': "Sessions are still loading.";
     readonly 'dialog.resume.noSessionMatch': "No session matches this search.";
     readonly 'dialog.resume.scopeWorkspace': "this workspace {label}";
@@ -220,6 +222,15 @@ export declare const EN_MESSAGES: {
     readonly 'dialog.resume.workspaceRow': "workspace {label}";
     readonly 'dialog.resume.unavailable': "unavailable: {reason}";
     readonly 'dialog.resume.hint': "Type to search  •  ↑/↓ navigate  •  Tab scope  •  Enter resume  •  Esc clear/cancel";
+    readonly 'dialog.resume.searchPlaceholder': "Search…";
+    readonly 'dialog.resume.ageJustNow': "just now";
+    readonly 'dialog.resume.ageMinutes.one': "{count} minute ago";
+    readonly 'dialog.resume.ageMinutes.other': "{count} minutes ago";
+    readonly 'dialog.resume.ageHours.one': "{count} hour ago";
+    readonly 'dialog.resume.ageHours.other': "{count} hours ago";
+    readonly 'dialog.resume.ageDays.one': "{count} day ago";
+    readonly 'dialog.resume.ageDays.other': "{count} days ago";
+    readonly 'exit.resumeHint': "Resume this session: {command}";
     readonly 'dialog.question.header': "Question {position}/{total} ({unanswered} unanswered)";
     readonly 'dialog.question.selectOne': "Select at least one option, or press {keys} for a custom answer.";
     readonly 'dialog.question.emptyAnswer': "Enter an answer before submitting.";
@@ -240,6 +251,8 @@ export declare const EN_MESSAGES: {
     readonly 'prompt.context': "{percent}% context";
     readonly 'prompt.compacting': "Context being compacted {duration}";
     readonly 'prompt.queued': "{count} queued";
+    readonly 'collapse.thinking.active': "thinking for {duration}";
+    readonly 'collapse.thinking.settled': "thought for {duration}";
     readonly 'collapse.search.active.one': "searching for {count} pattern";
     readonly 'collapse.search.active.other': "searching for {count} patterns";
     readonly 'collapse.search.settled.one': "searched for {count} pattern";
@@ -268,6 +281,13 @@ export declare const EN_MESSAGES: {
     readonly 'status.flash.planEmpty': "No plan in this session yet.";
     readonly 'status.flash.planExpanded': "Plan expanded.";
     readonly 'status.flash.planCollapsed': "Plan collapsed.";
+    readonly 'status.flash.modeNormal': "Mode: normal — the workspace sandbox, approval asked for anything wider.";
+    readonly 'status.flash.modeAutoAccept': "Mode: auto-accept — tool calls run without asking, inside the workspace sandbox.";
+    readonly 'status.flash.modePlan': "Mode: plan — explore and design; the agent presents a plan instead of carrying it out.";
+    readonly 'status.flash.modePlanQueued': "Mode: plan — applied from the next step of this turn.";
+    readonly 'status.flash.modePlanOff': "Plan mode off; the permission preset is unchanged.";
+    readonly 'status.flash.modeUnavailable': "Nothing to cycle in this deployment: no auto-accept preset, and no plan mode.";
+    readonly 'status.flash.modeFailed': "Mode switch failed: {error}";
     readonly 'status.flash.escDraft': "Press esc again to clear the draft.";
     readonly 'status.flash.escRewind': "Press esc again to rewind to an earlier prompt.";
     readonly 'status.flash.exitAgain': "Press ctrl+c again to exit.";
@@ -353,6 +373,11 @@ export declare const EN_MESSAGES: {
     readonly 'notice.referencedSessions': "Referenced sessions · {labels}";
     readonly 'transcript.compactionMarker': "… earlier context was compacted …";
     readonly 'transcript.steeringBadge': "Steering";
+    readonly 'transcript.planModeBadge': "plan mode on";
+    readonly 'transcript.autoAcceptBadge': "auto-accept on";
+    readonly 'transcript.modeCycleHint': "({key} to cycle)";
+    readonly 'transcript.xmlOmitted.one': "… +{count} line ({key} to expand)";
+    readonly 'transcript.xmlOmitted.other': "… +{count} lines ({key} to expand)";
     readonly 'banner.resumed': "resumed {id}";
     readonly 'export.overwrite.question': "{path} already exists. Replace it?";
     readonly 'export.overwrite.replace': "Replace the file";

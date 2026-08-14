@@ -280,6 +280,11 @@ export const EN_MESSAGES = {
   'dialog.resume.titleCounted': 'Resume session ({position} of {total})',
   'dialog.resume.loading': 'Loading sessions…',
   'dialog.resume.noMatch': 'No matching sessions.',
+  // The list leaves out the session doing the browsing, so an empty list with
+  // an empty search box means there is nowhere else to go — not that a search
+  // missed. Saying "no matching sessions" there sends the reader back to a
+  // query they never typed.
+  'dialog.resume.noOthers': 'No other session to resume.',
   'dialog.resume.stillLoading': 'Sessions are still loading.',
   'dialog.resume.noSessionMatch': 'No session matches this search.',
   'dialog.resume.scopeWorkspace': 'this workspace {label}',
@@ -386,7 +391,10 @@ export const EN_MESSAGES = {
   'status.flash.modePlan': 'Mode: plan — explore and design; the agent presents a plan instead of carrying it out.',
   'status.flash.modePlanQueued': 'Mode: plan — applied from the next step of this turn.',
   'status.flash.modePlanOff': 'Plan mode off; the permission preset is unchanged.',
-  'status.flash.modeUnavailable': 'This deployment mounts neither permission presets nor plan mode, so there is no mode to cycle.',
+  // Reached whenever the ladder has no rung to move to — including a mounted
+  // preset table with no auto-accept entry — so it names the rungs it looked
+  // for rather than claiming nothing is mounted.
+  'status.flash.modeUnavailable': 'Nothing to cycle in this deployment: no auto-accept preset, and no plan mode.',
   'status.flash.modeFailed': 'Mode switch failed: {error}',
   'status.flash.escDraft': 'Press esc again to clear the draft.',
   'status.flash.escRewind': 'Press esc again to rewind to an earlier prompt.',
@@ -504,6 +512,11 @@ export const EN_MESSAGES = {
   'transcript.planModeBadge': 'plan mode on',
   'transcript.autoAcceptBadge': 'auto-accept on',
   'transcript.modeCycleHint': '({key} to cycle)',
+  // The marker an XML tool result folds its hidden children behind. Same
+  // contract as `collapse.expandHint`: the key is interpolated from the
+  // keybinding manager, because `app.tools.cycle` is rebindable.
+  'transcript.xmlOmitted.one': '… +{count} line ({key} to expand)',
+  'transcript.xmlOmitted.other': '… +{count} lines ({key} to expand)',
   'banner.resumed': 'resumed {id}',
   // `/export` asking before it replaces a file, and the two answers it offers.
   'export.overwrite.question': '{path} already exists. Replace it?',
@@ -738,6 +751,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'dialog.resume.titleCounted': '恢复会话（第 {position} / 共 {total}）',
   'dialog.resume.loading': '正在加载会话…',
   'dialog.resume.noMatch': '没有匹配的会话。',
+  'dialog.resume.noOthers': '没有其他可恢复的会话。',
   'dialog.resume.stillLoading': '会话还在加载中。',
   'dialog.resume.noSessionMatch': '没有会话匹配这次搜索。',
   'dialog.resume.scopeWorkspace': '当前工作区 {label}',
@@ -815,7 +829,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.flash.modePlan': '模式：plan —— 只做调研和设计，先给方案，不直接动手。',
   'status.flash.modePlanQueued': '模式：plan —— 从本轮的下一步开始生效。',
   'status.flash.modePlanOff': '已退出 plan 模式；权限 preset 保持不变。',
-  'status.flash.modeUnavailable': '当前部署既没有 permission preset，也没有 plan 模式，没有可切换的模式。',
+  'status.flash.modeUnavailable': '当前部署没有可切换的模式：既没有 auto-accept preset，也没有 plan 模式。',
   'status.flash.modeFailed': '切换模式失败：{error}',
   'status.flash.escDraft': '再按一次 esc 清空草稿。',
   'status.flash.escRewind': '再按一次 esc 回退到更早的提问。',
@@ -907,6 +921,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'transcript.planModeBadge': 'plan 模式已开启',
   'transcript.autoAcceptBadge': 'auto-accept 已开启',
   'transcript.modeCycleHint': '({key} 切换模式)',
+  'transcript.xmlOmitted.one': '… 还有 {count} 行（{key} 展开）',
+  'transcript.xmlOmitted.other': '… 还有 {count} 行（{key} 展开）',
   'banner.resumed': '已恢复 {id}',
   'export.overwrite.question': '{path} 已存在，要覆盖吗？',
   'export.overwrite.replace': '覆盖这个文件',

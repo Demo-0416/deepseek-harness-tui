@@ -303,13 +303,70 @@ describe('Shift+Tab', { skip: skipWithoutEntry }, () => {
     }
   })
 
-  it('says so rather than doing nothing when the deployment mounts neither axis', async () => {
+  it('says so rather than doing nothing when the ladder has no rung to move to', async () => {
     const harness = await mount()
     try {
+      // Worded from the rungs the cycle looked for, not from the services: a
+      // preset table with no auto-accept entry reaches this same flash, and
+      // "no presets are mounted" would be a lie there.
       assert.match(
         await press(harness, SHIFT_TAB),
-        /This deployment mounts neither permission presets nor plan mode/u,
+        /Nothing to cycle in this deployment: no auto-accept preset, and no plan mode\./u,
       )
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('carries the key hint once when both axes are on', async () => {
+    // Plan and auto-accept can be on at once (`/permission auto-accept` plus
+    // `/plan`), and one key cycles both: the hint rides the last badge, because
+    // the same hint on two stacked rows reads as two keys to press.
+    const presets = fakePermissionPresets()
+    const plan = fakePlanMode()
+    const harness = await mount({ services: { permissionPresets: presets, planMode: plan } })
+    try {
+      presets.set(harness.session, AUTO_ACCEPT_PRESET)
+      plan.set(harness.agent as unknown as Agent, true)
+      await delay(SETTLE_MS)
+      await harness.terminal.flush()
+      const frame = harness.terminal.text().replace(/\s+/gu, ' ')
+      assert.match(frame, /⏸ plan mode on/u, frame)
+      assert.match(frame, /⏵⏵ auto-accept on/u, frame)
+      assert.equal(frame.match(/Shift\+Tab to cycle/gu)?.length, 1, frame)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('keeps the badge strip off the per-frame path while a turn streams', async () => {
+    // Every rebuild re-derives both axes from the whole session log, and the
+    // store publishes a snapshot per 16 ms batch: rebuilding per snapshot is a
+    // full-log fold ~60 times a second, which is what the strip's event-driven
+    // repaint exists to avoid.
+    const presets = fakePermissionPresets()
+    let reads = 0
+    const counted = { ...presets, current: (): string => { reads += 1; return presets.current() } }
+    const harness = await mount({ services: { permissionPresets: counted } })
+    try {
+      await delay(SETTLE_MS)
+      const painted = reads
+      for (let index = 0; index < 120; index += 1) {
+        harness.session.append('assistant/chunk', {
+          turn: 1,
+          step: 1,
+          chunk: { type: 'text-delta', index: 0, text: `chunk ${String(index)} ` },
+        })
+        if (index % 20 === 19) await delay(20)
+      }
+      await delay(SETTLE_MS)
+      await harness.terminal.flush()
+      assert.equal(reads, painted, `no axis re-derivation per published snapshot (was ${String(reads - painted)})`)
+      // …and the strip still lights up for the event that does move an axis.
+      counted.set(harness.session, AUTO_ACCEPT_PRESET)
+      await delay(SETTLE_MS)
+      await harness.terminal.flush()
+      assert.match(harness.terminal.text().replace(/\s+/gu, ' '), /⏵⏵ auto-accept on/u)
     } finally {
       await unmount(harness)
     }

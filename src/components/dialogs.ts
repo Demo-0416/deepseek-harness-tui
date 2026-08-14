@@ -1203,7 +1203,12 @@ export class ResumePicker implements Component, Focusable {
       }
     }
     if (this.candidates === undefined) push(this.palette.dim(t('dialog.resume.loading')))
-    else if (filtered.length === 0) push(this.palette.warning(t('dialog.resume.noMatch')))
+    else if (filtered.length === 0) {
+      // Nothing to show and nothing typed is not a failed search: the scan
+      // leaves out the session doing the browsing, so this is what `/resume`
+      // looks like from the only session in a workspace.
+      push(this.palette.warning(t(this.search.getValue() === '' ? 'dialog.resume.noOthers' : 'dialog.resume.noMatch')))
+    }
     if (this.error !== '') {
       lines.push('')
       push(this.palette.error(displayText(this.error)))

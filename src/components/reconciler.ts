@@ -106,8 +106,9 @@ export interface TranscriptDeps {
   readonly cwd: string
   /**
    * The label of the key that currently cycles tool cards, read per render.
-   * `app.tools.cycle` is rebindable, so the collapsed row's expand hint has to
-   * name whatever the manager resolved rather than the shipped default.
+   * `app.tools.cycle` is rebindable, so the two rows that offer to expand — the
+   * collapsed group's hint and a card's folded XML body — have to name whatever
+   * the manager resolved rather than the shipped default.
    */
   readonly expandKey: () => string
 }
@@ -165,6 +166,7 @@ function groupSignature(group: CollapsedGroup): string {
     // tick, which is what a signature over node facts cannot do.
     group.thinkingMs,
     group.thinkingSince ?? '',
+    group.running,
     group.active,
     group.failed,
     group.hint?.kind ?? '',
@@ -327,7 +329,13 @@ export class TranscriptReconciler {
     // of one card each; the other two phases have no groups at all (expanded
     // shows every card, hidden shows none), so the plan is not even computed.
     const collapsed = this.visibility === 'collapsed'
-      ? collapseToolGroups(nodes, { from: this.hiddenBefore, isHidden: id => this.isHiddenCall(id) })
+      ? collapseToolGroups(nodes, {
+        from: this.hiddenBefore,
+        isHidden: id => this.isHiddenCall(id),
+        // The row's thinking hint is reasoning text, and this transcript's
+        // master switch governs it exactly as it governs the thinking block.
+        showReasoning: this.showReasoning,
+      })
       : new Map<number, CollapsedGroup>()
 
     for (let index = this.hiddenBefore; index < nodes.length; index += 1) {
@@ -696,6 +704,7 @@ export class TranscriptReconciler {
       this.deps.maxDiffEditLength,
       this.deps.palette,
       this.deps.mdTheme,
+      this.deps.expandKey,
     )
     component.setVisibility(this.visibility)
     if (node.result !== undefined) component.setResult(node.result)

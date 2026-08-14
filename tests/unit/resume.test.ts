@@ -245,6 +245,20 @@ describe('resume picker rows', () => {
     assert.match(rows(open).join('\n'), /Search…/u)
   })
 
+  it('separates "nowhere else to go" from "your search missed"', () => {
+    // The scan leaves the browsing session out, so the only session in a
+    // workspace opens `/resume` on an empty list with an empty search box.
+    const alone = picker([])
+    assert.match(rows(alone).join('\n'), /No other session to resume\./u)
+    assert.doesNotMatch(rows(alone).join('\n'), /No matching sessions/u)
+    // A query that matches nothing is still the old message.
+    const searched = picker([candidate('Ordering bug', HOUR, 1024)])
+    searched.setQuery('nothing like this')
+    assert.match(rows(searched).join('\n'), /No matching sessions\./u)
+    setLocale('zh')
+    assert.match(rows(alone).join('\n'), /没有其他可恢复的会话。/u)
+  })
+
   it('matches a pasted session id even though no row prints one', () => {
     const open = picker([candidate('Ordering bug', HOUR, 1024), candidate('Other work', HOUR, 1024)])
     open.setQuery('session-ordering-bug')

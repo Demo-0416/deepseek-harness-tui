@@ -126,14 +126,19 @@ function countsGroup(counts: Partial<CollapsedGroup>): CollapsedGroup {
     mcpCallCount: 0,
     mcpServers: [],
     thinkingMs: 0,
+    running: false,
     active: false,
     failed: false,
     ...counts,
   }
 }
 
-/** A reconciler over its own chat container, plus the rows it renders. */
-function mountReconciler(visibility: ToolCardVisibility): {
+/**
+ * A reconciler over its own chat container, plus the rows it renders.
+ * @param visibility - The Ctrl+O phase to mount at.
+ * @param showReasoning - The deployment's reasoning switch, default on.
+ */
+function mountReconciler(visibility: ToolCardVisibility, showReasoning = true): {
   reconciler: TranscriptReconciler
   rows: () => string[]
 } {
@@ -159,7 +164,7 @@ function mountReconciler(visibility: ToolCardVisibility): {
     expandKey: () => 'Ctrl+O',
   }
   const chat = new Container()
-  const reconciler = new TranscriptReconciler(chat, deps, { showReasoning: true, visibility })
+  const reconciler = new TranscriptReconciler(chat, deps, { showReasoning, visibility })
   return { reconciler, rows: () => chat.render(WIDTH).map(row => row.trimEnd()) }
 }
 
@@ -523,7 +528,7 @@ describe('collapsed summary wording', () => {
       call('read', { file_path: '/workspace/a.ts' }),
       call('bash', { command: 'ls src' }),
     ])
-    const running = countsGroup({ readCount: 1, active: true })
+    const running = countsGroup({ readCount: 1, running: true, active: true })
     const mcp = onlyGroup([
       call('mcp__slack__search_messages', { query: 'x' }, { id: 'm1' }),
       call('mcp__slack__get_channel', {}, { id: 'm2' }),
@@ -728,19 +733,44 @@ describe('thinking absorbed into the group', () => {
     assert.equal(collapsedSummary(group), 'Thought for 8s, read 3 files')
   })
 
-  it('attributes a step\'s thinking forward, to the run it led to', () => {
-    // The model thinks, writes a sentence, and then goes looking: the sentence
-    // ends the run above it, and the thinking belongs to what came next.
+  it('attributes a step\'s thinking forward when no run is open above it', () => {
+    // The turn's own shape: the model thinks first, then goes looking. Nothing
+    // is open above the step, so the thinking belongs to the run it opens.
     const groups = groupsOf([
-      call('read', { file_path: '/workspace/a.ts' }),
-      call('read', { file_path: '/workspace/b.ts' }),
-      step('Now let me check the tests.', { step: 2, reasoning: 'where are they', thinkingMs: 6_000 }),
+      step('Let me look at the fold.', { step: 1, reasoning: 'where is it', thinkingMs: 6_000 }),
       call('read', { file_path: '/workspace/c.ts' }),
       call('read', { file_path: '/workspace/d.ts' }),
     ])
-    assert.equal(groups.length, 2)
-    assert.equal(groups[0]?.thinkingMs, 0, 'the run that was already over claims none of it')
-    assert.equal(groups[1]?.thinkingMs, 6_000)
+    assert.equal(groups.length, 1)
+    assert.equal(groups[0]?.thinkingMs, 6_000)
+  })
+
+  it('keeps a thought on the run that was already counting it up', () => {
+    // The same step, one frame apart: it thinks with an open run above it, and
+    // then writes prose instead of calling another tool. The prose ends the
+    // run — but the row has been showing this span since the first reasoning
+    // delta, so the run it appeared on is the run that reports it, rather than
+    // the counter vanishing the moment the answer starts arriving.
+    const thinking = groupsOf([
+      call('read', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }),
+      step('', { step: 2, reasoning: 'now I know', thinkingSince: START }),
+    ])
+    assert.equal(thinking.length, 1)
+    assert.equal(thinking[0]?.thinkingSince, START)
+    assert.equal(collapsedSummary(thinking[0] as CollapsedGroup, START + 12_000), 'Thinking for 12s, read 2 files…')
+
+    const answered = groupsOf([
+      call('read', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }),
+      step('Now let me check the tests.', { step: 2, reasoning: 'now I know', thinkingMs: 12_000 }),
+      call('read', { file_path: '/workspace/c.ts' }),
+      call('read', { file_path: '/workspace/d.ts' }),
+    ])
+    assert.equal(answered.length, 2)
+    assert.equal(answered[0]?.thinkingMs, 12_000, 'the row that counted it up keeps it')
+    assert.equal(collapsedSummary(answered[0] as CollapsedGroup), 'Thought for 12s, read 2 files')
+    assert.equal(answered[1]?.thinkingMs, 0, 'and it is not claimed twice')
   })
 
   it('drops thinking that led to no collapsible run at all', () => {
@@ -773,7 +803,7 @@ describe('thinking absorbed into the group', () => {
     // before it collapses at all, and until then the live thinking shows as the
     // prompt's own `✻` glyph — but the sentence must not read as a stray comma
     // or a bare ellipsis if it ever does.
-    const thinkingOnly = countsGroup({ thinkingMs: 5_000, active: true })
+    const thinkingOnly = countsGroup({ thinkingMs: 5_000, thinkingSince: START, active: true })
     assert.equal(collapsedSummary(thinkingOnly), 'Thinking for 5s…')
   })
 
@@ -785,11 +815,14 @@ describe('thinking absorbed into the group', () => {
       call('read', { file_path: '/workspace/b.ts' }),
     ])
     assert.equal(group.thinkingSince, START)
+    assert.equal(group.running, false, 'the calls themselves are over')
     assert.equal(group.active, true, 'a group whose model is still thinking has not settled')
     assert.equal(groupThinkingMs(group), 0, 'without a clock, only the closed spans count')
     assert.equal(groupThinkingMs(group, START + 4_000), 4_000)
-    assert.equal(collapsedSummary(group, START + 4_000), 'Thinking for 4s, reading 2 files…')
-    assert.equal(collapsedSummary(group, START + 12_000), 'Thinking for 12s, reading 2 files…')
+    // Each clause keeps its own tense: the files are read, the thought is not
+    // finished, and only the ellipsis speaks for the row as a whole.
+    assert.equal(collapsedSummary(group, START + 4_000), 'Thinking for 4s, read 2 files…')
+    assert.equal(collapsedSummary(group, START + 12_000), 'Thinking for 12s, read 2 files…')
   })
 
   it('is present-tense while the run is open and past-tense after it', () => {
@@ -798,7 +831,8 @@ describe('thinking absorbed into the group', () => {
       call('read', { file_path: '/workspace/a.ts' }),
       call('read', { file_path: '/workspace/b.ts' }, { status: 'running' }),
     ])
-    assert.equal(collapsedSummary(running), 'Thinking for 8s, reading 2 files…')
+    // The thinking closed when the first call went out; the calls have not.
+    assert.equal(collapsedSummary(running), 'Thought for 8s, reading 2 files…')
     const settled = onlyGroup([
       thought(8_000),
       call('read', { file_path: '/workspace/a.ts' }),
@@ -874,7 +908,43 @@ describe('thinking absorbed into the group', () => {
       call('mcp__docs__list_sections', {}, { id: 'm2' }),
     ])
     const rendered = rows().join('\n')
-    assert.match(rendered, /Thinking for 4s, querying docs 2 times…/, rendered)
+    assert.match(rendered, /Thinking for 4s, queried docs 2 times…/, rendered)
     assert.match(rendered, /⎿ {2}Checking how the fold measures this\./, rendered)
+  })
+
+  it('never quotes the reasoning on a transcript configured not to show it', () => {
+    // `showReasoning: false` means never, in any phase and whatever the pin
+    // says — a summary row is not an exception to it. The duration stays: it
+    // states how long the model thought, not a word of what it thought.
+    const nodes: ChatNode[] = [
+      thought(0, { reasoning: 'SECRET-REASONING-LINE', since: START - 4_000 }),
+      call('mcp__docs__list_pages', {}, { id: 'm1' }),
+      call('mcp__docs__list_sections', {}, { id: 'm2' }),
+    ]
+    const hidden = mountReconciler('collapsed', false)
+    hidden.reconciler.reconcile(nodes)
+    const rendered = hidden.rows().join('\n')
+    assert.ok(!rendered.includes('SECRET-REASONING-LINE'), `no reasoning text reaches the row:\n${rendered}`)
+    assert.match(rendered, /Thinking for 4s, queried docs 2 times…/, rendered)
+
+    // The same nodes under the default switch do show it, so the case above is
+    // the policy talking rather than the hint being absent.
+    const shown = mountReconciler('collapsed')
+    shown.reconciler.reconcile(nodes)
+    assert.match(shown.rows().join('\n'), /SECRET-REASONING-LINE/u)
+  })
+
+  it('drops the hint of a call that already finished while only the thinking runs', () => {
+    // The `⎿` row names what is in flight. Once every call has landed, the
+    // newest path is a finished operation, and the thinking is what is left.
+    const { reconciler, rows } = mountReconciler('collapsed')
+    reconciler.reconcile([
+      call('read', { file_path: '/workspace/src/a.ts' }, { id: 'r1' }),
+      call('read', { file_path: '/workspace/src/b.ts' }, { id: 'r2' }),
+      thought(0, { step: 2, reasoning: 'What does that mean?', since: START - 4_000 }),
+    ])
+    const rendered = rows().join('\n')
+    assert.match(rendered, /Thinking for 4s, read 2 files…/, rendered)
+    assert.ok(!rendered.includes('src/b.ts'), `no path from a settled call:\n${rendered}`)
   })
 })

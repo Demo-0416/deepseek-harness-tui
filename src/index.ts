@@ -1681,11 +1681,15 @@ export function createTuiChat(
   const applyModeBadges = (): void => {
     modeContainer.clear()
     const axes = modeAxes()
-    if (axes.planActive) {
-      modeContainer.addChild(new Text(planModeRow(palette, appearance.scheme, modeCycleHint()), 0, 0))
-    }
-    if (axes.preset === AUTO_ACCEPT_PRESET) {
-      modeContainer.addChild(new Text(autoAcceptRow(palette, appearance.scheme, modeCycleHint()), 0, 0))
+    const rows: ((hint: string | undefined) => string)[] = []
+    if (axes.planActive) rows.push(hint => planModeRow(palette, appearance.scheme, hint))
+    if (axes.preset === AUTO_ACCEPT_PRESET) rows.push(hint => autoAcceptRow(palette, appearance.scheme, hint))
+    // Both axes can be on at once, and one key cycles both: the hint rides the
+    // last badge alone, because the same `(shift+tab to cycle)` on two stacked
+    // rows reads as two different keys to press.
+    const hint = modeCycleHint()
+    for (const [index, row] of rows.entries()) {
+      modeContainer.addChild(new Text(row(index === rows.length - 1 ? hint : undefined), 0, 0))
     }
   }
 
@@ -1693,12 +1697,23 @@ export function createTuiChat(
    * Apply one published snapshot: the reconciler re-places the transcript, the
    * plan strip, the mode badges and header read the session aggregates.
    * This is the whole event-to-screen path — nothing else writes chat rows.
+   * @param snapshot - The published snapshot.
+   * @param options - `repaint` rebuilds rows that no aggregate reports moved:
+   *   the mode badges hold the palette and the locale they were built under, so
+   *   a theme or language change asks for them explicitly.
    */
-  const applySnapshot = (snapshot: SessionSnapshot): void => {
+  const applySnapshot = (snapshot: SessionSnapshot, options: { readonly repaint?: boolean } = {}): void => {
     transcript.reconcile(snapshot.nodes)
     todo.update(snapshot.todos ?? [])
+    // The badge strip stays event-driven: rebuilding it here would re-derive
+    // both axes from the whole session log on every published snapshot — the
+    // store batches at 16 ms, so ~60 full-log folds a second while a turn
+    // streams. The permission axis repaints from `PERMISSION_EVENTS`, a queued
+    // plan selection from `cycleMode`, and the logged plan axis from this
+    // aggregate, which is the one thing a snapshot actually reports about them.
+    const planChanged = snapshot.planMode !== loggedPlanMode
     loggedPlanMode = snapshot.planMode
-    applyModeBadges()
+    if (planChanged || options.repaint === true) applyModeBadges()
     if (snapshot.title !== sessionTitle) {
       sessionTitle = snapshot.title
       header.invalidate()
@@ -1983,7 +1998,7 @@ export function createTuiChat(
     // Rows cache the escapes they were built with, so every component is
     // remounted from the same nodes under the new palette.
     transcript.reset()
-    applySnapshot(store.getSnapshot())
+    applySnapshot(store.getSnapshot(), { repaint: true })
     // `setStatus` below re-derives `editor.borderColor` from the new palette.
     setStatus(agent.status)
     requestRender()
@@ -2823,7 +2838,7 @@ export function createTuiChat(
   const disposeLocaleChanges = onLocaleChange(() => {
     if (disposed) return
     transcript.reset()
-    applySnapshot(store.getSnapshot())
+    applySnapshot(store.getSnapshot(), { repaint: true })
     refreshCommandAutocomplete()
     requestRender()
   })
@@ -3161,7 +3176,17 @@ export function createTuiChat(
           appendNotice(t('notice.commandFailed', { error: errorChain(error) }), 'error')
         }
       },
-    ).finally(() => { commandControllers.delete(controller) })
+    ).finally(() => {
+      commandControllers.delete(controller)
+      if (disposed) return
+      // A command is the other hand on the mode axes, and one of its moves
+      // announces itself with nothing this terminal subscribes to: a `/plan`
+      // during an open turn is held as a pending selection and appends no
+      // event until the next step boundary. One rebuild per command is free —
+      // it is the per-snapshot rebuild that was not.
+      applyModeBadges()
+      requestRender()
+    })
   }
 
   /**
@@ -3921,7 +3946,7 @@ export function createTuiChat(
   // screen before `ui.start()`. Replayed prompts also seed the editor's history,
   // which live submissions add for themselves.
   const initial = store.getSnapshot()
-  applySnapshot(initial)
+  applySnapshot(initial, { repaint: true })
   for (const node of initial.nodes) {
     if (node.kind === 'user-message' && node.source === 'user') editor.addToHistory(node.text)
   }

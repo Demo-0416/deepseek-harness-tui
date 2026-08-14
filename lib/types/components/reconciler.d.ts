@@ -77,8 +77,9 @@ export interface TranscriptDeps {
     readonly cwd: string;
     /**
      * The label of the key that currently cycles tool cards, read per render.
-     * `app.tools.cycle` is rebindable, so the collapsed row's expand hint has to
-     * name whatever the manager resolved rather than the shipped default.
+     * `app.tools.cycle` is rebindable, so the two rows that offer to expand — the
+     * collapsed group's hint and a card's folded XML body — have to name whatever
+     * the manager resolved rather than the shipped default.
      */
     readonly expandKey: () => string;
 }
@@ -107,6 +108,12 @@ export declare class TranscriptReconciler {
     private thinkingPinned;
     /** The open step's component, so an animation tick refreshes only that step. */
     private openStep;
+    /**
+     * The collapsed row whose thinking is still open, refreshed on the same tick:
+     * its duration counts up against the clock, not against the node list, so no
+     * snapshot is due while the model is thinking between two events.
+     */
+    private openGroup;
     /** Wall time of every turn in the log, for the per-turn completion row. */
     private readonly turnDurations;
     /**
@@ -189,9 +196,10 @@ export declare class TranscriptReconciler {
      */
     setThinkingPinned(pinned: boolean): void;
     /**
-     * Refresh the open step's live timing footer, for the status animation tick.
-     * Only that component is invalidated, so a long transcript is not re-rendered
-     * 20 times a second.
+     * Refresh the two rows whose text moves with the clock rather than with the
+     * log — the open step's timing footer and the collapsed row of a group that
+     * is still thinking — for the status animation tick. Only those components
+     * are invalidated, so a long transcript is not re-rendered 20 times a second.
      */
     invalidateOpenStep(): void;
     /**

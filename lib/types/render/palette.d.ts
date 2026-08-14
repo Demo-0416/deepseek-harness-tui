@@ -37,6 +37,8 @@ export declare const CLAUDE_COLORS: {
     readonly permission: Rgb;
     /** Plan-mode chrome, on a dark terminal; see {@link claudeSchemeColors}. */
     readonly planMode: Rgb;
+    /** Auto-accept chrome, on a dark terminal; see {@link claudeSchemeColors}. */
+    readonly autoAccept: Rgb;
     /**
      * Background fill behind a user message on a dark terminal, the block that
      * marks the user's own turns; see {@link claudeSchemeColors}.
@@ -70,21 +72,24 @@ export declare const CLAUDE_COLORS: {
     readonly diffSafeMuted: Rgb;
 };
 /**
- * The two Claude Code colors that cannot be one fixed brand tone.
+ * The three Claude Code colors that cannot be one fixed brand tone.
  *
  * Everything else in {@link CLAUDE_COLORS} is a foreground the product keeps
- * across its themes, so it reads on any background. These two do not: a fill is
- * only legible against the terminal's own background, and the plan tone is a
- * mid sage that upstream darkens for a light theme (`utils/theme.ts` — dark
- * `rgb(72,150,140)`, light `rgb(0,102,102)`). Left at their dark values on a
+ * across its themes, so it reads on any background. These do not: a fill is
+ * only legible against the terminal's own background, and the two mode tones
+ * are mid colors that upstream darkens for a light theme (`utils/theme.ts` —
+ * plan dark `rgb(72,150,140)`, light `rgb(0,102,102)`; auto-accept dark
+ * `rgb(175,135,255)`, light `rgb(135,0,255)`). Left at their dark values on a
  * white terminal, the user's own prompts turn into a dark bar with dark text on
- * it and the plan badge washes out — which is exactly what the fixed fill did.
+ * it and the mode badges wash out — which is exactly what the fixed fill did.
  */
 export interface ClaudeSchemeColors {
     /** Background fill behind a user message. */
     readonly userMessageBg: Rgb;
     /** Plan-mode chrome: the mode badge and the plan blocks that carry it. */
     readonly planMode: Rgb;
+    /** Auto-accept chrome: the mode badge shown while approval is not asked for. */
+    readonly autoAccept: Rgb;
 }
 /**
  * Claude Code's own values for the scheme-dependent colors, taken from its
@@ -94,7 +99,7 @@ export interface ClaudeSchemeColors {
  * in place (`Object.assign`) when the terminal reports a scheme change, the way
  * the role {@link ../components/theme.ts | Palette} is refreshed.
  * @param scheme - The terminal's reported color scheme.
- * @returns The fill and plan tone for that scheme.
+ * @returns The fill and the two mode tones for that scheme.
  */
 export declare function claudeSchemeColors(scheme: 'dark' | 'light'): ClaudeSchemeColors;
 /** Reset every SGR group. Only for a span that owns the whole line. */

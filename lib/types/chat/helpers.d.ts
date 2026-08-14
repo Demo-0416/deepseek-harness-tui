@@ -104,6 +104,31 @@ export declare function gitBranch(cwd: string): string | undefined;
  */
 export declare function shortSessionId(id: string): string;
 /**
+ * The profile this process was booted with, read back off its own command line.
+ *
+ * The launcher parses `--profile` itself and hands the app only the arguments
+ * after it, so the name reaches no service this bundle can inject: `process.argv`
+ * is the one place it survives. A run started some other way (an embedding host,
+ * a test) has no `--profile` in its argv and gets `undefined` — the caller then
+ * prints a command without the flag rather than inventing a profile name that
+ * would not exist on this machine.
+ * @param argv - the process command line; injectable so the parse can be tested.
+ * @returns the profile name, or `undefined` when the invocation named none.
+ */
+export declare function launchProfileName(argv?: readonly string[]): string | undefined;
+/**
+ * The command that brings this exact session back, as the exiting terminal
+ * prints it.
+ *
+ * The full session id, not the banner's shortened one: this line is meant to be
+ * copied into a shell weeks later, where an abbreviation is a guess about how
+ * the store resolves prefixes.
+ * @param sessionId - the session the command would resume.
+ * @param profile - the booted profile; absent drops the flag from the command.
+ * @returns the command line, ready to paste.
+ */
+export declare function resumeCommandLine(sessionId: string, profile?: string | undefined): string;
+/**
  * This bundle's version, for the startup banner.
  *
  * Read from the nearest package.json above the running module rather than
