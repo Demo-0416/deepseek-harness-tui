@@ -16,7 +16,7 @@
  */
 
 import { Container, Spacer, Text, type Component } from '@earendil-works/pi-tui'
-import type { MarkdownTheme } from '@earendil-works/pi-tui'
+import type { MarkdownTheme, TerminalColorScheme } from '@earendil-works/pi-tui'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {
@@ -73,6 +73,13 @@ export interface TranscriptDeps {
   readonly palette: Palette
   /** Active Markdown theme, likewise mutated in place. */
   readonly mdTheme: MarkdownTheme
+  /**
+   * The terminal's reported color scheme, read per mount rather than captured:
+   * the fills a component picks from it (the user block's background) are the
+   * one thing the role palette cannot carry, and a scheme change remounts every
+   * component through {@link TranscriptReconciler.reset} anyway.
+   */
+  readonly scheme: () => TerminalColorScheme
   /** Preferred assistant-body renderer and its one-shot failure report. */
   readonly markdown: MarkdownPolicy
   /** Collapsed-preview budget for card bodies. */
@@ -87,6 +94,24 @@ export interface TranscriptDeps {
   readonly now: () => number
   /** Tool definition lookup, so a card can use the tool's own presenters. */
   readonly toolDefinition: (name: string) => ToolDefinition | undefined
+}
+
+/**
+ * One process-local row group: the recipe that builds it, and the components
+ * that recipe last produced.
+ *
+ * The recipe is kept because the components are disposable. Every row holds the
+ * escapes of the palette it was built under, so a color-scheme change has to
+ * rebuild it — and a local row has no node to rebuild it *from*, which is why
+ * dropping the locals on reset silently deleted every command answer and notice
+ * from the transcript the moment the terminal changed scheme. Holding the
+ * builder makes them as reconstructible as a node-backed row.
+ */
+interface LocalRows {
+  /** Builds the row group under whatever palette is current when it runs. */
+  readonly build: () => Component[]
+  /** The components currently mounted for this group. */
+  components: Component[]
 }
 
 /** One node's mounted component(s) and the node version they were built from. */
@@ -147,8 +172,8 @@ function block(child: Component): Container {
 /** The keyed reconciler over one chat container. */
 export class TranscriptReconciler {
   private readonly views = new Map<string, NodeView>()
-  /** Process-local rows keyed by the node count they were appended after. */
-  private readonly locals = new Map<number, Component[]>()
+  /** Process-local row groups keyed by the node count they were appended after. */
+  private readonly locals = new Map<number, LocalRows[]>()
   /** Nodes before this index are not rendered (`/clear` hides history). */
   private hiddenBefore = 0
   /**
@@ -225,10 +250,10 @@ export class TranscriptReconciler {
       children.push(row)
     }
     const emitLocals = (anchor: number): void => {
-      const rows = this.locals.get(anchor)
-      if (rows === undefined) return
+      const groups = this.locals.get(anchor)
+      if (groups === undefined) return
       flushFooter()
-      children.push(...rows)
+      for (const group of groups) children.push(...group.components)
     }
 
     for (let index = this.hiddenBefore; index < nodes.length; index += 1) {
@@ -330,15 +355,22 @@ export class TranscriptReconciler {
   /**
    * Append process-local rows (command output, notices, diagnostics) after the
    * transcript's current tail.
-   * @param components - rows to append, in render order.
+   *
+   * The caller supplies a builder rather than components so the rows survive a
+   * palette swap: {@link TranscriptReconciler.reset} re-runs it under the new
+   * palette instead of dropping the answer the user is still reading. The
+   * builder must therefore read the palette it paints with at call time (the
+   * entry's palette object is mutated in place), not close over pre-styled text.
+   * @param build - Builds this group's rows, in render order.
    */
-  appendLocal(...components: Component[]): void {
-    const rows = this.locals.get(this.nodeCount)
-    if (rows === undefined) this.locals.set(this.nodeCount, [...components])
-    else rows.push(...components)
+  appendLocal(build: () => Component[]): void {
+    const group: LocalRows = { build, components: build() }
+    const groups = this.locals.get(this.nodeCount)
+    if (groups === undefined) this.locals.set(this.nodeCount, [group])
+    else groups.push(group)
     // Attach immediately as well: a notice must be on screen before the next
     // snapshot arrives, and the tail is exactly where the reconcile places it.
-    for (const component of components) this.chat.addChild(component)
+    for (const component of group.components) this.chat.addChild(component)
   }
 
   /**
@@ -365,12 +397,20 @@ export class TranscriptReconciler {
   /**
    * Drop every mounted component so the next reconcile rebuilds them — the
    * palette and Markdown theme are captured at construction, so a color-scheme
-   * change has to remount. Local rows are rebuilt by their owners, so they go
-   * with it, exactly as the transcript rebuild before the reconciler did.
+   * change has to remount.
+   *
+   * Process-local rows are rebuilt here rather than dropped. They have no node
+   * to be re-derived from, so clearing them (as this did) threw away every
+   * command result and notice on screen the first time the terminal reported a
+   * scheme — the answer to the command the user had just run disappeared, and
+   * nothing brought it back. Each group's builder re-runs under the palette
+   * that is current now, which is the same remount every other row gets.
    */
   reset(): void {
     this.views.clear()
-    this.locals.clear()
+    for (const groups of this.locals.values()) {
+      for (const group of groups) group.components = group.build()
+    }
     // The rows hold the palette they were built with, so they remount too.
     this.turnFooters.clear()
     this.chat.clear()
@@ -472,7 +512,7 @@ export class TranscriptReconciler {
    * that says this text reached the model mid-answer.
    */
   private userView(node: UserMessageNode): Component {
-    const body = new UserMessageComponent(node.text, this.deps.palette, this.deps.mdTheme)
+    const body = new UserMessageComponent(node.text, this.deps.palette, this.deps.scheme())
     if (node.source !== 'steering') return block(body)
     const container = new Container()
     container.addChild(new Spacer(1))

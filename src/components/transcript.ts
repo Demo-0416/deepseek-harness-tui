@@ -16,6 +16,7 @@ import {
   wrapTextWithAnsi,
   type Component,
   type MarkdownTheme,
+  type TerminalColorScheme,
 } from '@earendil-works/pi-tui'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JsonValue, SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
@@ -40,7 +41,13 @@ import {
 } from '../render/diff.ts'
 import { buildPreviewText } from '../render/preview.ts'
 import { renderMarkdownAnsi, type MarkdownAnsiTheme } from '../render/markdown.ts'
-import { bg as paintBg, CLAUDE_COLORS, fg as paintFg, type Rgb } from '../render/palette.ts'
+import {
+  bg as paintBg,
+  claudeSchemeColors,
+  CLAUDE_COLORS,
+  fg as paintFg,
+  type Rgb,
+} from '../render/palette.ts'
 import {
   formatCompletionTime,
   formatTimingTotals,
@@ -97,6 +104,27 @@ function accent(palette: Palette, color: Rgb, text: string): string {
 function plainIfNoColor(palette: Palette, lines: string[]): string[] {
   return colorEnabled(palette) ? lines : lines.map(line => stripTerminalSequences(line))
 }
+
+/**
+ * The transcript's left margin, and with it the column every gutter glyph sits
+ * in: an assistant answer's `●`, a tool card's `⏺`, the `∴` of a thinking
+ * block, and a turn's `✻`.
+ *
+ * Claude Code puts all four in the same two-column gutter at the left edge of
+ * the message row (`<Box minWidth={2}>` in `AssistantTextMessage`,
+ * `AssistantToolUseMessage`, `SystemTextMessage`), so they line up down the
+ * whole transcript; this port indents every row one column further, and tool
+ * cards were the one surface that never got that column — which put their
+ * bullets a column left of every other bullet on screen. One constant now
+ * carries the margin so the two cannot drift apart again.
+ */
+const GUTTER = ' '
+
+/** Columns a gutter glyph and its trailing space occupy: {@link GUTTER} plus `● `. */
+const GUTTER_WIDTH = GUTTER.length + 2
+
+/** Continuation indent under a gutter glyph, so a wrapped body stays one block. */
+const GUTTER_INDENT = ' '.repeat(GUTTER_WIDTH)
 
 /**
  * Which pipeline renders an assistant response body, plus the one-shot report
@@ -245,38 +273,6 @@ class PrefixedComponent implements Component {
       if (stripTerminalSequences(row).trim() === '') return index === 0 ? this.lead.trimEnd() : ''
       return `${index === 0 ? this.lead : this.continuation}${row}`
     })
-  }
-}
-
-/**
- * A filled block around a child component, the shape Claude Code gives the
- * user's own message: no border at all, one column of padding on each side, and
- * every row filled edge to edge with the fixed rgb(55,55,55) fill. The fill is
- * what makes the user's turns scannable in a long transcript, and because it is
- * a background rather than a frame, a drag-select copies the prompt text alone.
- *
- * With color disabled the fill cannot be drawn, so the block degrades to the
- * same one-column padding with no escape on the row at all.
- */
-class FilledBlockComponent implements Component {
-  constructor(
-    private readonly child: Component,
-    private readonly palette: Palette,
-  ) {}
-
-  invalidate(): void {
-    this.child.invalidate()
-  }
-
-  render(width: number): string[] {
-    const inner = Math.max(1, width - 2)
-    // Every row is padded to the same width so the fill is a rectangle rather
-    // than a ragged right edge.
-    const rows = this.child.render(inner).map(row => truncateToWidth(row, inner, '', true))
-    if (!colorEnabled(this.palette)) {
-      return rows.map(row => stripTerminalSequences(` ${row}`).trimEnd())
-    }
-    return rows.map(row => paintBg(CLAUDE_COLORS.userMessageBg, ` ${row} `))
   }
 }
 
@@ -454,22 +450,96 @@ export class HeaderComponent implements Component {
 }
 
 /**
+ * Claude Code's prompt pointer (`figures.pointer`), the only marker a user
+ * message carries. It renders in the recessed tone, upstream's `subtle`
+ * (`HighlightedThinkingText.tsx:91`).
+ */
+const PROMPT_POINTER = '❯'
+
+/**
+ * Characters of one prompt beyond which the block prints a middle instead
+ * (`UserPromptMessage.tsx:28-30`): a pasted file is not worth scrolling past to
+ * reach the answer it asked for.
+ */
+const MAX_PROMPT_CHARS = 10_000
+
+/** Characters kept from each end when a prompt exceeds {@link MAX_PROMPT_CHARS}. */
+const PROMPT_EDGE_CHARS = 2_500
+
+/**
+ * Clip an over-long prompt to its two ends, counting the lines the middle drops.
+ * @param text - The prompt as submitted.
+ * @returns The text to render, unchanged when it is inside the budget.
+ */
+function clipPrompt(text: string): string {
+  if (text.length <= MAX_PROMPT_CHARS) return text
+  const head = text.slice(0, PROMPT_EDGE_CHARS)
+  const tail = text.slice(-PROMPT_EDGE_CHARS)
+  const hidden = text.slice(PROMPT_EDGE_CHARS, -PROMPT_EDGE_CHARS).split('\n').length
+  return `${head}\n… +${hidden} lines …\n${tail}`
+}
+
+/**
  * A user or steering prompt in the transcript, rendered as Claude Code's
- * borderless filled block: the prompt text on the fixed rgb(55,55,55) fill with
- * one column of padding, which is what marks the user's own turns in a long
- * transcript.
+ * borderless filled block: the `❯ ` pointer and then the prompt **as typed**, on
+ * the theme's user-message fill with one column of padding, which is what marks
+ * the user's own turns in a long transcript.
+ *
+ * The text is deliberately not a Markdown document. Upstream renders a user
+ * message through `HighlightedThinkingText`, which is plain `<Text>` with the
+ * pointer in front — only assistant output goes through `<Markdown>`. This port
+ * used to typeset it with pi-tui's Markdown while the answer above it went
+ * through the claude pipeline, so the same `$x^2$`, the same `*` and the same
+ * `#` came out one way in the question and another in the answer, and a prompt
+ * that quoted markup was rewritten before the user could check what they had
+ * sent. Echoing the prompt verbatim also removes the second dialect from the
+ * transcript entirely: one renderer, on assistant text alone.
  *
  * `_label` is retained from the boxed frame this replaced (no caller ever passed
  * it): Claude Code's block names no role, so nothing is rendered for it.
  */
-export class UserMessageComponent extends Container {
-  constructor(text: string, palette: Palette, mdTheme: MarkdownTheme, _label = 'You') {
-    super()
-    const body = new Markdown(displayText(text), 0, 0, mdTheme, { color: value => palette.text(value) }, {
-      preserveOrderedListMarkers: true,
-      preserveBackslashEscapes: true,
-    })
-    this.addChild(new FilledBlockComponent(body, palette))
+export class UserMessageComponent implements Component {
+  /** The pointer and body, already sanitized; wrapped per width at render. */
+  private readonly text: string
+  private readonly fill: Rgb
+  private cached: { width: number; rows: string[] } | undefined
+
+  /**
+   * @param text - The prompt as submitted.
+   * @param palette - Active role palette.
+   * @param scheme - Terminal color scheme, which picks the fill.
+   * @param _label - Unused role name; see the class note.
+   */
+  constructor(
+    text: string,
+    private readonly palette: Palette,
+    scheme: TerminalColorScheme = 'dark',
+    _label = 'You',
+  ) {
+    // The body carries no color of its own: upstream writes `color="text"`,
+    // which is the theme's default foreground — on a light terminal black, on a
+    // dark one white — and that is exactly what the fill above is chosen
+    // against. The pointer is the one recessed span.
+    this.text = `${palette.dim(PROMPT_POINTER)} ${palette.text(displayText(clipPrompt(text)))}`
+    this.fill = claudeSchemeColors(scheme).userMessageBg
+  }
+
+  invalidate(): void {
+    this.cached = undefined
+  }
+
+  render(width: number): string[] {
+    if (this.cached?.width === width) return this.cached.rows
+    // The block owns one column of padding on each side, so the text wraps to
+    // what is left; the pointer is part of the wrapped run, which is what puts
+    // a continuation row under the pointer rather than under the first word.
+    const inner = Math.max(1, width - 2)
+    const rows = wrapTextWithAnsi(this.text, inner).map(row => truncateToWidth(row, inner, '', true))
+    const painted = colorEnabled(this.palette)
+      ? rows.map(row => paintBg(this.fill, ` ${row} `))
+      : rows.map(row => stripTerminalSequences(` ${row}`).trimEnd())
+    this.cached = { width, rows: painted }
+    return painted
   }
 }
 
@@ -483,11 +553,11 @@ export class UserMessageComponent extends Container {
 const THINKING_TITLE = '∴ Thinking…'
 
 /**
- * Indent of a thinking body: the transcript's own one-column left margin plus
- * Claude Code's two (`<Box paddingLeft={2}>`), which also lands the body in the
+ * Indent of a thinking body: the transcript's own {@link GUTTER} plus Claude
+ * Code's two columns (`<Box paddingLeft={2}>`), which also lands the body in the
  * same column as an answer's text under its ` ● ` bullet.
  */
-const THINKING_INDENT = '   '
+const THINKING_INDENT = GUTTER_INDENT
 
 /**
  * Children of a settled assistant message: the optional thinking block then the
@@ -522,7 +592,7 @@ function assistantMessageChildren(
     // default style carries the dim tone, so the indent adds no second wrapper:
     // SGR has no color stack, and an inner span's close would drop it anyway.
     const document = new Markdown(reasoning, 0, 0, mdTheme, { color: value => palette.dim(value) })
-    children.push(new Text(palette.italic(palette.dim(` ${THINKING_TITLE}`)), 0, 0))
+    children.push(new Text(palette.italic(palette.dim(`${GUTTER}${THINKING_TITLE}`)), 0, 0))
     children.push(new Spacer(1))
     children.push(new PrefixedComponent(document, THINKING_INDENT, THINKING_INDENT))
   }
@@ -534,9 +604,43 @@ function assistantMessageChildren(
     // above stays a pi document under one recessed tone: its whole point is
     // that it is NOT typeset like an answer.
     const document = new MarkdownBodyComponent(text, palette, mdTheme, markdown)
-    children.push(new PrefixedComponent(document, ` ${accent(palette, CLAUDE_COLORS.claude, '●')} `, '   '))
+    children.push(new PrefixedComponent(
+      document,
+      `${GUTTER}${accent(palette, CLAUDE_COLORS.claude, '●')} `,
+      GUTTER_INDENT,
+    ))
   }
   return children
+}
+
+/**
+ * Claude Code's plan-mode badge (`PAUSE_ICON`, `constants/figures.ts:17`).
+ */
+const PLAN_MODE_ICON = '⏸'
+
+/**
+ * The one permanent sign that this session is in plan mode: the badge Claude
+ * Code keeps at the left of the row under its input frame
+ * (`PromptInputFooterLeftSide.tsx:348-355`), in the theme's plan tone.
+ *
+ * The mode reaches this terminal as a folded `plan/mode` event and nothing on
+ * screen consumed it, so a session could sit in plan mode with the transcript
+ * and the prompt looking exactly as they do outside it — the user found out
+ * when the agent declined to edit. Upstream's badge is the whole visual
+ * treatment, deliberately: the input border does NOT change color in plan mode
+ * (`PromptInput.tsx:2214-2235` routes only bash and teammate colors), so a
+ * colored frame here would be a signal the product does not have.
+ *
+ * Upstream's trailing `(shift+tab to cycle)` hint is not reproduced: plan mode
+ * is set by the harness through the session log, and this terminal binds no key
+ * that cycles permission modes. A hint naming a key that does nothing is worse
+ * than no hint.
+ * @param palette - Active role palette; decides whether the tone is emitted.
+ * @param scheme - Terminal color scheme, which picks the plan tone.
+ * @returns The badge row, ready to render above the prompt.
+ */
+export function planModeRow(palette: Palette, scheme: TerminalColorScheme = 'dark'): string {
+  return accent(palette, claudeSchemeColors(scheme).planMode, `${GUTTER}${PLAN_MODE_ICON} plan mode on`)
 }
 
 /**
@@ -623,7 +727,7 @@ export function turnFooterRow(
   palette: Palette,
   verb: string = turnCompletionVerb(),
 ): string {
-  return palette.dim(` ${TURN_GLYPH} ${verb} for ${formatTurnDuration(durationMs)}`)
+  return palette.dim(`${GUTTER}${TURN_GLYPH} ${verb} for ${formatTurnDuration(durationMs)}`)
 }
 
 /**
@@ -848,12 +952,16 @@ export class StreamingAssistantComponent extends Container {
 const TOOL_BULLET = process.platform === 'darwin' ? '⏺' : '●'
 
 /**
- * The lead-in of a tool card's result block: two columns of indent, Claude
- * Code's `⎿` result glyph, then two columns of gap. Continuation rows align
- * under the body with {@link RESULT_INDENT}, so a wrapped result reads as one
- * left-aligned block rather than as a tree.
+ * The lead-in of a tool card's result block: Claude Code's `⎿` result glyph
+ * under the card's own tool name, then two columns of gap. Continuation rows
+ * align under the body with {@link RESULT_INDENT}, so a wrapped result reads as
+ * one left-aligned block rather than as a tree.
+ *
+ * The glyph sits at {@link GUTTER_WIDTH} — the column the header's tool name
+ * starts in — which is where Claude Code's `MessageResponse` prefix puts it
+ * (`"  ⎿  "` against a bullet at column 0).
  */
-const RESULT_LEAD = '  ⎿  '
+const RESULT_LEAD = `${GUTTER_INDENT}⎿  `
 
 /** The continuation indent of a result block: {@link RESULT_LEAD}'s width in spaces. */
 const RESULT_INDENT = ' '.repeat(RESULT_LEAD.length)
@@ -1042,8 +1150,8 @@ export class ToolCardComponent extends CachedCardComponent {
     // The header is a single card row: collapse an embedded newline to an inline
     // escape so it cannot break onto extra rows and collide with the body below.
     const text = summary === undefined
-      ? `${bullet} ${name}`
-      : `${bullet} ${name}${this.palette.dim(`(${displayInlineText(summary)})`)}`
+      ? `${GUTTER}${bullet} ${name}`
+      : `${GUTTER}${bullet} ${name}${this.palette.dim(`(${displayInlineText(summary)})`)}`
     return truncateToWidth(text, Math.max(1, width - 2), '')
   }
 

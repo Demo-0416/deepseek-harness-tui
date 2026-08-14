@@ -135,6 +135,7 @@ import {
   type MarkdownPolicy,
   type ToolCardVisibility,
   HeaderComponent,
+  planModeRow,
   TodoComponent,
 } from './components/transcript.ts'
 import { claudeMarkdownTheme } from './render/markdown.ts'
@@ -579,6 +580,12 @@ export function createTuiChat(
   const chat = new Container()
   const todoContainer = new Container()
   const questionContainer = new Container()
+  /**
+   * Holds the plan-mode badge while the session is in plan mode, and nothing at
+   * all otherwise — an empty container costs no row, which is what keeps the
+   * prompt in the same place in the ordinary case.
+   */
+  const planContainer = new Container()
   const inputTemplate = parseTuiPromptTemplate(displayInlineText(resolved.theme.inputPrompt))
   const renderInputPrompt = (): string => renderTuiPromptTemplate(inputTemplate, valueName => ctx.tuiPrompt.get(valueName))
   // pi-tui 0.84.1 dropped the editor's own prompt slot (`EditorOptions.prompt`
@@ -733,11 +740,32 @@ export function createTuiChat(
       ctx.logger.warn(
         `dsh-tui: claude markdown renderer failed; falling back to pi for this process: ${errorChain(error)}`,
       )
+      // The log is where the stack belongs, but the screen is where the change
+      // is: every answer from here on is typeset by a different renderer, and
+      // the only sign of it used to be that the transcript's styling quietly
+      // changed shape mid-session. One row says what happened, once — the
+      // policy invokes this at most once per process.
+      //
+      // Deferred to the microtask queue because the throw that demoted the
+      // renderer happened *inside* a render pass: appending a row there would
+      // mutate the container the frame is walking. By the time this runs the
+      // stack has unwound and the append is an ordinary one.
+      queueMicrotask(() => {
+        if (disposed) return
+        appendNotice('Markdown rendering degraded; using the fallback renderer for the rest of this session.', 'warning')
+      })
     },
   }
+  /**
+   * The color scheme the terminal last reported, and the one every fill on
+   * screen is chosen against. Declared here rather than beside
+   * `applyColorScheme` because the reconciler reads it per mount.
+   */
+  let currentScheme: TerminalColorScheme = 'dark'
   const transcript = new TranscriptReconciler(chat, {
     palette,
     mdTheme,
+    scheme: () => currentScheme,
     markdown,
     maxToolOutputLines: resolved.maxToolOutputLines,
     maxDiffEditLength: resolved.maxDiffEditLength,
@@ -901,9 +929,22 @@ export function createTuiChat(
   todoContainer.addChild(todo)
   ui.addChild(todoContainer)
   ui.addChild(statusLine)
+  ui.addChild(planContainer)
   ui.addChild(promptContext)
-  ui.addChild(questionContainer)
   ui.addChild(editor)
+  // The inline surfaces (a question, an approval, `/model`, a panel) open BELOW
+  // the input, not above it. Claude Code renders them in the slot the prompt
+  // itself occupies — a local-JSX command hides the input entirely and takes
+  // its place (`processSlashCommand.tsx:632` sets `shouldHidePromptInput`,
+  // `REPL.tsx:4894` drops the input for it and for any focused dialog) — so the
+  // echoed `❯ /model` stays in the transcript and the picker appears under the
+  // line the user typed it on. Mounting them above the editor put every panel
+  // between the conversation and the prompt, which read as if the panel were
+  // part of the transcript and pushed the input down the screen. The editor
+  // stays mounted rather than being hidden: it is what the terminal's cursor
+  // and the `esc` handling live on, and a reachable prompt under an inline
+  // dialog is a smaller deviation than a prompt that disappears.
+  ui.addChild(questionContainer)
   ui.setFocus(editor)
   const updateTerminalTitle = (): void => {
     runtime.terminal.setTitle(displayText(
@@ -960,8 +1001,13 @@ export function createTuiChat(
    * as a folded notice node; this is only for what the log never sees.
    */
   const appendNotice = (message: string, kind: 'info' | 'warning' | 'error' = 'info'): void => {
-    const color = kind === 'error' ? palette.error : kind === 'warning' ? palette.warning : palette.dim
-    transcript.appendLocal(new Spacer(1), new Text(color(displayText(message)), 0, 0))
+    // Built on demand, not once: the reconciler re-runs this when the palette
+    // changes, so the row has to pick up the tone that is current then rather
+    // than the escapes of the palette it was first written under.
+    transcript.appendLocal(() => {
+      const color = kind === 'error' ? palette.error : kind === 'warning' ? palette.warning : palette.dim
+      return [new Spacer(1), new Text(color(displayText(message)), 0, 0)]
+    })
     requestRender()
   }
 
@@ -1250,13 +1296,27 @@ export function createTuiChat(
   }
 
   /**
+   * Mount or drop the plan-mode badge for the folded mode.
+   *
+   * Rebuilt rather than toggled so the row is painted with whatever palette and
+   * scheme are current — a color-scheme change goes through here on the same
+   * snapshot every other row is remounted from.
+   * @param active - Whether the session is in plan mode.
+   */
+  const applyPlanMode = (active: boolean): void => {
+    planContainer.clear()
+    if (active) planContainer.addChild(new Text(planModeRow(palette, currentScheme), 0, 0))
+  }
+
+  /**
    * Apply one published snapshot: the reconciler re-places the transcript, the
-   * plan strip and header read the session aggregates. This is the whole
-   * event-to-screen path — nothing else writes chat rows.
+   * plan strip, the plan-mode badge and header read the session aggregates.
+   * This is the whole event-to-screen path — nothing else writes chat rows.
    */
   const applySnapshot = (snapshot: SessionSnapshot): void => {
     transcript.reconcile(snapshot.nodes)
     todo.update(snapshot.todos ?? [])
+    applyPlanMode(snapshot.planMode)
     if (snapshot.title !== sessionTitle) {
       sessionTitle = snapshot.title
       header.invalidate()
@@ -1521,7 +1581,6 @@ export function createTuiChat(
     setStatus(agent.status)
     requestRender()
   }
-  let currentScheme: TerminalColorScheme = 'dark'
 
   // Apply any color scheme the terminal reports. Registering before the query
   // below means even a synchronous reply reaches `applyColorScheme`; in practice
@@ -1657,7 +1716,7 @@ export function createTuiChat(
   // and details surfaces use; opening another replaces it.
   let panelOverlay: TuiOverlaySession | undefined
   /**
-   * Show one page of pre-rendered lines over the editor.
+   * Show one page of pre-rendered lines under the editor, in the inline slot.
    *
    * These commands answer a question about the session — its status, its
    * palette, its keys — rather than adding to the conversation, so their output

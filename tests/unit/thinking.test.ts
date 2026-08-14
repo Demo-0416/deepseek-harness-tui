@@ -96,6 +96,7 @@ function mount(
   const deps: TranscriptDeps = {
     palette,
     mdTheme: markdownTheme(palette),
+    scheme: () => 'dark',
     markdown,
     maxToolOutputLines: 6,
     maxDiffEditLength: 2_000,
