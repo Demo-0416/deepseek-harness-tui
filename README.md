@@ -61,6 +61,7 @@ all three.
 | `?` | shortcut help, on an empty prompt; never typed into the draft |
 | Ctrl+R | search the prompt history backwards |
 | Ctrl+G | search this session's messages; Ctrl+F stays the editor's forward-char |
+| Shift+Tab | cycle mode: normal → auto-accept → plan → normal. `normal` and `auto-accept` are the `workspace-write` and `auto-accept` permission presets (same sandbox, approval asked or not); `plan` is plan mode, which the cycle enters on `workspace-write`. `danger-full-access` is not a rung — it is reached with `/permission`, and a session already on it keeps it while the key moves plan mode alone |
 | Ctrl+N | expand or collapse the plan; Ctrl+Y stays the editor's kill-ring paste |
 | Ctrl+O | cycle tool cards: preview, full, hidden |
 | Ctrl+T | show or hide thinking blocks — off, thinking streams and goes with the step that wrote it; on, every step keeps it, history included. The model reasons either way; `showReasoning: false` turns the key off with it |
@@ -265,10 +266,10 @@ is currently unavailable is dropped with it.
 
 Bindings other than Ctrl+C are configurable: set `keybindings` on the bundle row
 (`{ "app.history.search": "alt+r" }`), keyed by action id and valued with one
-pi-tui key id or several. This bundle's ids are `app.tools.cycle`,
-`app.history.search`, `app.transcript.search`, `app.todos.toggle`,
-`app.thinking.toggle`, `app.message.copy`, `app.screen.redraw`, `app.cancel`,
-and `app.exit`; pi-tui's own editor bindings
+pi-tui key id or several. This bundle's ids are `app.mode.cycle`,
+`app.tools.cycle`, `app.history.search`, `app.transcript.search`,
+`app.todos.toggle`, `app.thinking.toggle`, `app.message.copy`,
+`app.screen.redraw`, `app.cancel`, and `app.exit`; pi-tui's own editor bindings
 can be moved the same way. Shift+Ctrl+D reports what each of those ids resolved
 to, any key two actions both claim, and any key an `app.*` action takes off
 pi-tui's editor — which is the first thing to suspect when a key "does nothing".
@@ -278,6 +279,21 @@ binding is answered before the editor sees the key: search is Ctrl+G rather than
 Ctrl+F (pi-tui's `tui.editor.cursorRight`), and the plan toggle is Ctrl+N rather
 than Ctrl+Y (pi-tui's `tui.editor.yank`). Rebinding either onto the editor's key
 takes the editor's habit away for good.
+
+Shift+Tab is safe to take for the mode cycle for the same reason: pi-tui binds
+`tab` and nothing else in that family, and its editor recognises no Shift+Tab of
+its own. The `/model` picker's Shift+Tab (step the reasoning effort) is a
+different scope and keeps working — while any overlay owns the screen the app's
+listener returns before its first branch, so the dialog sees the key first.
+
+The cycle itself writes nothing of its own: `normal` and `auto-accept` are
+selected through `ctx.permissionPresets` (the `auto-accept` entry is added to
+the table by this bundle's `cordis.patch.yml`) and plan mode through
+`ctx.planMode`, so `/permission`, `/plan`, a resumed log, and the key all report
+the same state. A mode that is on says so above the prompt — `⏸ plan mode on`,
+`⏵⏵ auto-accept on` — with the key that cycles it named beside the badge. A
+deployment that composes no preset table, or no plan mode, keeps the rungs it
+has: the key cycles what is mounted.
 
 ## Development
 

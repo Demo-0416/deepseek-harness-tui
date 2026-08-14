@@ -60,6 +60,7 @@ import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import {
   SessionId,
   type Session,
+  type SessionEvent,
   type SessionHeader,
   type UserMessage,
 } from '@deepseek-ai/dsh-session'
@@ -148,6 +149,7 @@ import {
   type HeaderInfo,
   type MarkdownPolicy,
   type ToolCardVisibility,
+  autoAcceptRow,
   HeaderComponent,
   planModeRow,
   TodoComponent,
@@ -254,9 +256,23 @@ import {
   whenIdleOrTimeout,
 } from './chat/lifecycle.ts'
 import type { TuiStartupValues } from './startup.ts'
-import { commandDescription, currentLocale, localeName, onLocaleChange, setLocale, t } from './i18n/index.ts'
+import {
+  commandDescription,
+  currentLocale,
+  localeName,
+  onLocaleChange,
+  setLocale,
+  t,
+  type MessageKey,
+} from './i18n/index.ts'
 import { resolveLocaleStore } from './i18n/persistence.ts'
 import { runLangCommand } from './chat/lang-command.ts'
+import {
+  AUTO_ACCEPT_PRESET,
+  nextMode,
+  type ModeAxes,
+  type SessionMode,
+} from './chat/modes.ts'
 
 export { TuiPromptService } from './prompt.ts'
 export { renderSkillInvocation } from './chat/skill-invocation.ts'
@@ -483,6 +499,7 @@ function keyboardShortcuts(manager: KeybindingsManager): string[] {
     // Split off the copy/redraw half when Ctrl+T joined this row: one line
     // naming four keys wrapped at 96 columns, which is where `?` renders.
     t('hotkeys.cards', { cycle: key('app.tools.cycle'), thinking: key('app.thinking.toggle') }),
+    t('hotkeys.modes', { mode: key('app.mode.cycle') }),
     t('hotkeys.copy', {
       todos: key('app.todos.toggle'),
       copy: key('app.message.copy'),
@@ -551,6 +568,56 @@ function approvalPreset(ctx: Context, session: Session): string | undefined {
   const override = typeof service.overrideOf === 'function' ? service.overrideOf(session) : undefined
   const preset = typeof override === 'string' ? override : service.config?.policy
   return typeof preset === 'string' && preset !== '' ? preset : undefined
+}
+
+/**
+ * The events a permission switch writes: the recorded selection and the two
+ * knobs it bundles.
+ *
+ * Matched as strings rather than as event-map members because this bundle does
+ * not depend on the packages that declare them (`dsh-permission-presets`,
+ * `dsh-sandbox-policy`) — the same reason the service itself is read through
+ * `ctx.get`. A deployment without them simply never emits these.
+ */
+const PERMISSION_EVENTS: ReadonlySet<string> = new Set([
+  'permission/preset',
+  'approval/policy',
+  'sandbox/mode',
+])
+
+/**
+ * The permission-preset service as the mode cycle uses it.
+ *
+ * Optional and untyped for the same reason `approval` is: this bundle does not
+ * depend on `@deepseek-ai/dsh-permission-presets` (a deployment may compose no
+ * preset table at all), so the service is read through the non-throwing
+ * accessor and every member is checked before it is called. The three members
+ * are the whole write path the README documents — the table, the derived
+ * current selection, and the switch — with `custom` arriving from `current()`
+ * as an ordinary name the cycle simply does not own.
+ */
+interface PermissionPresetSeam {
+  /** Every switchable preset name, in table order. */
+  names?: readonly string[]
+  /** The preset the session's folded knobs compose to, or `custom`. */
+  current?: (events: readonly SessionEvent[]) => unknown
+  /** Record the selection and write whichever knobs it changes. */
+  set?: (session: Session, name: string) => void
+}
+
+/**
+ * The plan-mode service as the mode cycle uses it.
+ *
+ * `get` separates the logged state from a selection queued for the next step,
+ * and `set` reports which of the two it did — both facts the cycle needs, since
+ * a press during an open turn queues rather than commits and the next press
+ * must start from the queued value rather than repeat the transition.
+ */
+interface PlanModeSeam {
+  /** The logged state, plus a selection awaiting the next accepted pre-step. */
+  get?: (agent: Agent) => { active?: unknown; pending?: unknown } | undefined
+  /** Select plan mode; reports `committed`, `queued`, `cancelled`, or `noop`. */
+  set?: (agent: Agent, active: boolean) => unknown
 }
 
 /**
@@ -671,11 +738,15 @@ export function createTuiChat(
   const todoContainer = new Container()
   const questionContainer = new Container()
   /**
-   * Holds the plan-mode badge while the session is in plan mode, and nothing at
-   * all otherwise — an empty container costs no row, which is what keeps the
-   * prompt in the same place in the ordinary case.
+   * Holds the mode badges — plan mode, auto-accept — while either is on, and
+   * nothing at all otherwise: an empty container costs no row, which is what
+   * keeps the prompt in the same place in the ordinary case.
+   *
+   * Both can be on at once. The Shift+Tab cycle never leaves them that way, but
+   * `/permission auto-accept` and `/plan` are independent commands and the badge
+   * strip reports what is true rather than what one key produces.
    */
-  const planContainer = new Container()
+  const modeContainer = new Container()
   const inputTemplate = parseTuiPromptTemplate(displayInlineText(resolved.theme.inputPrompt))
   const renderInputPrompt = (): string => renderTuiPromptTemplate(inputTemplate, valueName => ctx.tuiPrompt.get(valueName))
   // pi-tui 0.84.1 dropped the editor's own prompt slot (`EditorOptions.prompt`
@@ -1098,7 +1169,7 @@ export function createTuiChat(
   todoContainer.addChild(todo)
   ui.addChild(todoContainer)
   ui.addChild(statusLine)
-  ui.addChild(planContainer)
+  ui.addChild(modeContainer)
   ui.addChild(promptContext)
   ui.addChild(editor)
   // The inline surfaces (a question, an approval, `/model`, a panel) open BELOW
@@ -1477,28 +1548,157 @@ export function createTuiChat(
     renderStatus()
   }
 
+  /** Plan mode as the last published snapshot folded it out of the session log. */
+  let loggedPlanMode = false
+
   /**
-   * Mount or drop the plan-mode badge for the folded mode.
+   * The permission preset table and switch, when a deployment composes one.
    *
-   * Rebuilt rather than toggled so the row is painted with whatever palette and
-   * scheme are current — a color-scheme change goes through here on the same
-   * snapshot every other row is remounted from.
-   * @param active - Whether the session is in plan mode.
+   * Resolved per call, not captured: `ctx.get` is a store lookup, and a service
+   * that arrived or left through an HMR reload has to be seen by the next press
+   * rather than by the next process.
+   * @returns the service, or `undefined` when no preset table is mounted.
    */
-  const applyPlanMode = (active: boolean): void => {
-    planContainer.clear()
-    if (active) planContainer.addChild(new Text(planModeRow(palette, appearance.scheme), 0, 0))
+  const permissionPresets = (): PermissionPresetSeam | undefined =>
+    ctx.get('permissionPresets') as PermissionPresetSeam | undefined
+
+  /**
+   * The plan-mode service for THIS agent.
+   *
+   * Addressed through the preset roster first, for the same reason the skill
+   * registry is: a preset composition mounts plan mode behind an `isolate`
+   * realm (the shipped `standard` preset declares `isolate: { planMode: true }`),
+   * which is invisible to a host context. The host lookup is the fallback for a
+   * profile that mounts plan mode on the host plane instead.
+   * @returns the service serving this agent now, or `undefined` when none is mounted.
+   */
+  const planModeService = (): PlanModeSeam | undefined => (typeof presetRoster?.serviceFor === 'function'
+    ? presetRoster.serviceFor(agent, 'planMode') as PlanModeSeam | undefined
+    : undefined) ?? ctx.get('planMode') as PlanModeSeam | undefined
+
+  /**
+   * Both axes as the services report them right now.
+   *
+   * Nothing here is remembered between calls — that is the whole point. The
+   * permission axis is the service's own derivation over the session log, and
+   * the plan axis is the logged fold widened by a queued selection, so a cycle
+   * driven mid-turn advances instead of repeating its last transition.
+   * @returns the axes {@link nextMode} decides from.
+   */
+  const modeAxes = (): ModeAxes => {
+    const presets = permissionPresets()
+    const plan = planModeService()
+    const preset = typeof presets?.current === 'function' ? presets.current(agent.session.events) : undefined
+    const state = typeof plan?.get === 'function' ? plan.get(agent) : undefined
+    return {
+      // The service's own answer wins while it is mounted — a queued selection
+      // over the logged one, so a press during an open turn moves the badge and
+      // the next press starts from where this one left it. The snapshot's fold
+      // is the fallback for a deployment that mounts no plan mode at all, where
+      // the log can still carry the state a resumed session was left in.
+      planActive: typeof state?.pending === 'boolean' ? state.pending
+        : typeof state?.active === 'boolean' ? state.active
+          : loggedPlanMode,
+      planAvailable: typeof plan?.set === 'function',
+      preset: typeof preset === 'string' && preset !== '' ? preset : undefined,
+      presets: Array.isArray(presets?.names) ? presets.names : [],
+    }
+  }
+
+  /**
+   * The hint the badges carry, naming whichever key the action resolved to.
+   * @returns the parenthesised hint, or `undefined` when a deployment unbound
+   * the action — a hint pointing at nothing is worse than no hint.
+   */
+  const modeCycleHint = (): string | undefined => {
+    const keys = keybindings.getKeys('app.mode.cycle')
+    return keys.length === 0 ? undefined : t('transcript.modeCycleHint', { key: keyLabel(keybindings, 'app.mode.cycle') })
+  }
+
+  /** The flash each reached mode reports itself with. */
+  const MODE_FLASH: Readonly<Record<SessionMode, MessageKey>> = {
+    normal: 'status.flash.modeNormal',
+    'auto-accept': 'status.flash.modeAutoAccept',
+    plan: 'status.flash.modePlan',
+    // Reached by leaving plan mode on a preset the cycle does not own
+    // (`danger-full-access`, `read-only`, a derived `custom`): the plan axis is
+    // what moved, and the message says exactly that rather than naming a mode.
+    other: 'status.flash.modePlanOff',
+  }
+
+  /**
+   * Advance the composed mode one rung (Shift+Tab).
+   *
+   * The two writes are the services' own: `permissionPresets.set` records the
+   * selection and moves whichever knob changed, `planMode.set` appends or queues
+   * `plan/mode`. Nothing is written here, so `/permission`, `/plan`, a resumed
+   * log, and this key all end up saying the same thing.
+   *
+   * The permission switch is deliberately the log-only `set(session, name)`
+   * rather than the `/permission` command's live path: the difference is one
+   * injected "the approval policy changed" user message aimed at the model, and
+   * the model already reads the policy from its own prompt section on every
+   * request. What the user needs to see is the badge, which this repaints.
+   */
+  const cycleMode = (): void => {
+    const next = nextMode(modeAxes())
+    if (next === undefined) {
+      flashStatus(t('status.flash.modeUnavailable'))
+      return
+    }
+    let queued = false
+    try {
+      if (next.preset !== undefined) permissionPresets()?.set?.(agent.session, next.preset)
+      if (next.plan !== undefined) queued = planModeService()?.set?.(agent, next.plan) === 'queued'
+    } catch (error) {
+      // A throwing switch leaves the axes wherever it got to; the badges are
+      // rebuilt from the services below, so the screen reports the real state
+      // rather than the one the press aimed at.
+      appendNotice(t('status.flash.modeFailed', { error: errorChain(error) }), 'error')
+      applyModeBadges()
+      requestRender()
+      return
+    }
+    applyModeBadges()
+    requestRender()
+    flashStatus(t(queued && next.mode === 'plan' ? 'status.flash.modePlanQueued' : MODE_FLASH[next.mode]))
+  }
+
+  /**
+   * Mount or drop the mode badges for the axes as they stand now.
+   *
+   * Rebuilt rather than toggled so the rows are painted with whatever palette
+   * and scheme are current — a color-scheme change goes through here on the same
+   * snapshot every other row is remounted from.
+   *
+   * The plan axis comes from the fold ({@link loggedPlanMode}) widened by any
+   * selection queued for the next step: pressing the key mid-turn has to move
+   * the badge, or the key reads as broken. The permission axis is re-derived
+   * from the service on every call rather than mirrored, because `/permission`,
+   * a resumed log, and another client all move it without this terminal being
+   * the one that asked.
+   */
+  const applyModeBadges = (): void => {
+    modeContainer.clear()
+    const axes = modeAxes()
+    if (axes.planActive) {
+      modeContainer.addChild(new Text(planModeRow(palette, appearance.scheme, modeCycleHint()), 0, 0))
+    }
+    if (axes.preset === AUTO_ACCEPT_PRESET) {
+      modeContainer.addChild(new Text(autoAcceptRow(palette, appearance.scheme, modeCycleHint()), 0, 0))
+    }
   }
 
   /**
    * Apply one published snapshot: the reconciler re-places the transcript, the
-   * plan strip, the plan-mode badge and header read the session aggregates.
+   * plan strip, the mode badges and header read the session aggregates.
    * This is the whole event-to-screen path — nothing else writes chat rows.
    */
   const applySnapshot = (snapshot: SessionSnapshot): void => {
     transcript.reconcile(snapshot.nodes)
     todo.update(snapshot.todos ?? [])
-    applyPlanMode(snapshot.planMode)
+    loggedPlanMode = snapshot.planMode
+    applyModeBadges()
     if (snapshot.title !== sessionTitle) {
       sessionTitle = snapshot.title
       header.invalidate()
@@ -2410,7 +2610,13 @@ export function createTuiChat(
     // What every tool call in this session is decided under. Present only when
     // a permission service reports it, so a deployment without one says nothing
     // rather than implying a policy it does not enforce.
-    const preset = approvalPreset(ctx, agent.session)
+    //
+    // The preset table's own name comes first when a table is mounted: it is
+    // the vocabulary `/permission`, the mode badge, and Shift+Tab all speak, and
+    // a row that answered `never` while the badge said `auto-accept` would make
+    // the user look for a second switch. The bare approval policy is the answer
+    // for a deployment that composes the approval seam and no preset table.
+    const preset = modeAxes().preset ?? approvalPreset(ctx, agent.session)
     // Which composition this session's tools, prompt sections, and skills come
     // from. Present only when the deployment composes a roster, for the same
     // reason the Permission row is: naming a preset in a profile that mounts
@@ -3430,6 +3636,13 @@ export function createTuiChat(
     // key's events so they never reach the editor. Terminals without the
     // protocol send press only, so this changes nothing for them.
     const press = !isKeyRelease(data) && !isKeyRepeat(data)
+    // Shift+Tab reaches this branch only in the main input state: an open
+    // overlay returned above, which is what leaves the `/model` picker's own
+    // Shift+Tab (step the reasoning effort) to the dialog that binds it.
+    if (keybindings.matches(data, 'app.mode.cycle')) {
+      if (press) cycleMode()
+      return { consume: true }
+    }
     if (keybindings.matches(data, 'app.tools.cycle')) {
       if (press) toggleTools()
       return { consume: true }
@@ -3554,6 +3767,13 @@ export function createTuiChat(
     // move, not when the agent is pointed at a different registry, so the
     // scan that fills `/skill:` completion and the banner is re-run here.
     if (event.type === 'agent-preset/selected' && skillsAvailable) refreshSkillCommands()
+    // The permission axis writes no node and no snapshot aggregate, so the
+    // store publishes nothing for it and the badge strip would keep whatever
+    // the last transcript change left there. These three events are the whole
+    // vocabulary a preset switch speaks — the selection and the two knobs — and
+    // they arrive from `/permission` and another client as readily as from the
+    // key, which is why the badges are rebuilt here rather than by the caller.
+    if (PERMISSION_EVENTS.has(event.type)) applyModeBadges()
     // `foldGoal` rejects a malformed change loudly, and this listener runs on
     // the shared event bus: a throw here would take every other subscriber's
     // notification with it, so a rejected refold keeps the last good goal.

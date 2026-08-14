@@ -87,6 +87,46 @@
     # the schema default (native). The designed path is the `code` preset.
     mode: !!js process.env.DSH_TOOLS_MODE
 
+# The permission preset table, with the one entry Shift+Tab needs: `auto-accept`
+# is the workspace sandbox with the approval policy set to `never`, which is what
+# Claude Code's "accept edits" mode is made of. `@deepseek-ai/dsh-permission-presets`
+# fixes its table for the plugin's lifetime, so a named preset can only be added
+# here, in the composition.
+#
+# Restated whole because a patch REPLACES a config key rather than merging into
+# it (`applyEntryPatches`: `target[key] = value`) — the other three rows are the
+# base bundle's own table, copied so this file is the whole truth about what
+# `/permission` offers a terminal session. Order matters to the service: with no
+# recorded selection it names the FIRST entry whose sandbox and approval both
+# match, and the four bundles here are pairwise distinct, so the ambiguity never
+# arises.
+#
+# `danger-full-access` stays in the table and out of the Shift+Tab cycle: a
+# preset that turns the sandbox off is worth typing `/permission` for.
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+        name: read-only
+        description: Read the workspace; every write or command asks first.
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+        name: workspace-write
+        description: Write inside the workspace and permitted temporary directories; wider retries require approval.
+      auto-accept:
+        sandbox: workspace-write
+        approval: never
+        name: auto-accept
+        description: Same workspace sandbox, but tool calls inside it run without asking.
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+        name: danger-full-access
+        description: Full file access without approval prompts.
+
 # ── the agent plane moves behind agent presets (web-app parity) ─────────────
 #
 # Every row below composes what ONE agent contributes to the host registries:

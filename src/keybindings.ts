@@ -26,6 +26,7 @@ import {
 
 /** The actions this terminal binds, merged into pi-tui's global registry. */
 export interface AppKeybindings {
+  'app.mode.cycle': true
   'app.tools.cycle': true
   'app.history.search': true
   'app.transcript.search': true
@@ -51,6 +52,16 @@ export type AppKeybinding = keyof AppKeybindings
  * whichever key is bound, so a rebound key never leaves the help lying.
  */
 export const APP_KEYBINDINGS = {
+  // The one key Claude Code users reach for without reading anything, and the
+  // reason it is safe to take: pi-tui binds `tab` (`tui.input.tab`) and nothing
+  // else in the Tab family — `shift+tab` appears in its key parser and in no
+  // binding, and its editor recognises no Shift+Tab of its own (the hardcoded
+  // shift keys are `shift+backspace`, `shift+delete`, `shift+space`,
+  // `shift+enter`). So this binding shadows no editor action; `keybindingCollisions`
+  // reports it if that ever changes. The `/model` picker's own Shift+Tab (step
+  // the reasoning effort) is untouched, because it is read inside the dialog and
+  // the app's listener returns before its first branch while an overlay is open.
+  'app.mode.cycle': { defaultKeys: 'shift+tab', description: 'Cycle mode: normal, auto-accept, plan' },
   'app.tools.cycle': { defaultKeys: 'ctrl+o', description: 'Cycle tool cards: preview, full, hidden' },
   'app.history.search': { defaultKeys: 'ctrl+r', description: 'Search prompt history backwards' },
   // Not Ctrl+F, the key a reader expects for "find": pi-tui binds it as the
