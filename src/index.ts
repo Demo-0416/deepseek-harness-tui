@@ -929,6 +929,7 @@ export function createTuiChat(
     tracker: stepTimingTracker,
     now,
     toolDefinition: name => ctx.tools.get(name, agent),
+    cwd,
   }, { showReasoning: reasoningEnabled, visibility: toolsVisibility, thinkingPinned })
 
   let sessionTitle = store.getSnapshot().title

@@ -88,7 +88,7 @@ function appendToolStep(session: Session, id: string, command: string, output: s
 
 /** Settle the open step and land one tool card under it, closing the step. */
 function appendToolTail(session: Session, position: { turn: number; step: number }, callId: CallId): void {
-  const args = JSON.stringify({ command: 'ls' })
+  const args = JSON.stringify({ command: 'npm test' })
   appendAssistant(session, [
     { type: 'text', text: 'answering' },
     { type: 'tool-call', id: callId, name: 'bash', arguments: args },
@@ -103,10 +103,10 @@ function appendToolTail(session: Session, position: { turn: number; step: number
 
 describe('Ctrl+O phase notice', () => {
   it('names what each phase leaves on screen, and claims context only where it renders', () => {
-    // The collapsed phase no longer shows context cards, so the sentence it
-    // flashes cannot keep saying it does; the other two already matched what
-    // the reconciler does with each kind of card.
-    assert.equal(cardPhaseNotice('collapsed'), 'Tool cards collapsed; context hidden.')
+    // The collapsed phase no longer shows context cards, and it reports a run
+    // of reads as one row, so the sentence it flashes names both; the other two
+    // already matched what the reconciler does with each kind of card.
+    assert.equal(cardPhaseNotice('collapsed'), 'Tool cards collapsed; reads grouped, context hidden.')
     assert.equal(cardPhaseNotice('expanded'), 'Tool and context cards expanded.')
     assert.equal(cardPhaseNotice('hidden'), 'Tool cards hidden.')
   })
@@ -178,12 +178,12 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
     const harness = await mount()
     try {
       appendUser(harness.session, 'list the files')
-      appendToolStep(harness.session, 'call-1', 'ls', 'README.md')
+      appendToolStep(harness.session, 'call-1', 'npm test', 'README.md')
       await delay(SETTLE_MS)
 
       const rows = harness.terminal.text().split('\n').map(row => row.trimEnd())
       const prompt = rows.findIndex(row => row.includes('list the files'))
-      const answer = rows.findIndex(row => row.includes('Running ls'))
+      const answer = rows.findIndex(row => row.includes('Running npm test'))
       const card = rows.findIndex(row => row.includes('bash'))
       const output = rows.findIndex(row => row.includes('README.md'))
       assert.ok(prompt >= 0 && answer > prompt, `prompt then answer expected:\n${rows.join('\n')}`)
@@ -323,7 +323,7 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
     const harness = await mount()
     try {
       appendUser(harness.session, 'list the files')
-      appendToolStep(harness.session, 'call-2', 'ls', 'README.md')
+      appendToolStep(harness.session, 'call-2', 'npm test', 'README.md')
       await delay(SETTLE_MS)
 
       // collapsed -> expanded -> hidden
@@ -336,7 +336,7 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       assert.ok(!hidden.includes('README.md'), `hidden drops the tool body:\n${hidden}`)
       // Hiding tool traffic keeps the conversation, which is the point of the phase.
       assert.ok(hidden.includes('list the files'), `hidden keeps the prompt:\n${hidden}`)
-      assert.ok(hidden.includes('Running ls'), `hidden keeps the answer:\n${hidden}`)
+      assert.ok(hidden.includes('Running npm test'), `hidden keeps the answer:\n${hidden}`)
 
       harness.terminal.send('\x0f')
       await delay(SETTLE_MS)
@@ -544,7 +544,7 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
     const harness = await mount()
     try {
       appendUser(harness.session, 'list the files')
-      appendToolStep(harness.session, 'call-kitty', 'ls', 'README.md')
+      appendToolStep(harness.session, 'call-kitty', 'npm test', 'README.md')
       await delay(SETTLE_MS)
       const before = harness.terminal.text()
 
@@ -584,7 +584,7 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
     const harness = await mount()
     try {
       appendUser(harness.session, 'list the files')
-      appendToolStep(harness.session, 'call-kitty', 'ls', 'README.md')
+      appendToolStep(harness.session, 'call-kitty', 'npm test', 'README.md')
       await delay(SETTLE_MS)
       // One sentence per phase, and it is the reconciler's — an entry point
       // holding its own copy is how the collapsed phase came to keep announcing

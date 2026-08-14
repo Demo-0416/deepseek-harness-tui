@@ -306,10 +306,40 @@ export const EN_MESSAGES = {
   'prompt.compacting': 'Context being compacted {duration}',
   'prompt.queued': '{count} queued',
 
+  // The one row a run of read-only calls collapses into. Each fragment is a
+  // whole clause rather than a verb and a noun the caller concatenates: word
+  // order and the shape of a count are exactly what a translation changes, and
+  // a table of parts would fix English's order for every locale. The `.one` /
+  // `.other` pair carries plural agreement in English and, for the MCP rows,
+  // the difference between naming a server and counting the calls to it —
+  // which is why the Chinese halves of those two differ where the rest match.
+  'collapse.search.active.one': 'searching for {count} pattern',
+  'collapse.search.active.other': 'searching for {count} patterns',
+  'collapse.search.settled.one': 'searched for {count} pattern',
+  'collapse.search.settled.other': 'searched for {count} patterns',
+  'collapse.read.active.one': 'reading {count} file',
+  'collapse.read.active.other': 'reading {count} files',
+  'collapse.read.settled.one': 'read {count} file',
+  'collapse.read.settled.other': 'read {count} files',
+  'collapse.list.active.one': 'listing {count} directory',
+  'collapse.list.active.other': 'listing {count} directories',
+  'collapse.list.settled.one': 'listed {count} directory',
+  'collapse.list.settled.other': 'listed {count} directories',
+  'collapse.mcp.active.one': 'querying {server}',
+  'collapse.mcp.active.other': 'querying {server} {count} times',
+  'collapse.mcp.settled.one': 'queried {server}',
+  'collapse.mcp.settled.other': 'queried {server} {count} times',
+  // How the clauses above are joined, and what closes a row still running.
+  // Chinese punctuates a list with its own full-width comma, so the separator
+  // is a translated row rather than a literal in the renderer.
+  'collapse.separator': ', ',
+  'collapse.ellipsis': '…',
+  'collapse.expandHint': '(ctrl+o to expand)',
+
   // Transient status-row confirmations.
   'status.flash.cardsHidden': 'Tool cards hidden.',
   'status.flash.cardsExpanded': 'Tool and context cards expanded.',
-  'status.flash.cardsCollapsed': 'Tool cards collapsed; context hidden.',
+  'status.flash.cardsCollapsed': 'Tool cards collapsed; reads grouped, context hidden.',
   // Ctrl+T. The refusal names `showReasoning` on purpose: it is the only thing
   // that can bring the blocks back, so a message that stayed vague would leave
   // the user pressing a key that will never answer.
@@ -616,9 +646,30 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'prompt.compacting': '正在压缩上下文 {duration}',
   'prompt.queued': '{count} 条排队中',
 
+  // 折叠行。中文没有单复数之分，所以 .one 与 .other 填同一句；只有 MCP 那两对
+  // 例外——它们的区别不是复数，而是「只报服务名」还是「连调用次数一起报」。
+  'collapse.search.active.one': '正在搜索 {count} 个 pattern',
+  'collapse.search.active.other': '正在搜索 {count} 个 pattern',
+  'collapse.search.settled.one': '搜索了 {count} 个 pattern',
+  'collapse.search.settled.other': '搜索了 {count} 个 pattern',
+  'collapse.read.active.one': '正在读取 {count} 个文件',
+  'collapse.read.active.other': '正在读取 {count} 个文件',
+  'collapse.read.settled.one': '读取了 {count} 个文件',
+  'collapse.read.settled.other': '读取了 {count} 个文件',
+  'collapse.list.active.one': '正在列出 {count} 个目录',
+  'collapse.list.active.other': '正在列出 {count} 个目录',
+  'collapse.list.settled.one': '列出了 {count} 个目录',
+  'collapse.list.settled.other': '列出了 {count} 个目录',
+  'collapse.mcp.active.one': '正在查询 {server}',
+  'collapse.mcp.active.other': '正在查询 {server} {count} 次',
+  'collapse.mcp.settled.one': '查询了 {server}',
+  'collapse.mcp.settled.other': '查询了 {server} {count} 次',
+  'collapse.separator': '，',
+  'collapse.expandHint': '(ctrl+o 展开)',
+
   'status.flash.cardsHidden': '已隐藏工具卡片。',
   'status.flash.cardsExpanded': '已展开工具与上下文卡片。',
-  'status.flash.cardsCollapsed': '工具卡片已收起，上下文已隐藏。',
+  'status.flash.cardsCollapsed': '工具卡片已收起，只读调用已归组，上下文已隐藏。',
   'status.flash.thinkingPinned': '思考块将一直留在屏幕上。',
   'status.flash.thinkingUnpinned': '思考块会在该步结束后隐藏。',
   'status.flash.thinkingDisabled': '当前配置关闭了思考块显示（showReasoning: false）。',

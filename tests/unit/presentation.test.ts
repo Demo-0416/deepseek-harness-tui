@@ -83,6 +83,7 @@ function mountReconciler(options: { palette?: Palette; scheme?: 'dark' | 'light'
     tracker: new StepTimingTracker(),
     now: () => START,
     toolDefinition: () => undefined,
+    cwd: '/workspace',
   }
   const chat = new Container()
   const reconciler = new TranscriptReconciler(chat, deps, { showReasoning: true, visibility: 'collapsed' })
@@ -108,7 +109,11 @@ function assistantNode(overrides: Partial<AssistantNode> = {}): AssistantNode {
   }
 }
 
-/** One complete tool call, with no result yet. */
+/**
+ * One complete tool call, with no result yet. The tool writes (`edit`) rather
+ * than reads on purpose: a read-only call is folded into a collapsed group row
+ * on this phase, and these cases are about the card itself.
+ */
 function toolNode(): ToolCallNode {
   return {
     kind: 'tool-call',
@@ -116,7 +121,7 @@ function toolNode(): ToolCallNode {
     version: 0,
     time: START,
     callId: 'call-1',
-    name: 'grep',
+    name: 'edit',
     argsRaw: '{}',
     args: { valid: true, value: {} },
     argsComplete: true,
@@ -167,12 +172,12 @@ describe('transcript gutter', () => {
       result: { content: [{ type: 'text', text: 'RESULT-ROW' }], isError: false, text: 'RESULT-ROW' },
     }])
     const rendered = rows()
-    const header = rendered.find(row => row.includes('grep'))
+    const header = rendered.find(row => row.includes('edit'))
     const result = rendered.find(row => row.includes('⎿'))
     assert.ok(header !== undefined && result !== undefined, `both rows render:\n${rendered.join('\n')}`)
     // Upstream's `MessageResponse` prefix lands the `⎿` in the column the tool
     // name starts in, so the card reads as one left-aligned block.
-    assert.equal(result.indexOf('⎿'), header.indexOf('grep'))
+    assert.equal(result.indexOf('⎿'), header.indexOf('edit'))
   })
 })
 

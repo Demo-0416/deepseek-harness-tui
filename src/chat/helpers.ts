@@ -177,6 +177,24 @@ export function formatCwd(cwd: string | undefined): string {
 }
 
 /**
+ * Shorten a file path the way Claude Code's `getDisplayPath` does: relative to
+ * the workspace when it is inside it, `~`-notated when it is under home, and
+ * otherwise left absolute. A row that names a file the user just read should
+ * read as the path they would type, not as the machine's copy of it.
+ * @param path - the path to shorten; a relative one is returned unchanged.
+ * @param cwd - operational working directory the path is shown against.
+ * @returns the display form of the path.
+ */
+export function displayPath(path: string, cwd: string): string {
+  if (!isAbsolute(path)) return path
+  const rel = relative(resolve(cwd), resolve(path))
+  if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) return rel
+  const home = homedir()
+  if (path.startsWith(home + sep)) return `~${path.slice(home.length)}`
+  return path
+}
+
+/**
  * Resolve the current Git branch for the prompt context line.
  * @param cwd - operational working directory to query.
  * @returns branch name, or `undefined` outside a worktree or on any failure.
