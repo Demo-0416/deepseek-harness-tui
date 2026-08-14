@@ -65,8 +65,8 @@ export interface TuiConfig {
   modelDialogWidth?: number
   /** Model-selector maximum height in terminal rows. */
   modelDialogMaxHeight?: number
-  /** Transcript-details selector width in terminal columns. */
-  detailsDialogWidth?: number
+  /** `/config` panel and `/theme` selector width in terminal columns. */
+  settingsDialogWidth?: number
   /** Maximum fuzzy file candidates displayed for one `@` query. */
   fileSearchMaxResults?: number
   /** Maximum paths retained in one `@` workspace index. */
@@ -107,7 +107,7 @@ const questionDialogWidthSchema = z.number().step(1).min(20).default(200)
 const questionDialogMaxHeightSchema = z.number().step(1).min(6).default(20)
 const modelDialogWidthSchema = z.number().step(1).min(20).default(76)
 const modelDialogMaxHeightSchema = z.number().step(1).min(6).default(20)
-const detailsDialogWidthSchema = z.number().step(1).min(20).default(72)
+const settingsDialogWidthSchema = z.number().step(1).min(20).default(72)
 const fileSearchMaxResultsSchema = z.number().step(1).min(1).default(DEFAULT_FILE_SEARCH_MAX_RESULTS)
 const fileSearchMaxEntriesSchema = z.number().step(1).min(1).default(DEFAULT_FILE_SEARCH_MAX_ENTRIES)
 const fileSearchExcludedDirectoriesSchema = z.array(z.string()).default([...DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES])
@@ -154,7 +154,7 @@ const tuiConfigSchemaFields = {
   questionDialogMaxHeight: questionDialogMaxHeightSchema,
   modelDialogWidth: modelDialogWidthSchema,
   modelDialogMaxHeight: modelDialogMaxHeightSchema,
-  detailsDialogWidth: detailsDialogWidthSchema,
+  settingsDialogWidth: settingsDialogWidthSchema,
   fileSearchMaxResults: fileSearchMaxResultsSchema,
   fileSearchMaxEntries: fileSearchMaxEntriesSchema,
   fileSearchExcludedDirectories: fileSearchExcludedDirectoriesSchema,
@@ -232,7 +232,7 @@ export const Config: z<Config> = z.object({
   questionDialogMaxHeight: tuiConfigSchemaFields.questionDialogMaxHeight,
   modelDialogWidth: tuiConfigSchemaFields.modelDialogWidth,
   modelDialogMaxHeight: tuiConfigSchemaFields.modelDialogMaxHeight,
-  detailsDialogWidth: tuiConfigSchemaFields.detailsDialogWidth,
+  settingsDialogWidth: tuiConfigSchemaFields.settingsDialogWidth,
   fileSearchMaxResults: tuiConfigSchemaFields.fileSearchMaxResults,
   fileSearchMaxEntries: tuiConfigSchemaFields.fileSearchMaxEntries,
   fileSearchExcludedDirectories: tuiConfigSchemaFields.fileSearchExcludedDirectories,
@@ -267,7 +267,7 @@ export interface ResolvedTuiConfig {
   questionDialogMaxHeight: number
   modelDialogWidth: number
   modelDialogMaxHeight: number
-  detailsDialogWidth: number
+  settingsDialogWidth: number
   fileSearchMaxResults: number
   fileSearchMaxEntries: number
   fileSearchExcludedDirectories: string[]
@@ -300,7 +300,7 @@ export function resolveTuiConfig(config: TuiConfig | undefined): ResolvedTuiConf
     questionDialogMaxHeight: config?.questionDialogMaxHeight ?? 20,
     modelDialogWidth: config?.modelDialogWidth ?? 76,
     modelDialogMaxHeight: config?.modelDialogMaxHeight ?? 20,
-    detailsDialogWidth: config?.detailsDialogWidth ?? 72,
+    settingsDialogWidth: config?.settingsDialogWidth ?? 72,
     fileSearchMaxResults: config?.fileSearchMaxResults ?? DEFAULT_FILE_SEARCH_MAX_RESULTS,
     fileSearchMaxEntries: config?.fileSearchMaxEntries ?? DEFAULT_FILE_SEARCH_MAX_ENTRIES,
     fileSearchExcludedDirectories: [...(config?.fileSearchExcludedDirectories ?? DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES)],

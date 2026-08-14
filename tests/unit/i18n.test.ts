@@ -329,4 +329,36 @@ describe('a mounted terminal answers /lang', { skip: skipWithoutEntry }, () => {
       await rm(home, { recursive: true, force: true })
     }
   })
+
+  it('renders the /config rows in the chosen language, Language row included', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-tui-home-'))
+    const previousHome = process.env['DSH_HOME']
+    process.env['DSH_HOME'] = home
+    const terminal = new HeadlessTerminal(120, 40)
+    const before = terminal.frames
+    const harness = await createTuiTestHarness(terminal, () => {}, {
+      config: { title: 'DSH i18n', welcome: 'ready.', theme: { color: false } },
+    })
+    await terminal.waitForFrame(before)
+    try {
+      await harness.ctx.commands.execute(harness.agent, '/lang zh', AbortSignal.timeout(5_000))
+      await delay(SETTLE_MS)
+      await harness.ctx.commands.execute(harness.agent, '/config', AbortSignal.timeout(5_000))
+      await delay(SETTLE_MS)
+      const frame = terminal.text().replace(/\s+/gu, ' ')
+      assert.match(frame, /思考块显示/u, `the panel is Chinese now:\n${frame}`)
+      assert.match(frame, /工具卡片默认形态/u)
+      // The row that only reports reads the live locale rather than a constant.
+      assert.match(frame, /界面语言 中文/u)
+      assert.match(frame, /esc 关闭/u)
+      terminal.send(ESC)
+      await delay(SETTLE_MS)
+    } finally {
+      await disposeTuiTestHarness(harness)
+      await terminal.dispose()
+      if (previousHome === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previousHome
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })

@@ -35,7 +35,8 @@ export const EN_MESSAGES = {
   'command.copy.description': 'Copy the last answer to the system clipboard',
   'command.new.description': 'Start a blank session in this workspace (this one stays resumable)',
   'command.clear.description': 'Clear the transcript view (session history is unchanged)',
-  'command.details.description': 'Select tool-card visibility and thinking blocks',
+  'command.config.description': 'Change this terminal\'s settings, saved for your next session',
+  'command.theme.description': 'Pick the palette this terminal paints with',
   'command.palette.description': 'Show every color and attribute role this terminal renders',
   'command.export.description': 'Write this session\'s log to a file and report the path',
   'command.plugins.description': 'Search and inspect the Loader\'s plugin entries',
@@ -218,16 +219,35 @@ export const EN_MESSAGES = {
   'dialog.preset.noMatch': 'No presets match the filter',
   'dialog.preset.hint': 'type to filter • ↑/↓ move • Enter select • Esc',
 
-  // `/details`.
-  'dialog.details.title': 'Transcript details',
-  'dialog.details.tools': 'Tool cards',
-  'dialog.details.thinking': 'Thinking',
-  // The row's own value. `disabled` is what a deployment with
-  // `showReasoning: false` reads, and the row refuses to cycle out of it.
-  'dialog.details.thinking.shown': 'shown',
-  'dialog.details.thinking.hidden': 'hidden',
-  'dialog.details.thinking.disabled': 'disabled',
-  'dialog.details.hint': '↑/↓ move • Tab toggle • Enter/Esc close',
+  // `/config`: the panel's own chrome and one label per row. The two hints
+  // beside a notice row are command names (`/lang`, `/model`), which every
+  // locale types the same way and which are therefore not in this table.
+  'settings.hint': '↑↓ move · enter change · esc close',
+  'settings.thinking': 'Thinking display',
+  'settings.toolCards': 'Tool cards default',
+  'settings.theme': 'Theme',
+  'settings.language': 'Language',
+  'settings.model': 'Model',
+  'settings.model.unset': 'unset',
+  // How a toggle row words its two states.
+  'settings.on': 'on',
+  'settings.off': 'off',
+  // Storage refusing a preference. The choice is already live on screen; what
+  // failed is only its durability, which is what both sentences say.
+  'settings.saveFailed': 'Setting could not be saved: {error}',
+  'settings.refused': 'Stored terminal settings were refused; this session uses the defaults: {error}',
+
+  // `/theme` and the selector the `/config` Theme row opens. The four ids
+  // (`auto`, `light`, `dark`, `no-color`) are typed arguments and stay as they
+  // are in every locale; only the line explaining each one is translated.
+  'dialog.theme.title': 'Select theme',
+  'dialog.theme.hint': '↑/↓ preview • Enter select • Esc cancel',
+  'theme.description.auto': 'Follow the color scheme the terminal reports',
+  'theme.description.light': 'Always paint the light-background palette',
+  'theme.description.dark': 'Always paint the dark-background palette',
+  'theme.description.no-color': 'Emit no color at all',
+  'theme.applied': 'Theme: {theme}.',
+  'theme.unknown': 'Unknown theme "{value}". Usage: /theme [{options}]',
 
   // `/resume`.
   'dialog.resume.title': 'Resume session',
@@ -345,7 +365,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'command.copy.description': '把最后一条回答复制到系统剪贴板',
   'command.new.description': '在当前工作区开一个空会话（当前会话仍可 resume）',
   'command.clear.description': '清空 transcript 视图（不影响会话历史）',
-  'command.details.description': '设置工具卡片的展开方式与思考块显示',
+  'command.config.description': '修改本终端自己的设置，下次启动仍然生效',
+  'command.theme.description': '选择本终端使用的配色',
   'command.palette.description': '展示本终端渲染的全部配色与文字属性',
   'command.export.description': '把本会话日志写入文件并给出路径',
   'command.plugins.description': '搜索并查看 Loader 的 plugin 条目',
@@ -502,13 +523,26 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'dialog.preset.noMatch': '没有 preset 匹配当前筛选',
   'dialog.preset.hint': '输入以筛选 • ↑/↓ 移动 • Enter 选择 • Esc 取消',
 
-  'dialog.details.title': 'Transcript 显示细节',
-  'dialog.details.tools': '工具卡片',
-  'dialog.details.thinking': '思考块',
-  'dialog.details.thinking.shown': '显示',
-  'dialog.details.thinking.hidden': '隐藏',
-  'dialog.details.thinking.disabled': '已禁用',
-  'dialog.details.hint': '↑/↓ 移动 • Tab 切换 • Enter/Esc 关闭',
+  'settings.hint': '↑↓ 移动 · enter 修改 · esc 关闭',
+  'settings.thinking': '思考块显示',
+  'settings.toolCards': '工具卡片默认形态',
+  'settings.theme': '配色',
+  'settings.language': '界面语言',
+  'settings.model': '模型',
+  'settings.model.unset': '未设置',
+  'settings.on': '开',
+  'settings.off': '关',
+  'settings.saveFailed': '设置没能保存：{error}',
+  'settings.refused': '已存的终端设置不合法，本次会话使用默认值：{error}',
+
+  'dialog.theme.title': '选择配色',
+  'dialog.theme.hint': '↑/↓ 预览 • Enter 选定 • Esc 取消',
+  'theme.description.auto': '跟随终端上报的明暗',
+  'theme.description.light': '固定使用浅色背景的配色',
+  'theme.description.dark': '固定使用深色背景的配色',
+  'theme.description.no-color': '完全不输出颜色',
+  'theme.applied': '配色：{theme}。',
+  'theme.unknown': '未知配色 "{value}"。用法：/theme [{options}]',
 
   'dialog.resume.title': '恢复会话',
   'dialog.resume.titleCounted': '恢复会话（第 {position} / 共 {total}）',

@@ -10,6 +10,7 @@ import type {
   SelectListTheme,
   TerminalColorScheme,
 } from '@earendil-works/pi-tui'
+import { t } from '../i18n/index.ts'
 
 /**
  * Text carrying exactly one palette color. Branded so the compiler rejects
@@ -161,6 +162,76 @@ export function createPalette(enabled: boolean, scheme: TerminalColorScheme = 'd
 }
 
 /**
+ * What `/theme` chooses: which palette this terminal paints with, as a value
+ * that outlives the process.
+ *
+ * `auto` is the behavior every earlier build had and remains the default — the
+ * palette follows whatever color scheme the terminal reports, which most
+ * terminals never do, leaving the dark-optimised tones. The two forced schemes
+ * exist for the terminals that answer wrongly or not at all, and `no-color`
+ * emits no SGR whatsoever, which is the same switch `theme.color: false` throws
+ * in config, reachable without editing a file.
+ */
+export type ThemePreferenceId = 'auto' | 'light' | 'dark' | 'no-color'
+
+/** Every `/theme` value, in the order the selector lists them. */
+export const THEME_PREFERENCES = ['auto', 'light', 'dark', 'no-color'] as const
+
+/**
+ * The line shown beside one `/theme` value, in the selector and in the
+ * command's own completions.
+ *
+ * A function rather than a table of strings: a message read at import time
+ * freezes the locale it was first read in, and this line is rendered by two
+ * surfaces that both outlive a `/lang` switch.
+ * @param id - the theme value to describe.
+ * @returns the description in the active locale.
+ */
+export function themePreferenceDescription(id: ThemePreferenceId): string {
+  return t(`theme.description.${id}`)
+}
+
+/**
+ * Whether a string is one of the four `/theme` values, for a typed argument and
+ * for a settings document a person may have edited by hand.
+ * @param value - candidate theme id.
+ * @returns true when the value names a theme this terminal can apply.
+ */
+export function isThemePreference(value: string): value is ThemePreferenceId {
+  return (THEME_PREFERENCES as readonly string[]).includes(value)
+}
+
+/** The palette arguments one theme preference resolves to. */
+export interface ThemeAppearance {
+  /** Whether ANSI is emitted at all. */
+  readonly color: boolean
+  /** The scheme the palette is built for. */
+  readonly scheme: TerminalColorScheme
+}
+
+/**
+ * Resolve a theme preference against the two facts it layers over: what the
+ * terminal reported about itself, and whether this deployment allows color at
+ * all.
+ *
+ * Config keeps the last word on `no-color`: a deployment that set
+ * `theme.color: false` (a pipe, a CI log) must not get escapes back because a
+ * settings document from another terminal says `dark`.
+ * @param preference - the stored `/theme` choice.
+ * @param reported - the scheme the terminal last reported; `auto` follows it.
+ * @param configColor - the deployment's `theme.color` setting.
+ * @returns the arguments {@link createPalette} is called with.
+ */
+export function resolveThemeAppearance(
+  preference: ThemePreferenceId,
+  reported: TerminalColorScheme,
+  configColor: boolean,
+): ThemeAppearance {
+  const scheme = preference === 'light' || preference === 'dark' ? preference : reported
+  return { color: configColor && preference !== 'no-color', scheme }
+}
+
+/**
  * DeepSeek brand gradient stops (indigo → light blue) taken from the
  * deepseek.com logo, painted across the startup banner's product name on
  * truecolor terminals. Fixed brand identity, deliberately outside the
@@ -256,16 +327,22 @@ export function markdownTheme(palette: Palette): MarkdownTheme {
 
 /**
  * Derive the pi-tui select-list theme from a role palette.
+ *
+ * Each entry reads its role off the palette when it paints, rather than
+ * capturing the wrapper the palette held at construction: a theme change swaps
+ * the roles in place, and the editor's autocomplete menu is built once and
+ * lives for the whole session, so a captured wrapper would keep emitting the
+ * palette `/theme` just replaced — colored rows under `no-color` included.
  * @param palette - Active role palette.
  * @returns The select-list theme wired to palette roles.
  */
 export function selectTheme(palette: Palette): SelectListTheme {
   return {
-    selectedPrefix: palette.accent,
-    selectedText: palette.accent,
-    description: palette.dim,
-    scrollInfo: palette.dim,
-    noMatch: palette.warning,
+    selectedPrefix: text => palette.accent(text),
+    selectedText: text => palette.accent(text),
+    description: text => palette.dim(text),
+    scrollInfo: text => palette.dim(text),
+    noMatch: text => palette.warning(text),
   }
 }
 

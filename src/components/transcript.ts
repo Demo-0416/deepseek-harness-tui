@@ -1011,6 +1011,14 @@ function trimBlankEdges(rows: readonly string[]): string[] {
 export type ToolCardVisibility = 'hidden' | 'collapsed' | 'expanded'
 
 /**
+ * Every phase, in the order Ctrl+O walks them: the two common reading modes
+ * adjacent, then the conversation on its own. The `/config` row that sets the
+ * default steps through this same list, so the two surfaces cannot end up
+ * offering different words for the same three states.
+ */
+export const TOOL_CARD_PHASES: readonly ToolCardVisibility[] = ['collapsed', 'expanded', 'hidden']
+
+/**
  * Transcript card with a width-keyed rendered-row cache. pi-tui re-renders
  * every component each frame and relies on per-component line caches (its own
  * `Text`/`Markdown` do this); a card that rebuilds rows inside `render(width)`
