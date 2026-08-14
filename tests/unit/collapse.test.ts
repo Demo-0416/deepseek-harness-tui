@@ -110,6 +110,26 @@ function onlyGroup(nodes: readonly ChatNode[]): CollapsedGroup {
   return groups[0] as CollapsedGroup
 }
 
+/**
+ * A group literal, for the cases that are about counts rather than about the
+ * run that produced them. A real run needs two members before it collapses at
+ * all, so a one-call count has no node list that could plan it.
+ */
+function countsGroup(counts: Partial<CollapsedGroup>): CollapsedGroup {
+  return {
+    index: 0,
+    keys: ['tool:a', 'tool:b'],
+    searchCount: 0,
+    readCount: 0,
+    listCount: 0,
+    mcpCallCount: 0,
+    mcpServers: [],
+    active: false,
+    failed: false,
+    ...counts,
+  }
+}
+
 /** A reconciler over its own chat container, plus the rows it renders. */
 function mountReconciler(visibility: ToolCardVisibility): {
   reconciler: TranscriptReconciler
@@ -134,6 +154,7 @@ function mountReconciler(visibility: ToolCardVisibility): {
     now: () => START,
     toolDefinition: () => undefined,
     cwd: '/workspace',
+    expandKey: () => 'Ctrl+O',
   }
   const chat = new Container()
   const reconciler = new TranscriptReconciler(chat, deps, { showReasoning: true, visibility })
@@ -159,9 +180,36 @@ describe('shell command classification', () => {
     assert.deepEqual(classifyShellCommand('rm -rf build'), { isSearch: false, isRead: false, isList: false })
   })
 
-  it('skips redirect targets and semantically neutral words', () => {
-    // `> out.txt` names a file, not a command, so it is not read against the sets.
-    assert.equal(classifyShellCommand('ls src > out.txt').isList, true)
+  it('treats a redirect that writes a file as a write, not as a skipped target', () => {
+    const none = { isSearch: false, isRead: false, isList: false }
+    // The command's verb reads, but the line creates or truncates a file, and a
+    // file write folded into a `Read 1 file` row is a write the user never saw.
+    assert.deepEqual(classifyShellCommand('cat a.txt > b.txt'), none)
+    assert.deepEqual(classifyShellCommand('sort f.txt > g.txt'), none)
+    assert.deepEqual(classifyShellCommand('ls src > out.txt'), none)
+    assert.deepEqual(classifyShellCommand('grep foo f 2>> err.log'), none)
+    // An input redirect names what is read, so it is still only a read.
+    assert.equal(classifyShellCommand('wc -l < a.txt').isRead, true)
+  })
+
+  it('reads a discarded or duplicated descriptor as the noise it is', () => {
+    // `2>&1` used to split into `2>` + `&` + `1`, leaving `1` to be read as a
+    // command name — which disqualified every `rg … 2>&1` and broke the run
+    // around it.
+    assert.equal(classifyShellCommand('grep foo f 2>&1').isSearch, true)
+    assert.equal(classifyShellCommand('rg TODO src 2>&1 | head -n 20').isSearch, true)
+    assert.equal(classifyShellCommand('grep foo f 2>/dev/null').isSearch, true)
+    assert.equal(classifyShellCommand('cat a.ts > /dev/null').isRead, true)
+  })
+
+  it('refuses the search commands that carry their own mutation', () => {
+    const none = { isSearch: false, isRead: false, isList: false }
+    assert.deepEqual(classifyShellCommand('find . -name x -delete'), none)
+    assert.deepEqual(classifyShellCommand('find . -name x -exec rm {} ;'), none)
+    assert.equal(classifyShellCommand('find . -name x -print').isSearch, true)
+  })
+
+  it('skips semantically neutral words', () => {
     assert.equal(classifyShellCommand('ls src && echo --- && ls tests').isList, true)
     // Nothing but neutral words read nothing at all.
     assert.deepEqual(classifyShellCommand('echo hello'), { isSearch: false, isRead: false, isList: false })
@@ -231,20 +279,24 @@ describe('collapse grouping', () => {
   it('breaks on assistant prose', () => {
     const nodes: ChatNode[] = [
       call('read', { file_path: '/workspace/a.ts' }),
-      step('Now let me check the tests.', { step: 2 }),
       call('read', { file_path: '/workspace/b.ts' }),
+      step('Now let me check the tests.', { step: 2 }),
+      call('read', { file_path: '/workspace/c.ts' }),
+      call('read', { file_path: '/workspace/d.ts' }),
     ]
     const groups = groupsOf(nodes)
     assert.equal(groups.length, 2, 'a sentence the model wrote ends the run above it')
-    assert.equal(groups[0]?.readCount, 1)
-    assert.equal(groups[1]?.readCount, 1)
+    assert.equal(groups[0]?.readCount, 2)
+    assert.equal(groups[1]?.readCount, 2)
   })
 
   it('breaks on a call that is not read-only', () => {
     const nodes: ChatNode[] = [
       call('read', { file_path: '/workspace/a.ts' }),
-      call('edit', { file_path: '/workspace/a.ts' }),
       call('read', { file_path: '/workspace/b.ts' }),
+      call('edit', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/c.ts' }),
+      call('read', { file_path: '/workspace/d.ts' }),
     ]
     assert.equal(groupsOf(nodes).length, 2)
   })
@@ -260,13 +312,17 @@ describe('collapse grouping', () => {
     }
     assert.equal(groupsOf([
       call('read', { file_path: '/workspace/a.ts' }),
-      prompt,
       call('read', { file_path: '/workspace/b.ts' }),
+      prompt,
+      call('read', { file_path: '/workspace/c.ts' }),
+      call('read', { file_path: '/workspace/d.ts' }),
     ]).length, 2)
     assert.equal(groupsOf([
       call('read', { file_path: '/workspace/a.ts' }),
-      { kind: 'compaction', key: 'compaction:1', version: 0, time: START, landed: true, summary: '' },
       call('read', { file_path: '/workspace/b.ts' }),
+      { kind: 'compaction', key: 'compaction:1', version: 0, time: START, landed: true, summary: '' },
+      call('read', { file_path: '/workspace/c.ts' }),
+      call('read', { file_path: '/workspace/d.ts' }),
     ]).length, 2)
   })
 
@@ -299,12 +355,13 @@ describe('collapse grouping', () => {
     const nodes: ChatNode[] = [
       call('read', { file_path: '/workspace/a.ts' }, { id: 'cleared' }),
       call('read', { file_path: '/workspace/b.ts' }, { id: 'kept' }),
+      call('read', { file_path: '/workspace/c.ts' }, { id: 'kept-too' }),
     ]
     const planned = collapseToolGroups(nodes, { isHidden: id => id === 'cleared' })
     const group = planned.get(1)
-    assert.ok(group !== undefined, 'the visible call still groups')
+    assert.ok(group !== undefined, 'the visible calls still group')
     assert.equal(group.index, 1)
-    assert.equal(group.readCount, 1)
+    assert.equal(group.readCount, 2)
     assert.equal(planned.get(0), undefined)
   })
 
@@ -312,10 +369,11 @@ describe('collapse grouping', () => {
     const nodes: ChatNode[] = [
       call('read', { file_path: '/workspace/a.ts' }),
       call('read', { file_path: '/workspace/b.ts' }),
+      call('read', { file_path: '/workspace/c.ts' }),
     ]
     const planned = collapseToolGroups(nodes, { from: 1 })
     assert.equal(planned.get(0), undefined)
-    assert.equal(planned.get(1)?.readCount, 1)
+    assert.equal(planned.get(1)?.readCount, 2)
   })
 })
 
@@ -329,19 +387,21 @@ describe('collapse counting', () => {
     assert.equal(group.readCount, 2)
   })
 
-  it('falls back to operations only when no call named a path', () => {
+  it('adds the path-less shell reads to the named paths rather than dropping them', () => {
     const shellOnly = onlyGroup([
       call('bash', { command: 'cat a.ts' }, { id: 'one' }),
       call('bash', { command: 'wc -l b.ts' }, { id: 'two' }),
     ])
     assert.equal(shellOnly.readCount, 2, 'a shell read has no path, so operations are all there is')
-    // Mixed: the paths win outright rather than adding the shell reads on top,
-    // because `read(a.ts)` then `wc -l a.ts` is one file, not two.
+    // Mixed: two named files plus one shell read is three, not two. Dropping
+    // the path-less half whenever anything named a path under-reported the run,
+    // and `Read 1 file` about eleven files was the extreme of it.
     const mixed = onlyGroup([
       call('read', { file_path: '/workspace/a.ts' }),
-      call('bash', { command: 'wc -l /workspace/a.ts' }),
+      call('bash', { command: 'cat /workspace/b.txt' }),
+      call('read', { file_path: '/workspace/c.ts' }),
     ])
-    assert.equal(mixed.readCount, 1)
+    assert.equal(mixed.readCount, 3)
   })
 
   it('counts searches and listings per call, and MCP queries per server', () => {
@@ -359,14 +419,20 @@ describe('collapse counting', () => {
   })
 
   it('reports a group as running while any of its calls is', () => {
-    const settled = onlyGroup([call('read', { file_path: '/workspace/a.ts' })])
+    const settled = onlyGroup([
+      call('read', { file_path: '/workspace/a.ts' }, { id: 'done' }),
+      call('read', { file_path: '/workspace/b.ts' }, { id: 'also-done' }),
+    ])
     assert.equal(settled.active, false)
     const running = onlyGroup([
       call('read', { file_path: '/workspace/a.ts' }, { id: 'done' }),
       call('read', { file_path: '/workspace/b.ts' }, { id: 'open', status: 'running' }),
     ])
     assert.equal(running.active, true)
-    const failed = onlyGroup([call('read', { file_path: '/workspace/a.ts' }, { status: 'error' })])
+    const failed = onlyGroup([
+      call('read', { file_path: '/workspace/a.ts' }, { id: 'broke', status: 'error' }),
+      call('read', { file_path: '/workspace/b.ts' }, { id: 'fine' }),
+    ])
     assert.equal(failed.failed, true)
   })
 })
@@ -406,7 +472,7 @@ describe('collapsed summary wording', () => {
   })
 
   it('names an MCP server once, and counts only when it was queried more than once', () => {
-    const single = onlyGroup([call('mcp__slack__search_messages', { query: 'x' })])
+    const single = countsGroup({ mcpCallCount: 1, mcpServers: ['slack'] })
     assert.equal(collapsedSummary(single), 'Queried slack')
     const many = onlyGroup([
       call('mcp__slack__search_messages', { query: 'x' }, { id: 'm1' }),
@@ -422,7 +488,7 @@ describe('collapsed summary wording', () => {
       call('read', { file_path: '/workspace/a.ts' }),
       call('bash', { command: 'ls src' }),
     ])
-    const running = onlyGroup([call('read', { file_path: '/workspace/a.ts' }, { status: 'running' })])
+    const running = countsGroup({ readCount: 1, active: true })
     const mcp = onlyGroup([
       call('mcp__slack__search_messages', { query: 'x' }, { id: 'm1' }),
       call('mcp__slack__get_channel', {}, { id: 'm2' }),
@@ -452,18 +518,30 @@ describe('collapsed hint', () => {
     assert.deepEqual(read.hint, { kind: 'path', value: '/workspace/src/a.ts' })
     assert.equal(formatCollapseHint(read.hint!, path => displayPath(path, '/workspace')), 'src/a.ts')
 
-    const search = onlyGroup([call('grep', { pattern: 'TODO' })])
+    const search = onlyGroup([
+      call('read', { file_path: '/workspace/src/a.ts' }),
+      call('grep', { pattern: 'TODO' }),
+    ])
     assert.equal(formatCollapseHint(search.hint!, path => path), '"TODO"')
 
-    const shell = onlyGroup([call('bash', { command: 'ls src' })])
+    const shell = onlyGroup([
+      call('read', { file_path: '/workspace/src/a.ts' }),
+      call('bash', { command: 'ls src' }),
+    ])
     assert.equal(formatCollapseHint(shell.hint!, path => path), '$ ls src')
   })
 
   it('squeezes a command\'s whitespace and caps a long one', () => {
-    const group = onlyGroup([call('bash', { command: 'cat  a.ts   \n\n   | jq   .name' })])
+    const group = onlyGroup([
+      call('read', { file_path: '/workspace/src/a.ts' }),
+      call('bash', { command: 'cat  a.ts   \n\n   | jq   .name' }),
+    ])
     assert.equal(formatCollapseHint(group.hint!, path => path), '$ cat a.ts\n| jq .name')
 
-    const long = onlyGroup([call('bash', { command: `cat ${'x'.repeat(MAX_HINT_CHARS * 2)}` })])
+    const long = onlyGroup([
+      call('read', { file_path: '/workspace/src/a.ts' }),
+      call('bash', { command: `cat ${'x'.repeat(MAX_HINT_CHARS * 2)}` }),
+    ])
     const rendered = formatCollapseHint(long.hint!, path => path)
     assert.equal(rendered.length, MAX_HINT_CHARS)
     assert.ok(rendered.endsWith('…'), rendered)
@@ -489,7 +567,9 @@ describe('collapsed groups on the Ctrl+O cycle', () => {
     reconciler.reconcile(nodes)
     const rendered = rows().join('\n')
     assert.match(rendered, /Searched for 1 pattern, read 1 file/, rendered)
-    assert.match(rendered, /\(ctrl\+o to expand\)/, rendered)
+    // The key comes from the manager, not from the message: a deployment that
+    // moved `app.tools.cycle` moves this hint with it.
+    assert.match(rendered, /\(Ctrl\+O to expand\)/, rendered)
     assert.ok(!rendered.includes('grep('), `the group's own cards are off screen:\n${rendered}`)
   })
 
@@ -516,27 +596,50 @@ describe('collapsed groups on the Ctrl+O cycle', () => {
     const { reconciler, rows } = mountReconciler('collapsed')
     const running: ChatNode[] = [
       step('Looking around.'),
-      call('read', { file_path: '/workspace/src/a.ts' }, { id: 'r1', status: 'running' }),
+      call('read', { file_path: '/workspace/src/a.ts' }, { id: 'r1' }),
+      call('read', { file_path: '/workspace/src/b.ts' }, { id: 'r2', status: 'running' }),
     ]
     reconciler.reconcile(running)
     const live = rows().join('\n')
-    assert.match(live, /Reading 1 file…/, live)
-    assert.match(live, /⎿ {2}src\/a\.ts/, live)
+    assert.match(live, /Reading 2 files…/, live)
+    assert.match(live, /⎿ {2}src\/b\.ts/, live)
 
-    reconciler.reconcile([running[0] as ChatNode, call('read', { file_path: '/workspace/src/a.ts' }, { id: 'r1' })])
+    reconciler.reconcile([
+      running[0] as ChatNode,
+      call('read', { file_path: '/workspace/src/a.ts' }, { id: 'r1' }),
+      call('read', { file_path: '/workspace/src/b.ts' }, { id: 'r2' }),
+    ])
     const settled = rows().join('\n')
-    assert.match(settled, /Read 1 file/, settled)
-    assert.ok(!settled.includes('src/a.ts'), `a settled group reports its counts alone:\n${settled}`)
+    assert.match(settled, /Read 2 files/, settled)
+    assert.ok(!settled.includes('src/b.ts'), `a settled group reports its counts alone:\n${settled}`)
+  })
+
+  it('leaves a lone read-only call its own card, which is the only thing that names the file', () => {
+    // A run of one is not a run: the summary row drops the path (the `⎿` hint
+    // only shows while the group is running), so it would be strictly less than
+    // the card it replaced.
+    const { reconciler, rows } = mountReconciler('collapsed')
+    reconciler.reconcile([
+      step('Looking around.'),
+      call('read', { file_path: '/workspace/src/a.ts' }, { id: 'r1' }),
+    ])
+    const lone = rows().join('\n')
+    assert.ok(!lone.includes('Read 1 file'), `no summary row for one call:\n${lone}`)
+    assert.match(lone, /src\/a\.ts/, lone)
   })
 
   it('grows its counts in place as the run continues', () => {
     const { reconciler, rows } = mountReconciler('collapsed')
-    reconciler.reconcile([call('read', { file_path: '/workspace/a.ts' }, { id: 'r1', status: 'running' })])
-    assert.match(rows().join('\n'), /Reading 1 file…/)
     reconciler.reconcile([
       call('read', { file_path: '/workspace/a.ts' }, { id: 'r1' }),
       call('read', { file_path: '/workspace/b.ts' }, { id: 'r2', status: 'running' }),
     ])
     assert.match(rows().join('\n'), /Reading 2 files…/)
+    reconciler.reconcile([
+      call('read', { file_path: '/workspace/a.ts' }, { id: 'r1' }),
+      call('read', { file_path: '/workspace/b.ts' }, { id: 'r2' }),
+      call('read', { file_path: '/workspace/c.ts' }, { id: 'r3', status: 'running' }),
+    ])
+    assert.match(rows().join('\n'), /Reading 3 files…/)
   })
 })

@@ -347,12 +347,20 @@ describe('a mounted terminal answers /lang', { skip: skipWithoutEntry }, () => {
       await delay(SETTLE_MS)
       const frame = terminal.text().replace(/\s+/gu, ' ')
       assert.match(frame, /思考块显示/u, `the panel is Chinese now:\n${frame}`)
-      assert.match(frame, /工具卡片默认形态/u)
+      // The value column too, not just the label: `collapsed` is not the
+      // argument of any command, so it is display text like the label beside it.
+      assert.match(frame, /工具卡片默认形态 折叠/u)
       // The row that only reports reads the live locale rather than a constant.
       assert.match(frame, /界面语言 中文/u)
       assert.match(frame, /esc 关闭/u)
       terminal.send(ESC)
       await delay(SETTLE_MS)
+
+      // The notice layer is chrome as well: a typo used to answer in English
+      // under a Chinese interface.
+      ;(harness.controller as unknown as { submit(text: string): void }).submit('/definitely-not-a-command')
+      await delay(SETTLE_MS)
+      assert.match(terminal.text().replace(/\s+/gu, ' '), /未知命令/u, terminal.text())
     } finally {
       await disposeTuiTestHarness(harness)
       await terminal.dispose()

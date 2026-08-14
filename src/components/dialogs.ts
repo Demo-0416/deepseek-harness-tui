@@ -40,7 +40,7 @@ import {
   renderTuiPromptTemplate,
   type TuiPromptTemplateToken,
 } from '../prompt.ts'
-import { t } from '../i18n/index.ts'
+import { plural, t, type PluralKey } from '../i18n/index.ts'
 
 /** A selectable model advertised by a provider, with its display name, description, and reasoning metadata. */
 export interface ModelChoice extends ModelSelection {
@@ -170,12 +170,16 @@ export function formatDiagnosticTime(value: number): string {
 
 /**
  * Format a pluralized count for a diagnostic row.
+ *
+ * The noun comes from the message table as a `.one`/`.other` pair rather than
+ * from `singular + 's'`: `/status` translates its labels, and a row reading
+ * `Agent idle · 42 events · 3 turns` in a Chinese card was half a translation.
  * @param value - Count.
- * @param singular - Singular noun; an `s` is appended for other counts.
- * @returns The formatted count.
+ * @param key - The plural pair naming what is being counted.
+ * @returns The formatted count, in the active locale.
  */
-export function formatDiagnosticCount(value: number, singular: string): string {
-  return `${String(value)} ${singular}${value === 1 ? '' : 's'}`
+export function formatDiagnosticCount(value: number, key: PluralKey): string {
+  return plural(value, key)
 }
 
 /**

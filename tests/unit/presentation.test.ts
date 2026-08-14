@@ -84,6 +84,7 @@ function mountReconciler(options: { palette?: Palette; scheme?: 'dark' | 'light'
     now: () => START,
     toolDefinition: () => undefined,
     cwd: '/workspace',
+    expandKey: () => 'Ctrl+O',
   }
   const chat = new Container()
   const reconciler = new TranscriptReconciler(chat, deps, { showReasoning: true, visibility: 'collapsed' })

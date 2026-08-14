@@ -499,6 +499,40 @@ describe('the mounted /config and /theme', { skip: skipWithoutEntry }, () => {
     }
   })
 
+  it('paints nothing at all under a stored no-color, on a truecolor terminal', async () => {
+    // The regression this pins: three surfaces read the deployment's
+    // `theme.color` rather than the resolved appearance, so a `no-color`
+    // preference still shipped 24-bit escapes — the banner's gradient wordmark,
+    // the status caret's fade, and the extension brand role.
+    const terminal = new HeadlessTerminal(96, 40)
+    const before = terminal.frames
+    const harness = await createTuiTestHarness(terminal, () => {}, {
+      cwd: '/workspace/project',
+      config: {
+        title: 'DSH settings',
+        welcome: 'ready.',
+        // Color fully available: the preference, not the deployment, is what
+        // has to turn it off.
+        theme: { color: true, truecolor: true, inputPrompt: 'dsh> ' },
+      },
+      services: { settings: new FakeSettings({ theme: 'no-color' }) },
+    })
+    try {
+      await terminal.waitForFrame(before)
+      await delay(SETTLE_MS)
+      // The one cell that stays styled is the editor's software cursor block
+      // (SGR 7): that is the cursor, not the palette, and pi-tui draws it in
+      // every theme whenever the hardware cursor is off.
+      const painted = terminal.paintedCells().filter(entry => !entry.endsWith(' inverse'))
+      assert.deepEqual(painted, [], `no-color emits no SGR:\n${painted.slice(0, 20).join('\n')}`)
+      // And the banner is on screen, so the emptiness is not an empty screen.
+      assert.match(terminal.text(), /DEEPSEEK HARNESS/u)
+    } finally {
+      await disposeTuiTestHarness(harness)
+      await harness.terminal.dispose()
+    }
+  })
+
   it('opens on the stored theme and phase a previous session saved', async () => {
     const settings = new FakeSettings({ theme: 'no-color', toolCards: 'expanded', thinkingPinned: true })
     const harness = await mount(settings)

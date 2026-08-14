@@ -107,6 +107,7 @@ function mount(
     now: () => START + 10_000_000,
     toolDefinition: () => undefined,
     cwd: '/workspace',
+    expandKey: () => 'Ctrl+O',
   }
   const chat = new Container()
   const reconciler = new TranscriptReconciler(chat, deps, {

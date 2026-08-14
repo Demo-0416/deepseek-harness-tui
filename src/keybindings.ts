@@ -18,6 +18,7 @@ import {
   KeybindingsManager,
   TUI_KEYBINDINGS,
   setKeybindings,
+  type Keybinding,
   type KeybindingDefinitions,
   type KeybindingsConfig,
   type KeyId,
@@ -61,9 +62,15 @@ export const APP_KEYBINDINGS = {
   'app.transcript.search': { defaultKeys: 'ctrl+g', description: 'Search this session\'s messages' },
   // Claude Code gives Ctrl+T to the plan and has no thinking switch at all;
   // pi gives it to thinking. This terminal has both, so the collision is real
-  // and was decided for thinking: it is the key a user reaches for mid-answer,
-  // and Ctrl+Y is free and adjacent for the plan.
-  'app.todos.toggle': { defaultKeys: 'ctrl+y', description: 'Expand or collapse the plan' },
+  // and was decided for thinking: it is the key a user reaches for mid-answer.
+  // The plan therefore needs a key of its own, and it is Ctrl+N — not Ctrl+Y,
+  // which pi-tui binds as the editor's kill-ring paste (`tui.editor.yank`,
+  // paired with ctrl+k/ctrl+u/ctrl+w): taking it would leave text cut with
+  // those three unrecoverable, the same trap that kept `/search` off Ctrl+F.
+  // pi-tui leaves `ctrl+n`/`ctrl+p` unbound (`tui.editor.historyNext` and
+  // `historyPrevious` ship with empty `defaultKeys`), and this terminal drives
+  // prompt history from the arrow keys and Ctrl+R.
+  'app.todos.toggle': { defaultKeys: 'ctrl+n', description: 'Expand or collapse the plan' },
   'app.thinking.toggle': { defaultKeys: 'ctrl+t', description: 'Show or hide thinking blocks' },
   'app.message.copy': { defaultKeys: 'ctrl+x', description: 'Copy the last answer' },
   'app.screen.redraw': { defaultKeys: 'ctrl+l', description: 'Redraw the screen' },
@@ -104,6 +111,58 @@ export function installKeybindings(bindings: Record<string, string | string[]> |
   const manager = new KeybindingsManager(KEYBINDINGS, toKeybindingsConfig(bindings))
   setKeybindings(manager)
   return manager
+}
+
+/**
+ * The keys this terminal knowingly takes off pi-tui, and the editor action each
+ * one shadows.
+ *
+ * Both are load-bearing terminal conventions the editor cannot outrank: Ctrl+D
+ * is EOF on an empty prompt (it shadows `tui.editor.deleteCharForward`, whose
+ * job the Delete key still does), and Esc cancels the turn (it shadows the
+ * select widget's own cancel, which never coexists with the input listener
+ * anyway, since an open overlay returns before this listener's first branch).
+ * Everything *not* listed here is a bug — see {@link keybindingCollisions}.
+ */
+const ACCEPTED_COLLISIONS: Readonly<Record<string, readonly string[]>> = {
+  'ctrl+d': ['tui.editor.deleteCharForward'],
+  escape: ['tui.select.cancel'],
+}
+
+/** One key claimed by an `app.*` action and by a pi-tui action at the same time. */
+export interface KeybindingCollision {
+  /** The contested key id, e.g. `ctrl+y`. */
+  readonly key: string
+  /** The `app.*` action that wins it. */
+  readonly action: string
+  /** The pi-tui actions it shadows. */
+  readonly shadowed: readonly string[]
+}
+
+/**
+ * Keys an `app.*` action takes away from pi-tui.
+ *
+ * `KeybindingsManager.getConflicts()` only compares *user overrides* against
+ * each other, so a default that collides with a pi-tui default is invisible to
+ * it — and the collision is silent at runtime too, because the app's input
+ * listener runs before the focused component and answers with `consume: true`,
+ * so the editor never sees the key at all. This is the check that names it:
+ * resolved keys, not declared ones, so a deployment that rebinds *into* a
+ * pi-tui key is reported as well.
+ * @param manager - The installed manager, read for resolved keys.
+ * @returns One entry per contested key, minus {@link ACCEPTED_COLLISIONS}.
+ */
+export function keybindingCollisions(manager: KeybindingsManager): KeybindingCollision[] {
+  const collisions: KeybindingCollision[] = []
+  for (const action of Object.keys(APP_KEYBINDINGS)) {
+    for (const key of manager.getKeys(action as Keybinding)) {
+      const shadowed = Object.keys(TUI_KEYBINDINGS)
+        .filter(other => manager.getKeys(other as Keybinding).includes(key))
+        .filter(other => !(ACCEPTED_COLLISIONS[key] ?? []).includes(other))
+      if (shadowed.length > 0) collisions.push({ key, action, shadowed })
+    }
+  }
+  return collisions
 }
 
 /** How a key id's parts are shown to the user: `ctrl+o` reads as `Ctrl+O`. */

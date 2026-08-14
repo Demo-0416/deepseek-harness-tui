@@ -62,7 +62,26 @@ const BASH_LIST_COMMANDS = new Set(['ls', 'tree', 'du'])
 const BASH_NEUTRAL_COMMANDS = new Set(['echo', 'printf', 'true', 'false', ':'])
 
 /** Operator tokens whose right-hand side is a redirect target, not a command. */
-const REDIRECT_OPERATORS = new Set(['>', '>>', '>&', '2>', '2>>', '<'])
+const REDIRECT_OPERATORS = new Set(['>', '>>', '>&', '2>', '2>>', '2>&', '<'])
+
+/**
+ * The redirects that put bytes somewhere. A command carrying one of these is
+ * not read-only, whatever its verb says — `cat a > b` writes `b`.
+ */
+const WRITE_REDIRECT_OPERATORS = new Set(['>', '>>', '>&', '2>', '2>>', '2>&'])
+
+/** The redirects whose target may be a file descriptor rather than a path. */
+const FD_DUP_OPERATORS = new Set(['>&', '2>&'])
+
+/** The sink that is not a file: writing here loses the bytes on purpose. */
+const NULL_DEVICE = '/dev/null'
+
+/**
+ * `find` predicates that act on what they match. `find` is otherwise the
+ * archetypal read-only search, which is exactly what makes `-delete` worth
+ * naming: it turns the same command into a bulk removal.
+ */
+const FIND_MUTATING_FLAGS = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf'])
 
 /** Operator tokens that merely separate commands. */
 const SEPARATOR_OPERATORS = new Set(['|', '||', '&&', ';', '&'])
@@ -114,9 +133,13 @@ export interface CollapsedGroup {
   /** Search operations, counted per call. */
   readonly searchCount: number
   /**
-   * Files read: distinct `file_path`s when any call named one, else the number
-   * of path-less read operations (a `cat` in a shell command). Never the sum —
-   * `read(a.ts)` then `wc -l a.ts` is one file, not two.
+   * Files read: distinct `file_path`s, plus one per read that named no path of
+   * its own (a `cat` inside a shell command). The same file read twice through
+   * `read` counts once; a shell read counts as one more, because nothing here
+   * knows which file it opened. Over- rather than under-reporting is the
+   * deliberate direction — the previous rule dropped path-less reads entirely
+   * whenever any call named a path, so `read(a)` + `cat b` + `read(c)` said
+   * "Read 2 files" about three.
    */
   readonly readCount: number
   /** Directory listings, counted per call. */
@@ -172,6 +195,15 @@ function splitCommandWithOperators(command: string): string[] | undefined {
       index += 2
       continue
     }
+    // Three characters first, or `2>&1` splits into `2>` + `&` + `1` and the
+    // `1` reads as a command name — which used to disqualify every `rg … 2>&1`.
+    const triple = command.slice(index, index + 3)
+    if (triple === '2>>' || triple === '2>&') {
+      flush()
+      parts.push(triple)
+      index += 3
+      continue
+    }
     const pair = command.slice(index, index + 2)
     if (pair === '||' || pair === '&&' || pair === '>>' || pair === '>&' || pair === '2>') {
       flush()
@@ -197,10 +229,16 @@ function splitCommandWithOperators(command: string): string[] | undefined {
  * Classify a shell command as search, read, or listing.
  *
  * Every non-neutral segment of a pipeline has to be one of the three: `cat
- * file | jq .` is a read, `cat file > out` is not (the redirect target is
- * skipped, but a segment that writes anywhere else disqualifies the whole
- * command). A command of nothing but neutral words (`echo hi`) is not
- * collapsible either — it read nothing.
+ * file | jq .` is a read, and `cat file > out` is not a read at all — it is a
+ * write, so the whole command is disqualified. A redirect is judged by where it
+ * points rather than skipped: `< in` only names an input, `2>&1` and `2>` to
+ * {@link NULL_DEVICE} throw bytes away, and everything else creates or
+ * truncates a file the user would want to see reported. Skipping the target
+ * instead — which is what this did — folded a real file write into the
+ * transcript's `Read 1 file` row, with no card and no command text behind it.
+ *
+ * A command of nothing but neutral words (`echo hi`) is not collapsible either
+ * — it read nothing.
  * @param command - The raw command line.
  * @returns Which of the three kinds the command performs, all false when none.
  */
@@ -216,18 +254,26 @@ export function classifyShellCommand(command: string): {
   let hasRead = false
   let hasList = false
   let hasCommand = false
-  let skipRedirectTarget = false
+  let redirect: string | undefined
   for (const part of parts) {
-    if (skipRedirectTarget) {
-      skipRedirectTarget = false
-      continue
+    if (redirect !== undefined) {
+      const operator = redirect
+      redirect = undefined
+      if (!WRITE_REDIRECT_OPERATORS.has(operator)) continue
+      const target = part.split(/\s+/)[0] ?? ''
+      // `2>&1` names a descriptor, not a file, and `/dev/null` is the bit
+      // bucket: neither leaves anything behind for the user to have missed.
+      if (FD_DUP_OPERATORS.has(operator) && /^\d+-?$/u.test(target)) continue
+      if (target === NULL_DEVICE) continue
+      return none
     }
     if (REDIRECT_OPERATORS.has(part)) {
-      skipRedirectTarget = true
+      redirect = part
       continue
     }
     if (SEPARATOR_OPERATORS.has(part)) continue
-    const base = part.split(/\s+/)[0]
+    const words = part.split(/\s+/)
+    const base = words[0]
     if (base === undefined || base === '') continue
     if (BASH_NEUTRAL_COMMANDS.has(base)) continue
     hasCommand = true
@@ -235,10 +281,15 @@ export function classifyShellCommand(command: string): {
     const isRead = BASH_READ_COMMANDS.has(base)
     const isList = BASH_LIST_COMMANDS.has(base)
     if (!isSearch && !isRead && !isList) return none
+    // `find` is the one search command that ships its own mutations.
+    if (base === 'find' && words.some(word => FIND_MUTATING_FLAGS.has(word))) return none
     if (isSearch) hasSearch = true
     if (isRead) hasRead = true
     if (isList) hasList = true
   }
+  // A trailing redirect with no target (`cat a >`) is an unfinished command
+  // line, and an unfinished command line is not a read.
+  if (redirect !== undefined && WRITE_REDIRECT_OPERATORS.has(redirect)) return none
   if (!hasCommand) return none
   return { isSearch: hasSearch, isRead: hasRead, isList: hasList }
 }
@@ -375,9 +426,10 @@ function sealGroup(draft: GroupDraft): CollapsedGroup {
     index: draft.index,
     keys: draft.keys,
     searchCount: draft.searchCount,
-    // Distinct paths win outright: a file read twice is one file, and mixing
-    // the path-less fallback in on top would count it a second time.
-    readCount: draft.readPaths.size > 0 ? draft.readPaths.size : draft.readOperations,
+    // Distinct named paths, plus the reads that named none. A file read twice
+    // through `read` is one file; a shell `cat` is one more, since its argument
+    // was never parsed and dropping it silently under-reports the group.
+    readCount: draft.readPaths.size + draft.readOperations,
     listCount: draft.listCount,
     mcpCallCount: draft.mcpCallCount,
     mcpServers: draft.mcpServers,
@@ -423,11 +475,18 @@ export interface CollapseOptions {
 /**
  * Plan the collapsed groups over a folded node list.
  *
+ * A run of one is not a run: a lone `read` keeps its card, because the summary
+ * row it would become names no file, no pattern and no command (the `⎿` hint
+ * only shows while the group is running), and "Read 1 file" is strictly less
+ * than the `Read(src/a.ts)` card it replaced. The row earns its place from two
+ * members up, which is where it starts saving rows instead of spending them.
+ *
  * @param nodes - The snapshot's nodes, in log order.
  * @param options - Range and per-call exclusions.
  * @returns A map from node index to the group that index belongs to. Every
  *   member index maps to the same object, whose `index` names the member the
- *   summary row replaces.
+ *   summary row replaces. Indices of a single-member run are absent, so the
+ *   caller renders their card.
  */
 export function collapseToolGroups(
   nodes: readonly ChatNode[],
@@ -438,7 +497,9 @@ export function collapseToolGroups(
   let draft: GroupDraft | undefined
   let members: number[] = []
   const flush = (): void => {
-    if (draft !== undefined) {
+    // One member is not a run: leaving it out of the map is what sends it back
+    // to its own tool card, which names the file the summary row would not.
+    if (draft !== undefined && draft.keys.length > 1) {
       const group = sealGroup(draft)
       for (const index of members) groups.set(index, group)
     }

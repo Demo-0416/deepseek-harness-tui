@@ -68,9 +68,9 @@ export interface DoctorInputs {
   readonly stdoutTty: boolean
   readonly columns: number
   readonly rows: number
-  /** Resolved `theme.color`: whether this terminal is allowed any SGR at all. */
+  /** The live appearance's `color`: whether this screen emits any SGR at all. */
   readonly color: boolean
-  /** Resolved `theme.truecolor`: whether the brand art may use 24-bit color. */
+  /** Whether the brand art may use 24-bit color, color being on at all. */
   readonly truecolor: boolean
   /** Registered provider ids, from `ctx.llm.listProviders()`. */
   readonly providers: readonly string[]
@@ -182,10 +182,13 @@ function screenCheck(inputs: DoctorInputs): DoctorCheck {
 /**
  * What this terminal is allowed to render.
  *
- * Configuration, not detection: the TUI emits the standard 16 colors and lets
- * the terminal map them, so what matters is whether the deployment turned them
- * off — a disabled palette is legible but flat, which is worth saying out loud
- * before someone reports missing highlighting as a bug.
+ * Choice, not detection: the TUI emits the standard 16 colors and lets the
+ * terminal map them, so what matters is whether anything turned them off — a
+ * disabled palette is legible but flat, which is worth saying out loud before
+ * someone reports missing highlighting as a bug. The caller passes the
+ * *resolved* appearance rather than the deployment's `theme.color`, because
+ * `/theme no-color` puts the switch in the user's hands too, and a check that
+ * described the config would pass on a screen that is already plain text.
  */
 function colorCheck(inputs: DoctorInputs): DoctorCheck {
   const label = t('doctor.label.color')

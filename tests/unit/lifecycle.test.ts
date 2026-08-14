@@ -288,7 +288,9 @@ describe('TUI disposed agent', { skip: skipWithoutEntry }, () => {
       assert.match(unwrapped(disposedFrame), /was disposed; this session can no longer run a turn/)
       assert.match(
         unwrapped(disposedFrame),
-        /Run \/resume to open another session, or press ctrl\+d to exit\./,
+        // The key is read from the manager, so the sentence names whatever is
+        // bound rather than the literal it used to carry.
+        /Run \/resume to open another session, or press Ctrl\+D to exit\./,
         `a dead session must name its exits:\n${disposedFrame}`,
       )
 

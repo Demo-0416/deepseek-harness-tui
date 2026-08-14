@@ -101,6 +101,12 @@ export interface TranscriptDeps {
   readonly toolDefinition: (name: string) => ToolDefinition | undefined
   /** Workspace directory a collapsed group's file hint is shortened against. */
   readonly cwd: string
+  /**
+   * The label of the key that currently cycles tool cards, read per render.
+   * `app.tools.cycle` is rebindable, so the collapsed row's expand hint has to
+   * name whatever the manager resolved rather than the shipped default.
+   */
+  readonly expandKey: () => string
 }
 
 /**
@@ -381,7 +387,9 @@ export class TranscriptReconciler {
         case 'reference':
           seen.add(node.key)
           children.push(this.plainView(node.key, node.version, () => block(new Text(
-            this.deps.palette.dim(`Referenced sessions · ${node.labels.map(displayText).join(', ')}`),
+            this.deps.palette.dim(t('notice.referencedSessions', {
+              labels: node.labels.map(displayText).join(', '),
+            })),
             0,
             0,
           ))))
@@ -637,6 +645,7 @@ export class TranscriptReconciler {
       group,
       this.deps.palette,
       path => displayPath(path, this.deps.cwd),
+      this.deps.expandKey,
     )
     this.views.set(key, { kind: 'group', signature, component })
     return component

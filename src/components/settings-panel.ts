@@ -56,6 +56,14 @@ export interface SettingsChoiceEntry {
   options: readonly string[]
   value: () => string
   set: (next: string) => void
+  /**
+   * Words one option for the value column, when the ids are not themselves
+   * user-facing. `set()` still takes the raw id, so the cycle is unaffected —
+   * this is display only, which is what separates `collapsed`/`expanded`/
+   * `hidden` (nothing takes them as input) from the theme ids (`/theme <id>`
+   * does, so those are shown verbatim in every locale).
+   */
+  format?: (value: string) => string
 }
 
 /** A setting whose values have a selector of their own; Enter opens it. */
@@ -89,7 +97,10 @@ function toggleLabel(value: boolean): string {
 
 /** The value column's text for one entry, without color. */
 function entryValueText(entry: SettingsEntry): string {
-  return entry.kind === 'toggle' ? toggleLabel(entry.value()) : displayInlineText(entry.value())
+  if (entry.kind === 'toggle') return toggleLabel(entry.value())
+  const value = entry.value()
+  if (entry.kind === 'choice' && entry.format !== undefined) return displayInlineText(entry.format(value))
+  return displayInlineText(value)
 }
 
 /** Settings list in the editor slot, one row per entry. */

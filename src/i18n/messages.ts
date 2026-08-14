@@ -111,6 +111,7 @@ export const EN_MESSAGES = {
   'skills.truncated': '… showing the first {max} of {total} lines.',
   'skills.truncatedPath': '… showing the first {max} of {total} lines. Full text: {path}',
   'skills.unknown': 'Unknown skill: {name}',
+  'skills.notUserInvocable': 'Skill "{name}" is not available for user invocation.',
   'skills.loadFailed': 'Skill "{name}" failed to load: {error}',
   'skills.scanFailed': 'Skill scan failed: {error}',
 
@@ -172,8 +173,9 @@ export const EN_MESSAGES = {
     'keys and redraws need a terminal on both ends; for pipes use --print, which runs one task with no UI',
   'doctor.screen.narrowAdvice': 'below {columns} columns tool cards, diffs, and panels wrap; widen the window',
   'doctor.screen.shortAdvice': 'below {rows} rows a panel leaves no room for the editor; make the window taller',
-  'doctor.color.disabled': 'disabled (theme.color is off)',
-  'doctor.color.disabledAdvice': 'every surface renders as plain text; set theme.color to bring the palette back',
+  'doctor.color.disabled': 'disabled; this screen emits no color at all',
+  'doctor.color.disabledAdvice':
+    'every surface renders as plain text; run /theme to pick a palette, or set theme.color if the deployment turned it off',
   'doctor.color.basic': '16-color palette',
   'doctor.color.truecolor': '16-color palette, truecolor brand art',
   'doctor.model.noProvider': 'no LLM provider is registered',
@@ -334,7 +336,10 @@ export const EN_MESSAGES = {
   // is a translated row rather than a literal in the renderer.
   'collapse.separator': ', ',
   'collapse.ellipsis': '…',
-  'collapse.expandHint': '(ctrl+o to expand)',
+  // The key is interpolated rather than written in: `app.tools.cycle` is
+  // rebindable, and a hint on every collapsed row naming a key that does
+  // nothing is exactly what `/hotkeys` reads from the manager to avoid.
+  'collapse.expandHint': '({key} to expand)',
 
   // Transient status-row confirmations.
   'status.flash.cardsHidden': 'Tool cards hidden.',
@@ -397,6 +402,70 @@ export const EN_MESSAGES = {
   'status.thinking.disabled': 'disabled',
   'status.thinking.kept': 'kept',
   'status.thinking.live': 'while streaming',
+  // The two `/status` values that were still English literals while their own
+  // labels were translated: `/config` already words the first one this way.
+  'status.effort.default': 'default',
+  // The counts the Agent row and the session totals are made of. A plural pair
+  // rather than `singular + 's'`, so a locale that does not inflect can say so.
+  'status.count.event.one': '{count} event',
+  'status.count.event.other': '{count} events',
+  'status.count.turn.one': '{count} turn',
+  'status.count.turn.other': '{count} turns',
+  'status.count.step.one': '{count} step',
+  'status.count.step.other': '{count} steps',
+  'status.count.toolCall.one': '{count} tool call',
+  'status.count.toolCall.other': '{count} tool calls',
+  'status.totals.model': 'model {duration}',
+  'status.totals.tools': 'tools {duration}',
+  'status.totals.ttft': 'ttft {duration} avg',
+  'status.totals.decode': '{rate} tok/s decode',
+
+  // The notice layer: what a command answers with when it has nothing to show,
+  // and what a failure says. This is chrome — the terminal talking about
+  // itself, not the conversation — so it belongs in the table like the rest.
+  'notice.unknownCommand': 'Unknown command: {text}',
+  'notice.commandFailed': 'Command failed: {error}',
+  'notice.markdownDegraded': 'Markdown rendering degraded; using the fallback renderer for the rest of this session.',
+  'notice.copyFailed': 'Copy failed: {error}',
+  'notice.overlayFailed': 'TUI overlay failed: {error}',
+  'notice.newSession': 'Starting a blank session. This one keeps its history — /resume brings it back.',
+  'notice.newSessionFailed': 'Could not start a new session: {error}',
+  // The key is interpolated for the same reason the collapsed row's is: it is
+  // rebindable, and this sentence is the only way out of a disposed agent.
+  'notice.disposedRecovery': 'Run /resume to open another session, or press {exit} to exit.',
+  'notice.agentDisposed': 'Agent "{id}" is disposed. {recovery}',
+  'notice.agentDisposedTurn': 'Agent "{id}" was disposed; this session can no longer run a turn. {recovery}',
+  'notice.skillUsage': 'Usage: /skill:<name> [instructions]',
+  'notice.referenceInvalid': 'Invalid session reference: {error}',
+  'notice.referenceUnavailable': 'Session reference capability unavailable.',
+  'notice.referenceFailed': 'Session reference failed: {error}',
+  'notice.newSessionUnsupported':
+    'This runtime cannot open a new session in place. Exit and start dsh again for a blank session.',
+  'notice.newSessionBusy': 'A new session needs an idle agent (status: {status}).',
+  'notice.rewindNoFork':
+    'Rewind put that prompt back in the editor. This runtime cannot fork a session, so the conversation above it is unchanged.',
+  'notice.rewindNoTurn':
+    'Rewind put that prompt back in the editor. No completed turn precedes it, so there was nothing to fork to.',
+  'notice.rewindBusy': 'Cancel the active turn before rewinding.',
+  'notice.rewindForking': 'Forking this session to the point before that prompt; the original stays resumable.',
+  'notice.rewindFailed': 'Rewind failed: {error}',
+  'notice.reloadBusyAgent': '/reload requires an idle agent (status: {status}).',
+  'notice.reloadRunning': 'A config reload is already running.',
+  'notice.reloadNoLoader': '/reload needs the cordis Loader; this runtime has none.',
+  'notice.reloadStarted': 'Reloading {count} config tree(s)… (experimental)',
+  'notice.reloadDone':
+    'Config reload complete. Unchanged files were skipped; invalid files keep the running tree (see logs).',
+  'notice.reloadFailed': 'Config reload failed: {error}',
+  // Rendered by the transcript reconciler rather than by a command, but the
+  // same kind of chrome: a label over names the session carries.
+  'notice.referencedSessions': 'Referenced sessions · {labels}',
+
+  // The three tool-card phases as the `/config` value column shows them. Unlike
+  // the four theme ids two rows down, these are not the argument of any
+  // command — nothing takes `collapsed` as input — so they are display text.
+  'settings.toolCards.collapsed': 'collapsed',
+  'settings.toolCards.expanded': 'expanded',
+  'settings.toolCards.hidden': 'hidden',
 
 } as const
 
@@ -484,6 +553,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'skills.truncated': '… 只显示前 {max} 行，共 {total} 行。',
   'skills.truncatedPath': '… 只显示前 {max} 行，共 {total} 行。完整正文：{path}',
   'skills.unknown': '找不到名为 {name} 的 skill',
+  'skills.notUserInvocable': 'skill "{name}" 不支持用户直接调用。',
   'skills.loadFailed': 'skill "{name}" 加载失败：{error}',
   'skills.scanFailed': 'skill 扫描失败：{error}',
 
@@ -535,8 +605,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'doctor.terminal.advice': '按键与重绘要求两端都是终端；走管道请用 --print，它跑一次任务、不启动 UI',
   'doctor.screen.narrowAdvice': '窄于 {columns} 列时工具卡片、diff 和面板都会折行；把窗口拉宽',
   'doctor.screen.shortAdvice': '少于 {rows} 行时面板会挤掉输入框；把窗口拉高',
-  'doctor.color.disabled': '已关闭（theme.color 为 off）',
-  'doctor.color.disabledAdvice': '所有界面都会渲染成纯文本；打开 theme.color 才能恢复配色',
+  'doctor.color.disabled': '已关闭；当前屏幕完全不输出颜色',
+  'doctor.color.disabledAdvice': '所有界面都会渲染成纯文本；用 /theme 选一个配色，或在部署关掉了颜色时打开 theme.color',
   'doctor.color.basic': '16 色配色',
   'doctor.color.truecolor': '16 色配色，品牌图形用 truecolor',
   'doctor.model.noProvider': '没有注册任何 LLM provider',
@@ -665,7 +735,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'collapse.mcp.settled.one': '查询了 {server}',
   'collapse.mcp.settled.other': '查询了 {server} {count} 次',
   'collapse.separator': '，',
-  'collapse.expandHint': '(ctrl+o 展开)',
+  'collapse.expandHint': '({key} 展开)',
 
   'status.flash.cardsHidden': '已隐藏工具卡片。',
   'status.flash.cardsExpanded': '已展开工具与上下文卡片。',
@@ -718,4 +788,50 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.thinking.disabled': '已禁用',
   'status.thinking.kept': '常驻',
   'status.thinking.live': '仅流式输出时',
+  'status.effort.default': '默认',
+  'status.count.event.one': '{count} 个事件',
+  'status.count.event.other': '{count} 个事件',
+  'status.count.turn.one': '{count} 轮',
+  'status.count.turn.other': '{count} 轮',
+  'status.count.step.one': '{count} 步',
+  'status.count.step.other': '{count} 步',
+  'status.count.toolCall.one': '{count} 次工具调用',
+  'status.count.toolCall.other': '{count} 次工具调用',
+  'status.totals.model': '模型 {duration}',
+  'status.totals.tools': '工具 {duration}',
+  'status.totals.ttft': '首字 {duration} 平均',
+  'status.totals.decode': '解码 {rate} tok/s',
+
+  'notice.unknownCommand': '未知命令：{text}',
+  'notice.commandFailed': '命令执行失败：{error}',
+  'notice.markdownDegraded': 'Markdown 渲染降级，本次会话余下部分改用后备渲染器。',
+  'notice.copyFailed': '复制失败：{error}',
+  'notice.overlayFailed': 'TUI 浮层失败：{error}',
+  'notice.newSession': '已开启一个空会话。当前会话的历史仍在，用 /resume 可以回来。',
+  'notice.newSessionFailed': '没能开启新会话：{error}',
+  'notice.disposedRecovery': '用 /resume 打开另一个会话，或按 {exit} 退出。',
+  'notice.agentDisposed': 'Agent "{id}" 已释放。{recovery}',
+  'notice.agentDisposedTurn': 'Agent "{id}" 已释放，本会话无法再执行任何一轮。{recovery}',
+  'notice.skillUsage': '用法：/skill:<name> [instructions]',
+  'notice.referenceInvalid': '会话引用不合法：{error}',
+  'notice.referenceUnavailable': '当前环境不提供会话引用能力。',
+  'notice.referenceFailed': '会话引用失败：{error}',
+  'notice.newSessionUnsupported': '当前运行时不能就地开新会话。退出后重新启动 dsh 即可得到一个空会话。',
+  'notice.newSessionBusy': '开新会话需要 agent 处于空闲状态（当前：{status}）。',
+  'notice.rewindNoFork': '那条提问已经放回编辑器。当前运行时不能分叉会话，所以它上面的对话没有变化。',
+  'notice.rewindNoTurn': '那条提问已经放回编辑器。它前面没有已完成的一轮，没有可以分叉的位置。',
+  'notice.rewindBusy': '先取消正在执行的这一轮，再回退。',
+  'notice.rewindForking': '正在从那条提问之前的位置分叉本会话；原会话仍可 resume。',
+  'notice.rewindFailed': '回退失败：{error}',
+  'notice.reloadBusyAgent': '/reload 需要 agent 处于空闲状态（当前：{status}）。',
+  'notice.reloadRunning': '已经有一个配置重载在执行了。',
+  'notice.reloadNoLoader': '/reload 需要 cordis Loader，当前运行时没有。',
+  'notice.reloadStarted': '正在重载 {count} 棵配置树…（experimental）',
+  'notice.reloadDone': '配置重载完成。未改动的文件已跳过；不合法的文件保持原来的运行态（详见日志）。',
+  'notice.reloadFailed': '配置重载失败：{error}',
+  'notice.referencedSessions': '引用的会话 · {labels}',
+
+  'settings.toolCards.collapsed': '折叠',
+  'settings.toolCards.expanded': '展开',
+  'settings.toolCards.hidden': '隐藏',
 }

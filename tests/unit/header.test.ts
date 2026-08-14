@@ -38,7 +38,7 @@ function bannerRows(skills: readonly string[] | undefined, width = WIDE): string
     title: () => undefined,
     ...skills === undefined ? {} : { skills },
   }
-  return new HeaderComponent(info, palette, false).render(width).map(row => row.trimEnd())
+  return new HeaderComponent(info, palette, () => false).render(width).map(row => row.trimEnd())
 }
 
 /** The skill-name rows of a banner: everything under the `[Skills]` label. */
@@ -126,7 +126,7 @@ describe('startup banner', () => {
       resumed: undefined,
       title: () => undefined,
       skills,
-    }, palette, false)
+    }, palette, () => false)
     assert.deepEqual(header.render(WIDE).map(row => row.trimEnd()), IDENTITY_ROWS)
 
     skills.push('lark-doc')

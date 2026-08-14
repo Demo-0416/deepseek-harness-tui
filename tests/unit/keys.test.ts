@@ -33,7 +33,7 @@ const CTRL_C = '\x03'
 const CTRL_R = '\x12'
 const CTRL_O = '\x0f'
 const CTRL_T = '\x14'
-const CTRL_Y = '\x19'
+const CTRL_N = '\x0e'
 const CTRL_B = '\x02'
 const ESC = '\x1b'
 const ENTER = '\r'
@@ -114,7 +114,7 @@ async function submit(harness: KeysHarness, text: string): Promise<void> {
 }
 
 describe('plan toggle', { skip: skipWithoutEntry }, () => {
-  it('collapses the plan to one row on Ctrl+Y and expands it again', async () => {
+  it('collapses the plan to one row on Ctrl+N and expands it again', async () => {
     const harness = await mount({
       beforeMount(session) {
         session.append('todo/write', {
@@ -129,13 +129,13 @@ describe('plan toggle', { skip: skipWithoutEntry }, () => {
     try {
       assert.match(harness.terminal.text(), /write the code/u)
 
-      const collapsed = await press(harness, CTRL_Y)
+      const collapsed = await press(harness, CTRL_N)
       // The summary keeps the two facts the panel was carrying: progress, and
       // what is being worked on now.
       assert.match(unwrapped(collapsed), /Plan 1\/3 done · Next: write the code/u)
       assert.doesNotMatch(collapsed, /run the tests/u)
 
-      const expanded = await press(harness, CTRL_Y)
+      const expanded = await press(harness, CTRL_N)
       assert.match(expanded, /run the tests/u)
     } finally {
       await unmount(harness)
@@ -145,7 +145,7 @@ describe('plan toggle', { skip: skipWithoutEntry }, () => {
   it('says so rather than toggling nothing when the session has no plan', async () => {
     const harness = await mount()
     try {
-      assert.match(unwrapped(await press(harness, CTRL_Y)), /No plan in this session yet\./u)
+      assert.match(unwrapped(await press(harness, CTRL_N)), /No plan in this session yet\./u)
     } finally {
       await unmount(harness)
     }
@@ -233,7 +233,7 @@ describe('thinking toggle', { skip: skipWithoutEntry }, () => {
       assert.match(unwrapped(await press(harness, SHIFT_CTRL_D)), /thinking kept/u)
       // The registry is what the panel reads, so the moved plan key shows there.
       assert.match(unwrapped(harness.terminal.text()), /app\.thinking\.toggle → Ctrl\+T/u)
-      assert.match(unwrapped(harness.terminal.text()), /app\.todos\.toggle → Ctrl\+Y/u)
+      assert.match(unwrapped(harness.terminal.text()), /app\.todos\.toggle → Ctrl\+N/u)
     } finally {
       await unmount(harness)
     }
@@ -413,7 +413,7 @@ describe('the help and debug surfaces', { skip: skipWithoutEntry }, () => {
       const help = await press(harness, '?')
       assert.match(unwrapped(help), /\/hotkeys/u)
       assert.match(unwrapped(help), /Ctrl\+R search prompt history backwards/u)
-      assert.match(unwrapped(help), /Ctrl\+Y expand or collapse the plan/u)
+      assert.match(unwrapped(help), /Ctrl\+N expand or collapse the plan/u)
       assert.match(unwrapped(help), /Ctrl\+T show or hide thinking blocks/u)
       // The character itself never lands in the draft.
       assert.doesNotMatch(unwrapped(help), /keys> \?/u)
@@ -460,7 +460,7 @@ describe('rebound keys', { skip: skipWithoutEntry }, () => {
 
       // The old key is a plain keystroke again, so it reaches the editor rather
       // than the toggle it used to drive.
-      const oldKey = await press(harness, CTRL_Y)
+      const oldKey = await press(harness, CTRL_N)
       assert.match(unwrapped(oldKey), /Plan 0\/1 done/u)
 
       // And the help names the key that works, not the one that no longer does.

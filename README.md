@@ -61,7 +61,7 @@ all three.
 | `?` | shortcut help, on an empty prompt; never typed into the draft |
 | Ctrl+R | search the prompt history backwards |
 | Ctrl+G | search this session's messages; Ctrl+F stays the editor's forward-char |
-| Ctrl+Y | expand or collapse the plan |
+| Ctrl+N | expand or collapse the plan; Ctrl+Y stays the editor's kill-ring paste |
 | Ctrl+O | cycle tool cards: preview, full, hidden |
 | Ctrl+T | show or hide thinking blocks — off, thinking streams and goes with the step that wrote it; on, every step keeps it, history included. The model reasons either way; `showReasoning: false` turns the key off with it |
 | Ctrl+X | copy the last answer |
@@ -211,14 +211,20 @@ Prompt templates interpolate `${name}` against the values this bundle registers
 is currently unavailable is dropped with it.
 
 Bindings other than Ctrl+C are configurable: set `keybindings` on the bundle row
-(`{ "app.history.search": "ctrl+p" }`), keyed by action id and valued with one
+(`{ "app.history.search": "alt+r" }`), keyed by action id and valued with one
 pi-tui key id or several. This bundle's ids are `app.tools.cycle`,
 `app.history.search`, `app.transcript.search`, `app.todos.toggle`,
 `app.thinking.toggle`, `app.message.copy`, `app.screen.redraw`, `app.cancel`,
 and `app.exit`; pi-tui's own editor bindings
 can be moved the same way. Shift+Ctrl+D reports what each of those ids resolved
-to, and any key two actions both claim — which is the first thing to suspect
-when a key "does nothing".
+to, any key two actions both claim, and any key an `app.*` action takes off
+pi-tui's editor — which is the first thing to suspect when a key "does nothing".
+
+Two keys are deliberately not what a reader might expect, because an `app.*`
+binding is answered before the editor sees the key: search is Ctrl+G rather than
+Ctrl+F (pi-tui's `tui.editor.cursorRight`), and the plan toggle is Ctrl+N rather
+than Ctrl+Y (pi-tui's `tui.editor.yank`). Rebinding either onto the editor's key
+takes the editor's habit away for good.
 
 ## Development
 

@@ -21,7 +21,13 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { KeybindingsManager } from '@earendil-works/pi-tui'
 import { Config } from '../../src/config.ts'
 import { CUSTOM_ANSWER_HINT } from '../../src/components/dialogs.ts'
-import { APP_KEYBINDINGS, KEYBINDINGS, formatKeyId, type AppKeybinding } from '../../src/keybindings.ts'
+import {
+  APP_KEYBINDINGS,
+  KEYBINDINGS,
+  formatKeyId,
+  keybindingCollisions,
+  type AppKeybinding,
+} from '../../src/keybindings.ts'
 import { startupRefusal } from '../../src/index.ts'
 import type { TuiStartupValues } from '../../src/startup.ts'
 import { tuiCommand } from '../../src/startup.ts'
@@ -124,6 +130,22 @@ describe('README key table', () => {
         assert.ok(bound.has(key) || unbindable.has(key), `README's "${key}" is a key something answers`)
       }
     }
+  })
+
+  it('takes no key off pi-tui that the editor still needs', () => {
+    // The app's input listener runs before the focused component and answers
+    // `consume: true`, so an `app.*` default that lands on a pi-tui default
+    // deletes the editor's action outright — silently, since
+    // `KeybindingsManager.getConflicts()` only compares user overrides.
+    const manager = new KeybindingsManager(KEYBINDINGS, {})
+    assert.deepEqual(keybindingCollisions(manager), [])
+  })
+
+  it('reports a deployment that rebinds an action onto an editor key', () => {
+    const manager = new KeybindingsManager(KEYBINDINGS, { 'app.todos.toggle': 'ctrl+y' })
+    assert.deepEqual(keybindingCollisions(manager), [
+      { key: 'ctrl+y', action: 'app.todos.toggle', shadowed: ['tui.editor.yank'] },
+    ])
   })
 })
 

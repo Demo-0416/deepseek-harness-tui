@@ -14,7 +14,7 @@ import type { GoalSnapshot } from '@deepseek-ai/dsh-goal'
 import type { SessionStatsProjection } from '@deepseek-ai/dsh-session-stats'
 import { displayInlineText, displayText } from '../components/text.ts'
 import { formatStatusDuration } from './timing.ts'
-import { t } from '../i18n/index.ts'
+import { plural, t } from '../i18n/index.ts'
 
 /**
  * Columns the prompt row spends on a goal objective.
@@ -98,11 +98,11 @@ export function formatSessionStats(stats: SessionStatsProjection): string {
   const ttft = mean(stats.ttftMs, stats.ttftSteps)
   const decodeRate = stats.decodeMs > 0 ? stats.decodeTokens / (stats.decodeMs / 1000) : undefined
   return [
-    `${String(stats.turns)} turn${stats.turns === 1 ? '' : 's'}`,
-    `${String(stats.steps)} step${stats.steps === 1 ? '' : 's'}`,
-    `model ${formatStatusDuration(stats.llmMs)}`,
-    `tools ${formatStatusDuration(stats.toolMs)}`,
-    ...ttft === undefined ? [] : [`ttft ${formatStatusDuration(ttft)} avg`],
-    ...decodeRate === undefined ? [] : [`${decodeRate.toFixed(1)} tok/s decode`],
+    plural(stats.turns, 'status.count.turn'),
+    plural(stats.steps, 'status.count.step'),
+    t('status.totals.model', { duration: formatStatusDuration(stats.llmMs) }),
+    t('status.totals.tools', { duration: formatStatusDuration(stats.toolMs) }),
+    ...ttft === undefined ? [] : [t('status.totals.ttft', { duration: formatStatusDuration(ttft) })],
+    ...decodeRate === undefined ? [] : [t('status.totals.decode', { rate: decodeRate.toFixed(1) })],
   ].join(' · ')
 }

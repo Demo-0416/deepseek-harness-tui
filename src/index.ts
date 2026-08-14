@@ -163,6 +163,7 @@ import { transcriptEntries } from './chat/transcript-search.ts'
 import {
   APP_KEYBINDINGS,
   installKeybindings,
+  keybindingCollisions,
   keyLabel,
   type AppKeybinding,
 } from './keybindings.ts'
@@ -405,7 +406,7 @@ function lastActivityTime(session: Session): number | undefined {
 
 /**
  * How long a transient confirmation (the Ctrl+O card cycle, the Ctrl+T thinking
- * switch, the Ctrl+Y plan toggle) stays on the status row before the row goes
+ * switch, the Ctrl+N plan toggle) stays on the status row before the row goes
  * back to what it was showing.
  */
 const STATUS_FLASH_MS = 1_500
@@ -447,18 +448,6 @@ const ARGUMENT_COMPLETION_CACHE_MS = 3_000
  * crowds the prompt.
  */
 const MIN_PANEL_ROWS = 5
-
-/**
- * The two ways out of a session whose agent is gone, named by every refusal
- * that mentions it.
- *
- * A disposed agent (an agent-loop reload, a host that retired it) leaves this
- * TUI mounted over a session that can still be read and can no longer run a
- * turn. Reporting only the refusal made that a dead end: every submission
- * failed and nothing on screen said what to do about it. `/resume` swaps this
- * chat for another session without leaving the process, and Ctrl+D ends it.
- */
-const DISPOSED_RECOVERY = 'Run /resume to open another session, or press ctrl+d to exit.'
 
 /**
  * How the debug and status surfaces name the Ctrl+T state.
@@ -912,7 +901,7 @@ export function createTuiChat(
       // stack has unwound and the append is an ordinary one.
       queueMicrotask(() => {
         if (disposed) return
-        appendNotice('Markdown rendering degraded; using the fallback renderer for the rest of this session.', 'warning')
+        appendNotice(t('notice.markdownDegraded'), 'warning')
       })
     },
   }
@@ -930,6 +919,10 @@ export function createTuiChat(
     now,
     toolDefinition: name => ctx.tools.get(name, agent),
     cwd,
+    // Read from the manager, like every other key this UI names: a deployment
+    // that moved `app.tools.cycle` would otherwise leave every collapsed row
+    // advertising a key that does nothing.
+    expandKey: () => keyLabel(keybindings, 'app.tools.cycle'),
   }, { showReasoning: reasoningEnabled, visibility: toolsVisibility, thinkingPinned })
 
   let sessionTitle = store.getSnapshot().title
@@ -966,7 +959,11 @@ export function createTuiChat(
   const header = new HeaderComponent(
     headerInfo,
     palette,
-    resolved.theme.color && resolved.theme.truecolor,
+    // A getter, not a value: the banner is mounted once and never remounted by
+    // `repaint`, so a `/theme no-color` mid-session (or a stored `no-color`
+    // preference read after this line) has to reach the wordmark's gradient
+    // through the same live appearance every other surface reads.
+    () => appearance.color && resolved.theme.truecolor,
   )
   const branch = runtime.gitBranch?.(cwd) ?? gitBranch(cwd)
   /**
@@ -1070,8 +1067,11 @@ export function createTuiChat(
       : fadeGlyph(
         envelope.glyph,
         palette,
-        resolved.theme.color,
-        resolved.theme.color && resolved.theme.truecolor,
+        // The live appearance, not the deployment's `theme.color`: `/theme
+        // no-color` rebuilds the palette into identity functions, but this
+        // glyph writes its own 24-bit escape and would keep painting.
+        appearance.color,
+        appearance.color && resolved.theme.truecolor,
         envelope.level * pulseLevel(renderTime),
         envelope.level >= 0.5,
       )
@@ -1169,6 +1169,21 @@ export function createTuiChat(
     })
     requestRender()
   }
+
+  /**
+   * The two ways out of a session whose agent is gone, named by every refusal
+   * that mentions it.
+   *
+   * A disposed agent (an agent-loop reload, a host that retired it) leaves this
+   * TUI mounted over a session that can still be read and can no longer run a
+   * turn. Reporting only the refusal made that a dead end: every submission
+   * failed and nothing on screen said what to do about it. `/resume` swaps this
+   * chat for another session without leaving the process, and the exit key ends
+   * it — read from the manager, since a deployment may have moved it.
+   * @returns The recovery sentence, in the active locale.
+   */
+  const disposedRecovery = (): string =>
+    t('notice.disposedRecovery', { exit: keyLabel(keybindings, 'app.exit') })
 
   /** Stop the flash timer and clear the transient text it was showing. */
   const clearFlash = (): void => {
@@ -1274,13 +1289,13 @@ export function createTuiChat(
         : t(path === 'tmux-buffer' ? 'status.flash.copiedTmux' : 'status.flash.copiedOsc52'))
     }, (error: unknown) => {
       /* v8 ignore next 2 -- the clipboard port collapses every subprocess failure into an exit code. */
-      if (!disposed) appendNotice(`Copy failed: ${errorChain(error)}`, 'error')
+      if (!disposed) appendNotice(t('notice.copyFailed', { error: errorChain(error) }), 'error')
     })
   }
 
   const extensionTheme: TuiTheme = Object.freeze({
     text: (value: string) => palette.text(value),
-    brand: (value: string) => resolved.theme.color
+    brand: (value: string) => appearance.color
       ? resolved.theme.truecolor ? brandText(value) : palette.brand(value)
       : value,
     dim: (value: string) => palette.dim(value),
@@ -1333,7 +1348,7 @@ export function createTuiChat(
       ctx.logger.warn(`dsh-tui: overlay failed: ${message}`)
       /* v8 ignore next -- shutdown removes overlays before the terminal stops */
       if (disposed) return
-      appendNotice(`TUI overlay failed: ${message}`, 'error')
+      appendNotice(t('notice.overlayFailed', { error: message }), 'error')
     },
   })
 
@@ -1820,7 +1835,7 @@ export function createTuiChat(
   }
 
   /**
-   * Show the plan's items or its one-line summary (Ctrl+Y).
+   * Show the plan's items or its one-line summary (Ctrl+N).
    *
    * The panel used to be unconditional, so a session with a long plan spent the
    * rows above the prompt on it from the moment the agent wrote one until the
@@ -1991,6 +2006,11 @@ export function createTuiChat(
    */
   const showDebug = (): void => {
     const conflicts = keybindings.getConflicts()
+    // `getConflicts()` compares user overrides against each other only, so a key
+    // an `app.*` action takes off pi-tui is invisible to it — and invisible on
+    // screen too, since the app's listener consumes the key before the editor
+    // ever sees it. This is the panel that has to name that class of bug.
+    const shadowed = keybindingCollisions(keybindings)
     showPanel('debug (shift+ctrl+d)', [
       `session ${displayText(agent.session.id)} · agent ${agent.status}${agentGone ? ' · detached' : ''}`,
       `events ${String(agent.session.events.length)} · context ${String(Math.round(contextTokens()))} tokens`,
@@ -2006,6 +2026,9 @@ export function createTuiChat(
       ...conflicts.length === 0
         ? []
         : ['', ...conflicts.map(conflict => `conflict: ${conflict.key} claimed by ${conflict.keybindings.join(', ')}`)],
+      ...shadowed.length === 0
+        ? []
+        : ['', ...shadowed.map(hit => `shadows pi-tui: ${hit.key} (${hit.action}) hides ${hit.shadowed.join(', ')}`)],
     ].map(line => palette.dim(line)))
   }
   // pi-tui hands this key over before focus is resolved, so it works with a
@@ -2115,6 +2138,10 @@ export function createTuiChat(
       label: t('settings.toolCards'),
       options: TOOL_CARD_PHASES,
       value: () => toolsVisibility,
+      // The ids are internal: nothing takes `collapsed` as an argument, and the
+      // same three states are already worded in the flash row, so a `/config`
+      // that printed them raw was the one untranslated cell on the panel.
+      format: phase => t(`settings.toolCards.${phase as ToolCardVisibility}`),
       set: (next) => {
         /* v8 ignore next -- the options are TOOL_CARD_PHASES, so every value is one. */
         if (next !== 'collapsed' && next !== 'expanded' && next !== 'hidden') return
@@ -2286,8 +2313,11 @@ export function createTuiChat(
       stdoutTty: process.stdout.isTTY === true,
       columns: runtime.terminal.columns,
       rows: runtime.terminal.rows,
-      color: resolved.theme.color,
-      truecolor: resolved.theme.truecolor,
+      // The resolved appearance, not the deployment's setting: `/theme
+      // no-color` is now the main way color gets turned off, and a check that
+      // read `theme.color` reported a palette the screen no longer paints.
+      color: appearance.color,
+      truecolor: appearance.color && resolved.theme.truecolor,
       providers: ctx.llm.listProviders().map(provider => provider.id),
       route: target.current,
       resolveModelInfo: (provider, model) => ctx.llm.resolveModelInfo(provider, model),
@@ -2329,11 +2359,15 @@ export function createTuiChat(
     const turns = events.filter(event => event.type === 'turn/start').length
     const steps = events.filter(event => event.type === 'step/start').length
     const toolCalls = events.filter(event => event.type === 'tool/call').length
-    const model = target.current === undefined ? 'unset' : displayText(targetLabel(target.current))
+    // The same words `/config` uses for the same two states: a card whose
+    // labels are translated and whose values are not reads as half a card.
+    const model = target.current === undefined
+      ? t('settings.model.unset')
+      : displayText(targetLabel(target.current))
     const effort = target.current === undefined
-      ? 'unset'
+      ? t('settings.model.unset')
       : target.current.reasoningEffort === undefined
-        ? 'default'
+        ? t('status.effort.default')
         : displayText(target.current.reasoningEffort)
     // Whole-log figures the in-memory counts above cannot give: `sessionStats`
     // folds every turn, step, and wall time from the durable log, so paging and
@@ -2367,10 +2401,10 @@ export function createTuiChat(
       [
         [t('status.row.agent'), [
           agent.status,
-          formatDiagnosticCount(events.length, 'event'),
-          formatDiagnosticCount(turns, 'turn'),
-          formatDiagnosticCount(steps, 'step'),
-          formatDiagnosticCount(toolCalls, 'tool call'),
+          formatDiagnosticCount(events.length, 'status.count.event'),
+          formatDiagnosticCount(turns, 'status.count.turn'),
+          formatDiagnosticCount(steps, 'status.count.step'),
+          formatDiagnosticCount(toolCalls, 'status.count.toolCall'),
         ].join(' · ')],
         ...stats === undefined
           ? []
@@ -2675,18 +2709,18 @@ export function createTuiChat(
     if (start === undefined) {
       return {
         kind: 'error',
-        text: 'This runtime cannot open a new session in place. Exit and start dsh again for a blank session.',
+        text: t('notice.newSessionUnsupported'),
       }
     }
     // Idle-only, as `/resume` is: a running turn is writing to the log this
     // teardown releases, and its tools are mid-call.
     if (agent.status !== 'idle') {
-      return { kind: 'error', text: `A new session needs an idle agent (status: ${agent.status}).` }
+      return { kind: 'error', text: t('notice.newSessionBusy', { status: agent.status }) }
     }
-    appendNotice('Starting a blank session. This one keeps its history — /resume brings it back.')
+    appendNotice(t('notice.newSession'))
     void start().catch((error: unknown) => {
       /* v8 ignore next -- a handoff that fails after teardown has no screen left to report on. */
-      if (!disposed) appendNotice(`Could not start a new session: ${errorChain(error)}`, 'error')
+      if (!disposed) appendNotice(t('notice.newSessionFailed', { error: errorChain(error) }), 'error')
     })
     return { kind: 'success' }
   }
@@ -2878,14 +2912,14 @@ export function createTuiChat(
       (execution) => {
         if (disposed) return
         if (execution === undefined) {
-          appendNotice(`Unknown command: ${text}`, 'warning')
+          appendNotice(t('notice.unknownCommand', { text }), 'warning')
         } else if (execution.result.text !== undefined && execution.result.text !== '') {
           appendNotice(execution.result.text, execution.result.kind === 'error' ? 'error' : 'info')
         }
       },
       (error: unknown) => {
         if (!disposed) {
-          appendNotice(`Command failed: ${errorChain(error)}`, 'error')
+          appendNotice(t('notice.commandFailed', { error: errorChain(error) }), 'error')
         }
       },
     ).finally(() => { commandControllers.delete(controller) })
@@ -2903,7 +2937,7 @@ export function createTuiChat(
    */
   const dispatchMessage = (content: ContentBlock[], attachedContext?: UserMessage): void => {
     if (disposed || agentGone) {
-      appendNotice(`Agent "${agent.id}" is disposed. ${DISPOSED_RECOVERY}`, 'error')
+      appendNotice(t('notice.agentDisposed', { id: agent.id, recovery: disposedRecovery() }), 'error')
       return
     }
     // Queued before the prompt so the nearest pre-step claims both together.
@@ -2969,7 +3003,7 @@ export function createTuiChat(
           return
         }
         if (!summary.invocation.userInvocable) {
-          appendNotice(`Skill "${name}" is not available for user invocation.`, 'warning')
+          appendNotice(t('skills.notUserInvocable', { name }), 'warning')
           return
         }
         return skills.get(name, lookup).then(
@@ -2980,7 +3014,7 @@ export function createTuiChat(
               return
             }
             if (!skill.invocation.userInvocable) {
-              appendNotice(`Skill "${name}" is not available for user invocation.`, 'warning')
+              appendNotice(t('skills.notUserInvocable', { name }), 'warning')
               return
             }
             deliver(renderSkillInvocation(skill, instructions))
@@ -3004,14 +3038,14 @@ export function createTuiChat(
     // under in-flight calls. Idleness is advisory (a send can race in after
     // the check), but it removes the common footgun.
     if (agent.status !== 'idle') {
-      appendNotice(`/reload requires an idle agent (status: ${agent.status}).`, 'warning')
+      appendNotice(t('notice.reloadBusyAgent', { status: agent.status }), 'warning')
       return
     }
     // Re-entrancy guard: concurrent refreshes over a genuinely changed file
     // would race unmutexed tree updates (create/remove interleaving); one
     // reload at a time keeps the update pass single-writer.
     if (reloadInFlight) {
-      appendNotice('A config reload is already running.', 'warning')
+      appendNotice(t('notice.reloadRunning'), 'warning')
       return
     }
 
@@ -3021,7 +3055,7 @@ export function createTuiChat(
     // proxy read would throw `cannot get property without inject` in a fiber.
     const loader = ctx.get('loader') as { entries(): Iterable<{ subtree?: { refresh?(): Promise<void> } }> } | undefined
     if (loader === undefined) {
-      appendNotice('/reload needs the cordis Loader; this runtime has none.', 'warning')
+      appendNotice(t('notice.reloadNoLoader'), 'warning')
       return
     }
     const refreshes: Promise<void>[] = []
@@ -3029,13 +3063,13 @@ export function createTuiChat(
       if (entry.subtree?.refresh !== undefined) refreshes.push(entry.subtree.refresh())
     }
     reloadInFlight = true
-    appendNotice(`Reloading ${refreshes.length} config tree(s)… (experimental)`)
+    appendNotice(t('notice.reloadStarted', { count: refreshes.length }))
     // refresh() never rejects (it warns and keeps the running tree), so the
     // join can only fulfill; the catch arm guards a future contract change.
     void Promise.all(refreshes).then(() => {
-      appendNotice('Config reload complete. Unchanged files were skipped; invalid files keep the running tree (see logs).')
+      appendNotice(t('notice.reloadDone'))
     }).catch((error: unknown) => {
-      appendNotice(`Config reload failed: ${errorChain(error)}`, 'error')
+      appendNotice(t('notice.reloadFailed', { error: errorChain(error) }), 'error')
     }).finally(() => {
       reloadInFlight = false
     })
@@ -3081,7 +3115,7 @@ export function createTuiChat(
       editor.addToHistory(text)
       editor.setText('')
       const { name: skillName, instructions } = parseSkillCommand(text)
-      if (skillName === '') appendNotice('Usage: /skill:<name> [instructions]', 'warning')
+      if (skillName === '') appendNotice(t('notice.skillUsage'), 'warning')
       else void invokeSkill(skillName, instructions)
       return
     }
@@ -3096,7 +3130,7 @@ export function createTuiChat(
       parsed = parseSessionReferenceText(text)
     } catch (error: unknown) {
       restoreSubmittedInput()
-      appendNotice(`Invalid session reference: ${errorChain(error)}`, 'error')
+      appendNotice(t('notice.referenceInvalid', { error: errorChain(error) }), 'error')
       return
     }
     if (parsed.references.length === 0) {
@@ -3108,7 +3142,7 @@ export function createTuiChat(
     const sessionReferences = ctx.get('sessionReferenceResolver')
     if (sessionReferences === undefined) {
       restoreSubmittedInput()
-      appendNotice('Session reference capability unavailable.', 'error')
+      appendNotice(t('notice.referenceUnavailable'), 'error')
       return
     }
     const controller = new AbortController()
@@ -3129,7 +3163,7 @@ export function createTuiChat(
     }, (error: unknown) => {
       if (!disposed && !controller.signal.aborted) {
         restoreSubmittedInput()
-        appendNotice(`Session reference failed: ${errorChain(error)}`, 'error')
+        appendNotice(t('notice.referenceFailed', { error: errorChain(error) }), 'error')
       }
     }).finally(() => {
       referenceControllers.delete(controller)
@@ -3270,12 +3304,10 @@ export function createTuiChat(
     editor.setText(target.text)
     requestRender()
     if (fork === undefined || seedLength === undefined) {
-      appendNotice(fork === undefined
-        ? 'Rewind put that prompt back in the editor. This runtime cannot fork a session, so the conversation above it is unchanged.'
-        : 'Rewind put that prompt back in the editor. No completed turn precedes it, so there was nothing to fork to.', 'warning')
+      appendNotice(t(fork === undefined ? 'notice.rewindNoFork' : 'notice.rewindNoTurn'), 'warning')
       return
     }
-    appendNotice('Forking this session to the point before that prompt; the original stays resumable.')
+    appendNotice(t('notice.rewindForking'))
     void fork({
       seed: events.slice(0, seedLength),
       parentSession: agent.session.id,
@@ -3283,13 +3315,13 @@ export function createTuiChat(
       draft: target.text,
     }).catch((error: unknown) => {
       /* v8 ignore next -- a fork that fails after teardown has no screen left to report on. */
-      if (!disposed) appendNotice(`Rewind failed: ${errorChain(error)}`, 'error')
+      if (!disposed) appendNotice(t('notice.rewindFailed', { error: errorChain(error) }), 'error')
     })
   }
 
   const showRewind = (): void => {
     if (agent.status === 'running') {
-      appendNotice('Cancel the active turn before rewinding.', 'warning')
+      appendNotice(t('notice.rewindBusy'), 'warning')
       return
     }
     void panelOverlay?.close()
@@ -3567,7 +3599,10 @@ export function createTuiChat(
     // terminal outcome, and no animation may survive agent detachment.
     agentGone = true
     clearStatus()
-    appendNotice(`Agent "${agent.id}" was disposed; this session can no longer run a turn. ${DISPOSED_RECOVERY}`, 'warning')
+    appendNotice(
+      t('notice.agentDisposedTurn', { id: agent.id, recovery: disposedRecovery() }),
+      'warning',
+    )
   })
 
   const detachListeners = (): void => {

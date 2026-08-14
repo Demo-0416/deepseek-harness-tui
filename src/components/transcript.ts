@@ -385,10 +385,17 @@ export class HeaderComponent implements Component {
   /** Columns of the wordmark currently revealed; `undefined` renders it whole. */
   private revealWidth: number | undefined
 
+  /**
+   * @param info - The identity lines this banner states.
+   * @param palette - Active role palette, mutated in place by a repaint.
+   * @param gradient - Whether the wordmark may carry truecolor brand art, read
+   *   per render: the banner is mounted once, so a theme changed mid-session
+   *   (`/theme no-color`) has no other way to reach it.
+   */
   constructor(
     private readonly info: HeaderInfo,
     private readonly palette: Palette,
-    private readonly gradient: boolean,
+    private readonly gradient: () => boolean,
   ) {}
 
   /**
@@ -406,7 +413,7 @@ export class HeaderComponent implements Component {
 
   render(width: number): string[] {
     const usable = Math.max(1, width - 2)
-    const name = this.gradient
+    const name = this.gradient()
       ? this.palette.bold(gradientText('DEEPSEEK'))
       : this.palette.bold(this.palette.accent('DEEPSEEK'))
     const version = this.info.version
@@ -1455,10 +1462,20 @@ export function collapsedSummary(group: CollapsedGroup): string {
  * a failure the user never learns about.
  */
 export class CollapsedGroupComponent extends CachedCardComponent {
+  /**
+   * @param group - The planned group this row reports.
+   * @param palette - Active role palette.
+   * @param displayPath - Shortens an absolute path for the `⎿` hint.
+   * @param expandKey - The label of whichever key currently cycles tool cards,
+   *   read per render: `app.tools.cycle` is rebindable, and a row that named
+   *   the default key after a deployment moved it would send every reader to a
+   *   key that does nothing.
+   */
   constructor(
     private group: CollapsedGroup,
     private readonly palette: Palette,
     private readonly displayPath: (path: string) => string,
+    private readonly expandKey: () => string,
   ) {
     super()
   }
@@ -1485,7 +1502,7 @@ export class CollapsedGroupComponent extends CachedCardComponent {
     // The row wraps rather than truncating, unlike a card header: the key that
     // opens the group is the last thing on it, and a narrow terminal must not
     // be the reason the user never learns the row can be opened.
-    const head = `${text} ${this.palette.dim(t('collapse.expandHint'))}`
+    const head = `${text} ${this.palette.dim(t('collapse.expandHint', { key: this.expandKey() }))}`
     const rows = ['']
     let first = true
     for (const row of wrapTextWithAnsi(head, Math.max(20, width - GUTTER_WIDTH - 2))) {
@@ -1598,7 +1615,7 @@ const TODO_PRIORITY: Record<TodoItem['status'], number> = { in_progress: 0, pend
  * The plan/todo panel rendered above the prompt, expanded or collapsed.
  *
  * The panel used to be unconditional: any session whose agent wrote a plan paid
- * for it on every frame, with no key that took it back down. Ctrl+Y collapses it
+ * for it on every frame, with no key that took it back down. Ctrl+N collapses it
  * to a single summary row — what is left to do and what is being done now —
  * which is the same trade Claude Code offers, and the same one a long plan on a
  * short terminal forces anyway.
@@ -1626,7 +1643,7 @@ export class TodoComponent implements Component {
     this.todos = todos
   }
 
-  /** Whether this session has a plan at all, which is what makes Ctrl+Y meaningful. */
+  /** Whether this session has a plan at all, which is what makes Ctrl+N meaningful. */
   hasTodos(): boolean {
     return this.todos.length > 0
   }

@@ -316,6 +316,31 @@ export class HeadlessTerminal implements Terminal {
     return violations
   }
 
+  /**
+   * Every cell the TUI painted with anything at all.
+   *
+   * The assertion `no-color` needs: not "no truecolor" (that is
+   * {@link themeViolations}) but "no SGR reached the screen", which is what
+   * `/theme no-color` promises. Reads rendered cells rather than the raw byte
+   * stream so an escape the emulator ignores is not counted as paint.
+   * @returns One `row:column style` entry per styled cell.
+   */
+  paintedCells(): string[] {
+    const painted: string[] = []
+    const buffer = this.emulator.buffer.active
+    for (let row = 0; row < buffer.length; row++) {
+      const line = buffer.getLine(row)
+      if (line === undefined) continue
+      for (let column = 0; column < this.columns; column++) {
+        const cell = line.getCell(column)
+        if (cell === undefined) continue
+        const style = styleLabel(cell)
+        if (style !== '') painted.push(`${row}:${column} ${style}`)
+      }
+    }
+    return painted
+  }
+
   /** Serialize terminal cells and metadata into a stable, reviewable expected output. */
   async snapshot(options: TerminalSnapshotOptions = {}): Promise<string> {
     await this.flush()
