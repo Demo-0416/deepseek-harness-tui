@@ -88,6 +88,7 @@ all three.
 | Skills (`/skills`) | type to filter · Up/Down move · PgUp/PgDn page · Enter read one skill (Up/Down scroll · g/G or Home/End top or bottom) · Esc leaves the skill, then clears the filter, then closes |
 | Settings (`/config`) | Up/Down move · Enter flips a switch, steps a choice, or opens a submenu · Left/Right step a choice · Esc close |
 | Theme picker (`/theme`) | Up/Down preview each theme on the screen behind it · Enter keep it · Esc restore the one you opened on |
+| Provider sign-in (`/login`, `/provider add`) | Up/Down move · Space tick a model · Enter continue · Ctrl+U clear the field · Esc cancel the whole flow |
 
 Ctrl+C is the one key that is never rebindable: it is how a terminal is always
 left. Every other binding is configurable — see `keybindings` below.
@@ -102,6 +103,8 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/preset [<preset> \| copy <preset> <new-id>]` | show, switch, or copy this session's agent preset |
 | `/config` | this terminal's own settings — the Ctrl+T thinking pin, the tool-card phase a session opens on, theme — changed in place and saved for the next session |
 | `/theme [auto\|light\|dark\|no-color]` | the palette this terminal paints with; without an argument it opens the picker |
+| `/login [provider]` | give a provider an API key: pick a configured route or one the adapter offers, paste the key, and it is checked against the endpoint before being stored. The key goes to the credential store; settings record only the variable name |
+| `/provider [add]` | list configured providers and the ones `/login` can configure; `add` walks through name, endpoint, protocol, key, and the models the endpoint reports |
 | `/copy` | copy the last answer to the system clipboard |
 | `/new` | start a blank session in this workspace; the current one keeps its history and stays resumable |
 | `/clear` | clear the transcript view; the session log is unchanged |
@@ -223,6 +226,18 @@ its four values, and `/resume` this workspace's recent sessions.
 - **Theme** — `/theme`, or the `/config` row: `auto` (follow the terminal's
   report), `light`, `dark`, `no-color`, previewed on the screen behind the
   picker as you move and restored if you leave by Esc.
+- **Provider sign-in** — `/login [provider]`: give a route an API key. The list
+  holds what settings already configure and what the adapter's own directory
+  offers, which is what lets a machine with an empty settings file reach
+  DeepSeek's official endpoint at all. The key is never echoed — the field draws
+  dots — and it is checked against the endpoint before it is stored: a 401 or a
+  403 stores nothing, and a key that could not be checked is stored only after
+  an explicit yes and is then reported as unchecked rather than as working. The
+  secret goes to the credential store's own file; settings record the variable
+  name and nothing else. `/provider` lists the same two groups, and
+  `/provider add` walks a route the adapter has never heard of through name,
+  endpoint, protocol, credential variable, key, and the models the endpoint
+  reports.
 - **Status** — `/status`: session diagnostics, system prompt, registered tools.
 - **MCP** — `/mcp`: which MCP server each of this session's tools came from,
   read back out of the `mcp__<server>__<tool>` names the tools are registered

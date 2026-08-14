@@ -28,6 +28,9 @@ import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { createMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type {
   ContentBlock,
+  LlmConfigurableProvider,
+  LlmDiscoveredModel,
+  LlmModelDiscoveryRequest,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
@@ -123,6 +126,24 @@ export interface FakeLlmCatalog {
     provider: string,
     model: string,
   ) => Promise<Pick<LlmResolvedModelInfo, 'context' | 'reasoning'>>
+  /**
+   * Provider routes an adapter could activate through configuration, whether or
+   * not one is registered. This is the directory `/login` reads to offer a
+   * provider on a machine whose settings hold none, so a case about the
+   * fresh-machine path supplies it and no other case has to.
+   */
+  configurableProviders?: LlmConfigurableProvider[]
+  /**
+   * Endpoint interrogation, standing in for the adapter's discovery path.
+   *
+   * Supplying it is how a login case exercises a probe without a socket: the
+   * production code reaches the endpoint only through this service method, so a
+   * fake here is the whole of the network boundary.
+   */
+  discoverModels?: (
+    settingsNs: string,
+    request: LlmModelDiscoveryRequest,
+  ) => Promise<readonly LlmDiscoveredModel[]>
 }
 
 /** Fake `ctx.sessionPersistence` surface the resume flows read. */
@@ -272,6 +293,15 @@ export async function createTuiTestContext(options: TuiHarnessOptions = {}): Pro
       listModels(provider: string) {
         return catalog.listModels?.(provider)
           ?? Promise.resolve(catalog.models.filter(model => model.provider === provider).map(model => ({ ...model })))
+      },
+      listConfigurableProviders() {
+        return (catalog.configurableProviders ?? []).map(entry => ({ ...entry }))
+      },
+      discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest) {
+        if (catalog.discoverModels === undefined) {
+          return Promise.reject(new Error('this fake catalog was not given a discovery implementation'))
+        }
+        return catalog.discoverModels(settingsNs, request)
       },
       async resolveModelInfo(provider: string, model: string) {
         const advertised = catalog.models.find(candidate =>

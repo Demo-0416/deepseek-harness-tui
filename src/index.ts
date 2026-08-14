@@ -223,6 +223,10 @@ import {
   sessionAgentPreset,
   type PresetController,
 } from './chat/preset-command.ts'
+import {
+  createLoginController,
+  type LoginController,
+} from './chat/login-command.ts'
 import { createQuestionQueue } from './chat/questions.ts'
 import { startPrintRun, type PrintIo } from './print.ts'
 import {
@@ -1461,6 +1465,19 @@ export function createTuiChat(
     requestRender,
     isDisposed,
   })
+  // Not wrapped in `dismissableOverlays`, unlike the two pickers above: this
+  // surface holds a half-typed credential, and a notice arriving mid-paste
+  // would take it down with nothing on screen to explain where the key went.
+  const loginController: LoginController = createLoginController({
+    ctx,
+    resolved,
+    palette,
+    overlayManager,
+    appendNotice,
+    flashPending,
+    requestRender,
+    isDisposed,
+  })
   updatePromptValues()
 
   const renderStatus = (): void => {
@@ -1881,6 +1898,7 @@ export function createTuiChat(
       await overlayManager.dispose()
       modelController.clearOverlay()
       presetController.clearOverlay()
+      loginController.clearOverlay()
       questions.unregister()
       await runtime.terminal.drainInput(100, 20)
       ui.stop()
@@ -3010,6 +3028,27 @@ export function createTuiChat(
       input: { hint: '[<preset> | copy <preset> <new-id>]' },
       handler: ({ rawInput }) => {
         presetController.queuePresetCommand(rawInput)
+        return { kind: 'success' }
+      },
+    })
+    commandCtx.commands.register({
+      name: 'login',
+      // Named for the thing being signed in to, not for the field being
+      // written: the key lands in the credential store and only its variable
+      // name reaches settings, which is not what "set an API key" would say.
+      description: 'Give a provider an API key and store it',
+      input: { hint: '[provider]' },
+      handler: ({ rawInput }) => {
+        loginController.queueLoginCommand(rawInput)
+        return { kind: 'success' }
+      },
+    })
+    commandCtx.commands.register({
+      name: 'provider',
+      description: 'List configured providers, or add one /login does not offer',
+      input: { hint: '[add]' },
+      handler: ({ rawInput }) => {
+        loginController.queueProviderCommand(rawInput)
         return { kind: 'success' }
       },
     })
