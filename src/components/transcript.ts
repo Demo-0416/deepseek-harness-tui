@@ -572,7 +572,8 @@ const THINKING_INDENT = GUTTER_INDENT
  * of their own.
  * @param showThinking - Whether this step's thinking block renders at all;
  * {@link StreamingAssistantComponent.showsThinking} decides it from the
- * configured setting, the step's lifecycle, and the Ctrl+O phase.
+ * configured setting, the Ctrl+T pin, the step's lifecycle, and the Ctrl+O
+ * phase.
  */
 function assistantMessageChildren(
   content: readonly ContentBlock[],
@@ -815,7 +816,8 @@ export class StreamingAssistantComponent extends Container {
     events: () => readonly SessionEvent[],
     tracker: StepTimingTracker,
     now: () => number,
-    private showReasoning: boolean,
+    private readonly showReasoning: boolean,
+    private thinkingPinned: boolean,
     private visibility: ToolCardVisibility,
     private readonly palette: Palette,
     private readonly mdTheme: MarkdownTheme,
@@ -861,7 +863,8 @@ export class StreamingAssistantComponent extends Container {
 
   /**
    * Pin the step's timing footer to its completion time, and close the step:
-   * its thinking is history from here, so the default transcript drops it.
+   * its thinking is history from here, so the default transcript drops it —
+   * unless Ctrl+T pinned it, which is what that key is for.
    * @param time - Step completion time in epoch milliseconds.
    */
   complete(time: number): void {
@@ -877,11 +880,11 @@ export class StreamingAssistantComponent extends Container {
   }
 
   /**
-   * Toggle whether reasoning blocks render, then re-render.
-   * @param show - Whether to show reasoning blocks.
+   * Pin or unpin this step's thinking block (Ctrl+T), then re-render.
+   * @param pinned - Whether a finished step keeps its thinking on screen.
    */
-  setShowReasoning(show: boolean): void {
-    this.showReasoning = show
+  setThinkingPinned(pinned: boolean): void {
+    this.thinkingPinned = pinned
     this.rebuild()
   }
 
@@ -908,12 +911,21 @@ export class StreamingAssistantComponent extends Container {
    * disappears with the step that produced it, and comes back whole on the
    * expanded phase.
    *
-   * A configured `showReasoning: false` still means never, in any phase: that
-   * setting predates the cycle and is a deployment saying this transcript does
-   * not show reasoning at all.
+   * Ctrl+T pins that window open: with it on, every step's thinking stays on
+   * screen — this turn's and every earlier one's — because the switch is over
+   * the transcript rather than over the model, which thinks either way. It is
+   * checked before the Ctrl+O phase and independently of it: the two are
+   * separate switches over the same rows, and neither takes the other over.
+   * Pinned thinking therefore survives the hidden phase, and expanded still
+   * brings thinking back with the tool bodies while the pin is off.
+   *
+   * A configured `showReasoning: false` still means never, in any phase and
+   * whatever the pin says: that setting predates the cycle and is a deployment
+   * saying this transcript does not show reasoning at all.
    */
   private showsThinking(): boolean {
     if (!this.showReasoning) return false
+    if (this.thinkingPinned) return true
     if (this.visibility === 'expanded') return true
     // A cancelled turn closes its step without settling the message, so both
     // ends of the step's life are checked: neither alone retires every step.
@@ -1462,7 +1474,7 @@ const TODO_PRIORITY: Record<TodoItem['status'], number> = { in_progress: 0, pend
  * The plan/todo panel rendered above the prompt, expanded or collapsed.
  *
  * The panel used to be unconditional: any session whose agent wrote a plan paid
- * for it on every frame, with no key that took it back down. Ctrl+T collapses it
+ * for it on every frame, with no key that took it back down. Ctrl+Y collapses it
  * to a single summary row — what is left to do and what is being done now —
  * which is the same trade Claude Code offers, and the same one a long plan on a
  * short terminal forces anyway.
@@ -1490,7 +1502,7 @@ export class TodoComponent implements Component {
     this.todos = todos
   }
 
-  /** Whether this session has a plan at all, which is what makes Ctrl+T meaningful. */
+  /** Whether this session has a plan at all, which is what makes Ctrl+Y meaningful. */
   hasTodos(): boolean {
     return this.todos.length > 0
   }

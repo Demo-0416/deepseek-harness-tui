@@ -35,7 +35,7 @@ export const EN_MESSAGES = {
   'command.copy.description': 'Copy the last answer to the system clipboard',
   'command.new.description': 'Start a blank session in this workspace (this one stays resumable)',
   'command.clear.description': 'Clear the transcript view (session history is unchanged)',
-  'command.details.description': 'Select tool-card visibility and reasoning display',
+  'command.details.description': 'Select tool-card visibility and thinking blocks',
   'command.palette.description': 'Show every color and attribute role this terminal renders',
   'command.export.description': 'Write this session\'s log to a file and report the path',
   'command.plugins.description': 'Search and inspect the Loader\'s plugin entries',
@@ -61,7 +61,8 @@ export const EN_MESSAGES = {
   'hotkeys.editor': 'Enter send • Shift/Alt+Enter newline • Up/Down prompt history • Tab accept a completion',
   'hotkeys.entry': '@ reference a file • / run a command • /skill:<name> load a skill • ? this list',
   'hotkeys.history': '{search} search prompt history backwards • {todos} expand or collapse the plan',
-  'hotkeys.cards': '{cycle} cycle tool cards (preview/full/hidden) • {copy} copy the last answer • {redraw} redraw',
+  'hotkeys.cards': '{cycle} cycle tool cards (preview/full/hidden) • {thinking} show or hide thinking blocks',
+  'hotkeys.copy': '{copy} copy the last answer • {redraw} redraw',
   'hotkeys.cancel': '{cancel} cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind',
   'hotkeys.exit': '{exit} exit on an empty prompt • Shift+Ctrl+D session debug panel',
   'hotkeys.interrupt': 'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
@@ -130,7 +131,12 @@ export const EN_MESSAGES = {
   // `/details`.
   'dialog.details.title': 'Transcript details',
   'dialog.details.tools': 'Tool cards',
-  'dialog.details.reasoning': 'Reasoning',
+  'dialog.details.thinking': 'Thinking',
+  // The row's own value. `disabled` is what a deployment with
+  // `showReasoning: false` reads, and the row refuses to cycle out of it.
+  'dialog.details.thinking.shown': 'shown',
+  'dialog.details.thinking.hidden': 'hidden',
+  'dialog.details.thinking.disabled': 'disabled',
   'dialog.details.hint': '↑/↓ move • Tab toggle • Enter/Esc close',
 
   // `/resume`.
@@ -173,8 +179,12 @@ export const EN_MESSAGES = {
   'status.flash.cardsHidden': 'Tool cards hidden.',
   'status.flash.cardsExpanded': 'Tool and context cards expanded.',
   'status.flash.cardsCollapsed': 'Tool cards collapsed; context hidden.',
-  'status.flash.reasoningShown': 'Reasoning blocks shown.',
-  'status.flash.reasoningHidden': 'Reasoning blocks hidden.',
+  // Ctrl+T. The refusal names `showReasoning` on purpose: it is the only thing
+  // that can bring the blocks back, so a message that stayed vague would leave
+  // the user pressing a key that will never answer.
+  'status.flash.thinkingPinned': 'Thinking blocks kept on screen.',
+  'status.flash.thinkingUnpinned': 'Thinking blocks hidden once a step finishes.',
+  'status.flash.thinkingDisabled': 'Thinking blocks are off in this configuration (showReasoning: false).',
   'status.flash.planEmpty': 'No plan in this session yet.',
   'status.flash.planExpanded': 'Plan expanded.',
   'status.flash.planCollapsed': 'Plan collapsed.',
@@ -210,7 +220,7 @@ export const EN_MESSAGES = {
   'status.row.created': 'Created',
   'status.row.active': 'Active',
   'status.untitled': 'untitled',
-  'status.modelDetail': '(effort {effort}; reasoning blocks {reasoning})',
+  'status.modelDetail': '(effort {effort}; thinking blocks {thinking})',
   'status.tokensValue': '{input} input + {output} output',
   'status.cacheValue': '{meter} {rate}% hit ({read} read + {write} write)',
   'status.cacheUnavailable': 'n/a ({read} read + {write} write)',
@@ -218,8 +228,15 @@ export const EN_MESSAGES = {
   'status.contextUnknown': '{used} used · capacity unknown',
   'status.systemPrompt': 'System prompt',
   'status.registeredTools': 'Registered tools',
-  'common.shown': 'shown',
-  'common.hidden': 'hidden',
+
+  // How `/status` and the debug panel name the Ctrl+T state. Three states, not
+  // a shown/hidden pair: `showReasoning: false` is a deployment-level `off`
+  // that the key cannot leave, and it reads differently from a user who simply
+  // has not pinned anything.
+  'status.thinking.disabled': 'disabled',
+  'status.thinking.kept': 'kept',
+  'status.thinking.live': 'while streaming',
+
 } as const
 
 /**
@@ -238,7 +255,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'command.copy.description': '把最后一条回答复制到系统剪贴板',
   'command.new.description': '在当前工作区开一个空会话（当前会话仍可 resume）',
   'command.clear.description': '清空 transcript 视图（不影响会话历史）',
-  'command.details.description': '设置工具卡片的展开方式与推理内容显示',
+  'command.details.description': '设置工具卡片的展开方式与思考块显示',
   'command.palette.description': '展示本终端渲染的全部配色与文字属性',
   'command.export.description': '把本会话日志写入文件并给出路径',
   'command.plugins.description': '搜索并查看 Loader 的 plugin 条目',
@@ -262,7 +279,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'hotkeys.editor': 'Enter 发送 • Shift/Alt+Enter 换行 • Up/Down 翻历史提问 • Tab 采纳补全',
   'hotkeys.entry': '@ 引用文件 • / 执行命令 • /skill:<name> 加载 skill • ? 打开本列表',
   'hotkeys.history': '{search} 向前搜索历史提问 • {todos} 展开或收起计划',
-  'hotkeys.cards': '{cycle} 切换工具卡片（预览/完整/隐藏） • {copy} 复制最后一条回答 • {redraw} 重绘屏幕',
+  'hotkeys.cards': '{cycle} 切换工具卡片（预览/完整/隐藏） • {thinking} 显示或隐藏思考块',
+  'hotkeys.copy': '{copy} 复制最后一条回答 • {redraw} 重绘屏幕',
   'hotkeys.cancel': '{cancel} 取消当前轮次；草稿状态下再按一次清空草稿；空输入时再按一次打开 Rewind',
   'hotkeys.exit': '{exit} 空输入时退出 • Shift+Ctrl+D 打开会话调试面板',
   'hotkeys.interrupt': 'Ctrl+C 运行中取消；输入中清空输入；空闲时连按两次退出',
@@ -323,7 +341,10 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
 
   'dialog.details.title': 'Transcript 显示细节',
   'dialog.details.tools': '工具卡片',
-  'dialog.details.reasoning': '推理内容',
+  'dialog.details.thinking': '思考块',
+  'dialog.details.thinking.shown': '显示',
+  'dialog.details.thinking.hidden': '隐藏',
+  'dialog.details.thinking.disabled': '已禁用',
   'dialog.details.hint': '↑/↓ 移动 • Tab 切换 • Enter/Esc 关闭',
 
   'dialog.resume.title': '恢复会话',
@@ -362,8 +383,9 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.flash.cardsHidden': '已隐藏工具卡片。',
   'status.flash.cardsExpanded': '已展开工具与上下文卡片。',
   'status.flash.cardsCollapsed': '工具卡片已收起，上下文已隐藏。',
-  'status.flash.reasoningShown': '已显示推理内容。',
-  'status.flash.reasoningHidden': '已隐藏推理内容。',
+  'status.flash.thinkingPinned': '思考块将一直留在屏幕上。',
+  'status.flash.thinkingUnpinned': '思考块会在该步结束后隐藏。',
+  'status.flash.thinkingDisabled': '当前配置关闭了思考块显示（showReasoning: false）。',
   'status.flash.planEmpty': '本会话还没有计划。',
   'status.flash.planExpanded': '计划已展开。',
   'status.flash.planCollapsed': '计划已收起。',
@@ -398,7 +420,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.row.created': '创建于',
   'status.row.active': '最近活动',
   'status.untitled': '未命名',
-  'status.modelDetail': '（推理强度 {effort}；推理内容{reasoning}）',
+  'status.modelDetail': '（推理强度 {effort}；思考块 {thinking}）',
   'status.tokensValue': '输入 {input} + 输出 {output}',
   'status.cacheValue': '{meter} 命中 {rate}%（读 {read} + 写 {write}）',
   'status.cacheUnavailable': '无数据（读 {read} + 写 {write}）',
@@ -406,6 +428,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.contextUnknown': '已用 {used} · 容量未知',
   'status.systemPrompt': 'System prompt',
   'status.registeredTools': '已注册工具',
-  'common.shown': '显示',
-  'common.hidden': '隐藏',
+  'status.thinking.disabled': '已禁用',
+  'status.thinking.kept': '常驻',
+  'status.thinking.live': '仅流式输出时',
 }

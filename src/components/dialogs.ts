@@ -727,37 +727,46 @@ export class PresetDialog implements Component {
 /** Both transcript-detail dimensions, applied immediately on each Tab. */
 export interface DetailsSelection {
   readonly visibility: ToolCardVisibility
-  readonly showReasoning: boolean
+  /** Ctrl+T: whether a finished step keeps its thinking block on screen. */
+  readonly showThinking: boolean
 }
 
 const TOOL_CARD_PHASES: readonly ToolCardVisibility[] = ['collapsed', 'expanded', 'hidden']
 
 /**
  * Keyboard toggle over the two transcript-detail entries — tool-card
- * visibility and reasoning display. Tab cycles the highlighted entry's value
- * and applies it immediately, so the transcript behind the dialog is the live
- * preview; Enter, Esc, or Ctrl+C closes.
+ * visibility (Ctrl+O) and thinking blocks (Ctrl+T). Tab cycles the highlighted
+ * entry's value and applies it immediately, so the transcript behind the dialog
+ * is the live preview; Enter, Esc, or Ctrl+C closes.
  */
 export class DetailsDialog implements Component {
   private readonly list: SelectList
   private readonly toolsItem: SelectItem
-  private readonly reasoningItem: SelectItem
+  private readonly thinkingItem: SelectItem
 
   constructor(
     private visibility: ToolCardVisibility,
-    private showReasoning: boolean,
+    private showThinking: boolean,
+    /**
+     * Whether the deployment allows reasoning on screen at all. When it does
+     * not, the entry says so and refuses to cycle: a row that reported `shown`
+     * over a transcript that shows nothing would be a lie, and this dialog's
+     * whole claim is that it previews what it says.
+     */
+    private readonly thinkingEnabled: boolean,
     private readonly palette: Palette,
     private readonly apply: (selection: DetailsSelection) => void,
     private readonly close: () => void,
   ) {
     this.toolsItem = { value: 'tools', label: t('dialog.details.tools'), description: visibility }
-    this.reasoningItem = { value: 'reasoning', label: t('dialog.details.reasoning'), description: this.reasoningLabel() }
-    this.list = new SelectList([this.toolsItem, this.reasoningItem], 2, dialogSelectTheme(palette))
+    this.thinkingItem = { value: 'thinking', label: t('dialog.details.thinking'), description: this.thinkingLabel() }
+    this.list = new SelectList([this.toolsItem, this.thinkingItem], 2, dialogSelectTheme(palette))
     this.list.onSelect = close
   }
 
-  private reasoningLabel(): string {
-    return this.showReasoning ? 'shown' : 'hidden'
+  private thinkingLabel(): string {
+    if (!this.thinkingEnabled) return t('dialog.details.thinking.disabled')
+    return this.showThinking ? t('dialog.details.thinking.shown') : t('dialog.details.thinking.hidden')
   }
 
   /** Cycle the highlighted entry one step and apply the new state. */
@@ -770,10 +779,11 @@ export class DetailsDialog implements Component {
       this.visibility = TOOL_CARD_PHASES[(index + 1) % TOOL_CARD_PHASES.length] as ToolCardVisibility
       this.toolsItem.description = this.visibility
     } else {
-      this.showReasoning = !this.showReasoning
-      this.reasoningItem.description = this.reasoningLabel()
+      if (!this.thinkingEnabled) return
+      this.showThinking = !this.showThinking
+      this.thinkingItem.description = this.thinkingLabel()
     }
-    this.apply({ visibility: this.visibility, showReasoning: this.showReasoning })
+    this.apply({ visibility: this.visibility, showThinking: this.showThinking })
   }
 
   invalidate(): void {

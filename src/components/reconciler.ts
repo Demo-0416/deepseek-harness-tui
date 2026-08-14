@@ -187,7 +187,10 @@ export class TranscriptReconciler {
   private nodes: readonly ChatNode[] = []
   private nodeCount = 0
   private visibility: ToolCardVisibility
-  private showReasoning: boolean
+  /** The deployment's master switch: false means no step ever renders thinking. */
+  private readonly showReasoning: boolean
+  /** Ctrl+T: whether a finished step keeps its thinking block on screen. */
+  private thinkingPinned: boolean
   /** The open step's component, so an animation tick refreshes only that step. */
   private openStep: StreamingAssistantComponent | undefined
   /** Wall time of every turn in the log, for the per-turn completion row. */
@@ -210,9 +213,14 @@ export class TranscriptReconciler {
   constructor(
     private readonly chat: Container,
     private readonly deps: TranscriptDeps,
-    view: { readonly showReasoning: boolean; readonly visibility: ToolCardVisibility },
+    view: {
+      readonly showReasoning: boolean
+      readonly visibility: ToolCardVisibility
+      readonly thinkingPinned?: boolean
+    },
   ) {
     this.showReasoning = view.showReasoning
+    this.thinkingPinned = view.thinkingPinned ?? false
     this.visibility = view.visibility
   }
 
@@ -436,13 +444,17 @@ export class TranscriptReconciler {
   }
 
   /**
-   * Toggle reasoning blocks on every mounted assistant step.
-   * @param show - whether reasoning blocks render.
+   * Pin or unpin thinking blocks on every mounted assistant step (Ctrl+T).
+   *
+   * Applied to the mounted components rather than through a remount, so the
+   * open step keeps streaming into the same component and the rows above it
+   * keep their positions while history gains or loses its asides.
+   * @param pinned - whether a finished step keeps its thinking on screen.
    */
-  setShowReasoning(show: boolean): void {
-    this.showReasoning = show
+  setThinkingPinned(pinned: boolean): void {
+    this.thinkingPinned = pinned
     for (const view of this.views.values()) {
-      if (view.kind === 'assistant') view.component.setShowReasoning(show)
+      if (view.kind === 'assistant') view.component.setThinkingPinned(pinned)
     }
     this.reconcile(this.nodes)
   }
@@ -539,6 +551,7 @@ export class TranscriptReconciler {
       this.deps.tracker,
       this.deps.now,
       this.showReasoning,
+      this.thinkingPinned,
       this.visibility,
       this.deps.palette,
       this.deps.mdTheme,

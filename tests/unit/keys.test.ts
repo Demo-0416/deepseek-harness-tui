@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
+  appendAssistant,
   appendUser,
   createTuiTestHarness,
   disposeTuiTestHarness,
@@ -30,7 +31,9 @@ const INPUT_PROMPT = 'keys> '
 /** Keys as the terminal delivers them. */
 const CTRL_C = '\x03'
 const CTRL_R = '\x12'
+const CTRL_O = '\x0f'
 const CTRL_T = '\x14'
+const CTRL_Y = '\x19'
 const CTRL_B = '\x02'
 const ESC = '\x1b'
 const ENTER = '\r'
@@ -111,7 +114,7 @@ async function submit(harness: KeysHarness, text: string): Promise<void> {
 }
 
 describe('plan toggle', { skip: skipWithoutEntry }, () => {
-  it('collapses the plan to one row on Ctrl+T and expands it again', async () => {
+  it('collapses the plan to one row on Ctrl+Y and expands it again', async () => {
     const harness = await mount({
       beforeMount(session) {
         session.append('todo/write', {
@@ -126,13 +129,13 @@ describe('plan toggle', { skip: skipWithoutEntry }, () => {
     try {
       assert.match(harness.terminal.text(), /write the code/u)
 
-      const collapsed = await press(harness, CTRL_T)
+      const collapsed = await press(harness, CTRL_Y)
       // The summary keeps the two facts the panel was carrying: progress, and
       // what is being worked on now.
       assert.match(unwrapped(collapsed), /Plan 1\/3 done · Next: write the code/u)
       assert.doesNotMatch(collapsed, /run the tests/u)
 
-      const expanded = await press(harness, CTRL_T)
+      const expanded = await press(harness, CTRL_Y)
       assert.match(expanded, /run the tests/u)
     } finally {
       await unmount(harness)
@@ -142,7 +145,95 @@ describe('plan toggle', { skip: skipWithoutEntry }, () => {
   it('says so rather than toggling nothing when the session has no plan', async () => {
     const harness = await mount()
     try {
-      assert.match(unwrapped(await press(harness, CTRL_T)), /No plan in this session yet\./u)
+      assert.match(unwrapped(await press(harness, CTRL_Y)), /No plan in this session yet\./u)
+    } finally {
+      await unmount(harness)
+    }
+  })
+})
+
+describe('thinking toggle', { skip: skipWithoutEntry }, () => {
+  /** Body of the reasoning block every case in this suite looks for. */
+  const THOUGHT = 'WEIGHING-THE-OPTIONS'
+
+  /** One finished answer with a thinking block behind it, in the session's history. */
+  function withThinking(options: TuiHarnessOptions = {}): Promise<KeysHarness> {
+    return mount({
+      ...options,
+      beforeMount(session) {
+        appendAssistant(session, [
+          { type: 'reasoning', text: THOUGHT },
+          { type: 'text', text: 'ANSWER-TEXT' },
+        ])
+      },
+    })
+  }
+
+  it('brings a finished turn\'s thinking back on Ctrl+T and drops it again', async () => {
+    const harness = await withThinking()
+    try {
+      // The default transcript is Claude Code's: the block went with the step.
+      assert.doesNotMatch(harness.terminal.text(), new RegExp(THOUGHT, 'u'))
+
+      const shown = await press(harness, CTRL_T)
+      assert.match(unwrapped(shown), /Thinking blocks kept on screen\./u)
+      // The switch is over the whole transcript, so history gains its aside
+      // rather than only the next turn.
+      assert.match(shown, new RegExp(THOUGHT, 'u'))
+
+      const hidden = await press(harness, CTRL_T)
+      assert.match(unwrapped(hidden), /Thinking blocks hidden once a step finishes\./u)
+      assert.doesNotMatch(hidden, new RegExp(THOUGHT, 'u'))
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('says the setting is what forbids it when showReasoning is off', async () => {
+    const harness = await withThinking({ config: { showReasoning: false } })
+    try {
+      const refused = await press(harness, CTRL_T)
+      // A deployment that turned reasoning off is not overridden from the
+      // keyboard, and the refusal names the setting rather than saying nothing:
+      // a key that answers with a blank screen reads as a broken key.
+      assert.match(unwrapped(refused), /Thinking blocks are off in this configuration \(showReasoning: false\)\./u)
+      assert.doesNotMatch(refused, new RegExp(THOUGHT, 'u'))
+
+      // And a second press does not walk it into the shown state either.
+      const again = await press(harness, CTRL_T)
+      assert.doesNotMatch(again, new RegExp(THOUGHT, 'u'))
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('is a switch of its own: Ctrl+O still cycles cards under a pinned block', async () => {
+    const harness = await withThinking()
+    try {
+      await press(harness, CTRL_T)
+      assert.match(harness.terminal.text(), new RegExp(THOUGHT, 'u'))
+
+      // Ctrl+O walks collapsed -> expanded -> hidden. The hidden phase takes
+      // tool cards off the transcript; the pin is not one of them.
+      await press(harness, CTRL_O)
+      const hiddenPhase = await press(harness, CTRL_O)
+      assert.match(unwrapped(hiddenPhase), /Tool cards hidden\./u)
+      assert.match(hiddenPhase, new RegExp(THOUGHT, 'u'))
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('reports its state in the debug panel, beside the card phase', async () => {
+    const harness = await withThinking()
+    try {
+      assert.match(unwrapped(await press(harness, SHIFT_CTRL_D)), /thinking while streaming/u)
+      await press(harness, ESC)
+      await press(harness, CTRL_T)
+      assert.match(unwrapped(await press(harness, SHIFT_CTRL_D)), /thinking kept/u)
+      // The registry is what the panel reads, so the moved plan key shows there.
+      assert.match(unwrapped(harness.terminal.text()), /app\.thinking\.toggle → Ctrl\+T/u)
+      assert.match(unwrapped(harness.terminal.text()), /app\.todos\.toggle → Ctrl\+Y/u)
     } finally {
       await unmount(harness)
     }
@@ -322,7 +413,8 @@ describe('the help and debug surfaces', { skip: skipWithoutEntry }, () => {
       const help = await press(harness, '?')
       assert.match(unwrapped(help), /\/hotkeys/u)
       assert.match(unwrapped(help), /Ctrl\+R search prompt history backwards/u)
-      assert.match(unwrapped(help), /Ctrl\+T expand or collapse the plan/u)
+      assert.match(unwrapped(help), /Ctrl\+Y expand or collapse the plan/u)
+      assert.match(unwrapped(help), /Ctrl\+T show or hide thinking blocks/u)
       // The character itself never lands in the draft.
       assert.doesNotMatch(unwrapped(help), /keys> \?/u)
     } finally {
@@ -368,7 +460,7 @@ describe('rebound keys', { skip: skipWithoutEntry }, () => {
 
       // The old key is a plain keystroke again, so it reaches the editor rather
       // than the toggle it used to drive.
-      const oldKey = await press(harness, CTRL_T)
+      const oldKey = await press(harness, CTRL_Y)
       assert.match(unwrapped(oldKey), /Plan 0\/1 done/u)
 
       // And the help names the key that works, not the one that no longer does.
