@@ -187,7 +187,11 @@ its four values, and `/resume` this workspace's recent sessions.
   with it and the original stays resumable; otherwise the prompt comes back to
   the editor alone. Files are never restored — dsh keeps no file checkpoints.
 - **Resume** — `/resume [session]`: pick and resume a past session, in this
-  workspace or (Tab) in all of them.
+  workspace or (Tab) in all of them. A row is its title over how long ago it was
+  touched and how big its log is (`2 hours ago · 354.1KB`); the session you are
+  in is not listed, because resuming into it is not a destination. The id is
+  matched by the search box but printed on no row, and exiting prints the
+  command that brings the session you just left back.
 - **Session search** — `/search [query]`, or Ctrl+G: every message this session
   holds, filtered as you type, with the hit shown in place and the whole message
   one Enter away. It is a panel rather than a jump because the transcript above

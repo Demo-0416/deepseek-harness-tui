@@ -234,6 +234,54 @@ export function shortSessionId(id: string): string {
   return SESSION_UUID.test(bare) ? bare.slice(0, 8) : bare
 }
 
+/** The launcher flag that names the booted profile, in both spellings it accepts. */
+const PROFILE_FLAG = '--profile'
+
+/**
+ * The profile this process was booted with, read back off its own command line.
+ *
+ * The launcher parses `--profile` itself and hands the app only the arguments
+ * after it, so the name reaches no service this bundle can inject: `process.argv`
+ * is the one place it survives. A run started some other way (an embedding host,
+ * a test) has no `--profile` in its argv and gets `undefined` — the caller then
+ * prints a command without the flag rather than inventing a profile name that
+ * would not exist on this machine.
+ * @param argv - the process command line; injectable so the parse can be tested.
+ * @returns the profile name, or `undefined` when the invocation named none.
+ */
+export function launchProfileName(argv: readonly string[] = process.argv): string | undefined {
+  for (const [index, argument] of argv.entries()) {
+    if (argument.startsWith(`${PROFILE_FLAG}=`)) {
+      const name = argument.slice(PROFILE_FLAG.length + 1)
+      return name === '' ? undefined : name
+    }
+    if (argument !== PROFILE_FLAG) continue
+    const name = argv[index + 1]
+    // A trailing `--profile`, or one followed by another flag, named nothing.
+    return name === undefined || name === '' || name.startsWith('-') ? undefined : name
+  }
+  return undefined
+}
+
+/**
+ * The command that brings this exact session back, as the exiting terminal
+ * prints it.
+ *
+ * The full session id, not the banner's shortened one: this line is meant to be
+ * copied into a shell weeks later, where an abbreviation is a guess about how
+ * the store resolves prefixes.
+ * @param sessionId - the session the command would resume.
+ * @param profile - the booted profile; absent drops the flag from the command.
+ * @returns the command line, ready to paste.
+ */
+export function resumeCommandLine(
+  sessionId: string,
+  profile: string | undefined = launchProfileName(),
+): string {
+  const flags = profile === undefined ? [] : [PROFILE_FLAG, profile]
+  return ['dsh', ...flags, '--resume', sessionId].join(' ')
+}
+
 /** Directory levels searched upward for this bundle's own package.json. */
 const PACKAGE_SEARCH_DEPTH = 4
 

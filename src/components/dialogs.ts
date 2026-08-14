@@ -24,7 +24,6 @@ import {
   type ModelSelection,
 } from '@deepseek-ai/dsh-agent'
 import type { LlmModelInfo, LlmModelReasoningInfo, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionRecord } from '@deepseek-ai/dsh-session-query'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import { BRACKETED_PASTE_END, BRACKETED_PASTE_START, displayText, sanitizePastedText } from './text.ts'
@@ -821,11 +820,82 @@ export interface ResumeCandidate {
   title: string
   /** Last observed change: live last-event time or artifact mtime, falling back to creation. */
   lastActivityAt: number
+  /**
+   * Size of the session's persisted artifact in bytes, when it has one. A
+   * session that lives in memory only has nothing to measure, and its row shows
+   * no size rather than a zero that would read as an empty log.
+   */
+  sizeBytes?: number
   /** Whether the session's workspace is the one the current session runs in, which selects the picker scope that lists it. */
   currentWorkspace: boolean
   /** The session's own workspace as a prompt-style label; the all-workspaces scope shows it per row. */
   workspaceLabel: string
   disabledReason?: string
+}
+
+/** What one metadata scan observed about a session's artifact, both parts optional. */
+export interface ResumeCandidateMetadata {
+  /** Live last-event time or artifact mtime; absent falls back to the header's creation time. */
+  lastActivityAt?: number
+  /** The persisted artifact's size in bytes; absent when the session has no artifact. */
+  sizeBytes?: number
+}
+
+/** A minute, an hour, a day, and the week past which a row shows a date instead of an age. */
+const MINUTE_MS = 60_000
+const HOUR_MS = 60 * MINUTE_MS
+const DAY_MS = 24 * HOUR_MS
+const AGE_DATE_THRESHOLD_MS = 7 * DAY_MS
+
+/**
+ * A row's age in the coarsest unit that still says something: "just now" under
+ * a minute, then minutes, hours, and days, and a plain `YYYY-MM-DD` once a
+ * week has passed.
+ *
+ * An exact timestamp is the wrong unit for this list. Browsing asks "which of
+ * these is the one I was in", and an ISO string answers that only after the
+ * reader does the subtraction themselves. Past a week the arithmetic stops
+ * being useful in the other direction — "23 days ago" is not a date anyone
+ * navigates by — so the calendar day takes over.
+ *
+ * A timestamp in the future (a clock that moved backwards, a file touched by
+ * another machine) reads as "just now" rather than as a negative age.
+ * @param timestamp - the row's activity time, in epoch milliseconds.
+ * @param now - the current time, injectable so the wording can be tested.
+ * @returns the localized age, or the local calendar date past the threshold.
+ */
+export function formatResumeAge(timestamp: number, now: number = Date.now()): string {
+  const elapsed = now - timestamp
+  if (elapsed < MINUTE_MS) return t('dialog.resume.ageJustNow')
+  if (elapsed < HOUR_MS) return plural(Math.floor(elapsed / MINUTE_MS), 'dialog.resume.ageMinutes')
+  if (elapsed < DAY_MS) return plural(Math.floor(elapsed / HOUR_MS), 'dialog.resume.ageHours')
+  if (elapsed < AGE_DATE_THRESHOLD_MS) return plural(Math.floor(elapsed / DAY_MS), 'dialog.resume.ageDays')
+  // Local calendar date: the reader's own day is what "when was that" means,
+  // and a UTC date is off by one for half the world every evening.
+  const date = new Date(timestamp)
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${String(date.getFullYear())}-${month}-${day}`
+}
+
+/**
+ * A session artifact's size at one decimal place, in the largest unit that
+ * leaves a number below 1024, with a trailing `.0` dropped.
+ *
+ * Not localized: the units are the same three letters in every locale this
+ * terminal ships, and a translated `KB` would only make two identical lists
+ * look different.
+ * @param bytes - the artifact's size.
+ * @returns the size as a short display string, e.g. `354.1KB`.
+ */
+export function formatResumeSize(bytes: number): string {
+  const kb = bytes / 1024
+  if (kb < 1) return `${String(Math.max(0, Math.round(bytes)))}B`
+  const scaled = (value: number): string => value.toFixed(1).replace(/\.0$/u, '')
+  if (kb < 1024) return `${scaled(kb)}KB`
+  const mb = kb / 1024
+  if (mb < 1024) return `${scaled(mb)}MB`
+  return `${scaled(mb / 1024)}GB`
 }
 
 /**
@@ -836,10 +906,14 @@ export interface ResumeCandidate {
  * that directory. Rows carry no per-log detail beyond the title — route and
  * replay validity are checked by the Enter-time preflight against the one
  * chosen log.
+ *
+ * The session being browsed from is not summarized here at all — the scan
+ * leaves it out of the list — so there is no "current session" reason: a row
+ * that cannot be resumed carries a real failure (a live twin, a missing
+ * workspace), and the picker paints those, and only those, as warnings.
  * @param record - The session record.
  * @param title - The session's batch-folded title, absent for an untitled log.
- * @param lastActivityAt - Metadata activity time; absent falls back to the header's creation time.
- * @param currentId - The current session id.
+ * @param metadata - What the metadata scan observed: activity time and artifact size, each optional.
  * @param cwd - The CURRENT session's workspace, which decides the picker scope this row falls in.
  * @param formatWorkspace - Renders THIS record's own cwd as its prompt-style label.
  * @returns The summarized resume candidate.
@@ -847,19 +921,18 @@ export interface ResumeCandidate {
 export function summarizeResumeCandidate(
   record: SessionRecord,
   title: string | undefined,
-  lastActivityAt: number | undefined,
-  currentId: SessionId,
+  metadata: ResumeCandidateMetadata,
   cwd: string | undefined,
   formatWorkspace: (cwd: string | undefined) => string,
 ): ResumeCandidate {
   let disabledReason: string | undefined
-  if (record.header.id === currentId) disabledReason = 'current session'
-  else if (record.live) disabledReason = 'session is already live in this runtime'
+  if (record.live) disabledReason = 'session is already live in this runtime'
   else if (record.header.cwd === undefined) disabledReason = 'session has no recorded workspace'
   return {
     record,
     title: title ?? 'Untitled session',
-    lastActivityAt: lastActivityAt ?? record.header.createdAt,
+    lastActivityAt: metadata.lastActivityAt ?? record.header.createdAt,
+    ...metadata.sizeBytes === undefined ? {} : { sizeBytes: metadata.sizeBytes },
     currentWorkspace: record.header.cwd === cwd,
     workspaceLabel: formatWorkspace(record.header.cwd),
     ...disabledReason === undefined ? {} : { disabledReason },
@@ -946,16 +1019,20 @@ export class ResumePicker implements Component, Focusable {
     const scoped = this.scoped()
     if (query === '') return scoped
     // The workspace label only distinguishes rows once it is on screen, so it
-    // joins the searchable text exactly in the scope that shows it.
+    // joins the searchable text exactly in the scope that shows it. The session
+    // id is matched even though no row prints it: `/resume <id>` pastes one
+    // straight into the search box, and a pasted id that matched nothing would
+    // read as "that session is gone".
     return scoped.filter(candidate => candidate.title.toLocaleLowerCase().includes(query)
       || candidate.record.header.id.toLocaleLowerCase().includes(query)
       || (this.scope === 'all' && candidate.workspaceLabel.toLocaleLowerCase().includes(query)))
   }
 
   private visibleCandidateCount(): number {
-    // The all-workspaces scope adds a per-row workspace line, so a row costs
-    // one more terminal row there than in the single-workspace scope.
-    const rowHeight = this.scope === 'all' ? 4 : 3
+    // A row is its title, its metadata line, and the blank line that separates
+    // it from the next one, plus a spare for the warning a disabled row adds.
+    // The all-workspaces scope adds a per-row workspace line on top of that.
+    const rowHeight = this.scope === 'all' ? 5 : 4
     const candidateBudget = Math.max(1, Math.floor((Math.max(1, this.viewportRows()) - 13) / rowHeight))
     return Math.min(this.maxVisible, candidateBudget)
   }
@@ -1073,7 +1150,15 @@ export class ResumePicker implements Component, Focusable {
 
     const searchInnerWidth = Math.max(1, contentWidth - 4)
     lines.push(`${indent}${this.palette.dim(`╭${'─'.repeat(Math.max(0, contentWidth - 2))}╮`)}`)
-    const searchContent = this.search.render(searchInnerWidth).join('').replace(/^> /u, '⌕ ')
+    const rendered = this.search.render(searchInnerWidth).join('').replace(/^> /u, '⌕ ')
+    // pi-tui's Input has no placeholder, so an empty box gets one here: what it
+    // rendered is the search glyph, the block cursor, and trailing padding, so
+    // the hint goes after the cursor and the padding below is recomputed from
+    // the result. Without it an empty box reads as a decoration rather than as
+    // something to type into.
+    const searchContent = this.search.getValue() === ''
+      ? `${rendered.trimEnd()}${this.palette.dim(t('dialog.resume.searchPlaceholder'))}`
+      : rendered
     const clippedSearch = truncateToWidth(searchContent, searchInnerWidth, '')
     lines.push(
       `${indent}${this.palette.dim('│')} ${clippedSearch}${' '.repeat(Math.max(0, searchInnerWidth - visibleWidth(clippedSearch)))} ${this.palette.dim('│')}`,
@@ -1095,14 +1180,19 @@ export class ResumePicker implements Component, Focusable {
     for (let index = start; index < end; index += 1) {
       const candidate = filtered[index] as ResumeCandidate
       const active = index === this.selectedIndex
-      const status = [
-        candidate.disabledReason === 'current session' ? 'current' : undefined,
-        candidate.record.live ? 'live' : undefined,
-        candidate.record.persisted ? 'persisted' : undefined,
-      ].filter((value): value is string => value !== undefined).join(' · ')
+      // One blank line between rows: this list is read by scanning titles, and
+      // three stacked lines per row with no gap read as one paragraph.
+      if (index > start) lines.push('')
       const lead = `${active ? '❯' : ' '} ${displayText(candidate.title)}`
       push(active ? this.palette.bold(this.palette.accent(lead)) : lead)
-      push(this.palette.dim(`  ${new Date(candidate.lastActivityAt).toISOString()} · ${status} · ${displayText(candidate.record.header.id)}`))
+      // Age and size, and nothing else. The id is what the search box matches,
+      // not what the eye picks a session by, and "live · persisted" named an
+      // implementation detail the reader has no decision to make about.
+      const meta = [
+        formatResumeAge(candidate.lastActivityAt),
+        ...candidate.sizeBytes === undefined ? [] : [formatResumeSize(candidate.sizeBytes)],
+      ].join(' · ')
+      push(this.palette.dim(`  ${meta}`))
       // Only the all-workspaces scope mixes directories, so the per-row
       // workspace is redundant in the scope that already names one.
       if (this.scope === 'all') {
