@@ -76,6 +76,10 @@ import type {} from '@deepseek-ai/dsh-session-title'
 // Type import also declaration-merges the optional `sessionPersistence`
 // service onto `Context` so `ctx.get('sessionPersistence')` is typed.
 import type {} from '@deepseek-ai/dsh-session-persistence'
+// Type-only: the resume controller and `/resume` argument completion read the
+// same optional store service through one typed handle.
+import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
+import type {} from '@deepseek-ai/dsh-session-projection-cache'
 import type { SkillRegistry } from '@deepseek-ai/dsh-skill'
 // Type import declaration-merges the `userQuestions` service onto `Context`;
 // the ask-user-question queue is registered by ./chat/questions.
@@ -206,6 +210,15 @@ import {
 import { createResumeController } from './chat/resume.ts'
 import type { TuiForkRequest, TuiResumeHost, TuiRuntime } from './runtime.ts'
 import { toolCallTouchesFiles, WorkspaceFileSearch } from './chat/file-autocomplete.ts'
+import { resolveFileSearchCommand } from './chat/fd.ts'
+import {
+  detailsArgumentCompletions,
+  memoizeListing,
+  modelArgumentCompletions,
+  presetArgumentCompletions,
+  resumeArgumentCompletions,
+  type CompletableSession,
+} from './chat/command-completions.ts'
 import {
   AGENT_START_TIMEOUT_MS,
   EXIT_IDLE_TIMEOUT_MS,
@@ -388,6 +401,14 @@ const EXIT_CONFIRM_MS = 2_000
  * misleading than an empty row.
  */
 const PENDING_HINT_MS = 30_000
+
+/**
+ * How long one listing serves slash-argument completion before it is read
+ * again. Long enough that typing a model name costs one provider catalog read
+ * rather than one per character, short enough that a session created in
+ * another window is offered by the time the user reaches for it.
+ */
+const ARGUMENT_COMPLETION_CACHE_MS = 3_000
 
 /**
  * Smallest panel a short terminal still gets: three rows of chrome (the
@@ -670,6 +691,19 @@ export function createTuiChat(
     ? presetRoster.serviceFor(agent, 'skills')
     : undefined) ?? ctx.get('skills')
   const cwd = agent.session.header.cwd ?? process.cwd()
+  /**
+   * `fd` if this host has it, which is what makes `@` respect `.gitignore`:
+   * pi's own provider shells out to it, and `fd` reads the ignore files the
+   * repository already wrote. Resolved once per mount — a binary that appears
+   * on `PATH` mid-session is not worth a `PATH` walk per keystroke.
+   */
+  const fileSearchCommand = resolveFileSearchCommand(resolved.fileSearchCommand)
+  /**
+   * The fallback index, used only when this host has no `fd`. It is built
+   * either way so the tool-result listener can drop it without knowing which
+   * source is live, and an unused index costs nothing: the traversal starts at
+   * the first `@` query, which only the fallback ever issues.
+   */
   const fileSearch = new WorkspaceFileSearch(cwd, {
     maxResults: resolved.fileSearchMaxResults,
     maxEntries: resolved.fileSearchMaxEntries,
@@ -1433,6 +1467,15 @@ export function createTuiChat(
     })
   })
 
+  // Optional and independently mounted. Cordis transiently leaves this sibling
+  // non-ACTIVE during command callbacks, so the non-strict read is intentional;
+  // terminal fiber states still exclude failed, closing, and closed providers.
+  // Shared with `/resume` argument completion, which lists the same store.
+  const sessionQueryService = (): SessionQueryEngine | undefined => {
+    const implementation = ctx.reflect._getImpl('sessionQuery', false)
+    if (implementation === undefined || implementation.fiber.state >= FIBER_FAILED) return undefined
+    return ctx.get('sessionQuery', false)
+  }
   const resume = createResumeController({
     ctx,
     agent,
@@ -1440,14 +1483,7 @@ export function createTuiChat(
     resolved,
     palette,
     overlayManager,
-    // Optional and independently mounted. Cordis transiently leaves this sibling
-    // non-ACTIVE during command callbacks, so the non-strict read is intentional;
-    // terminal fiber states still exclude failed, closing, and closed providers.
-    sessionQuery: () => {
-      const implementation = ctx.reflect._getImpl('sessionQuery', false)
-      if (implementation === undefined || implementation.fiber.state >= FIBER_FAILED) return undefined
-      return ctx.get('sessionQuery', false)
-    },
+    sessionQuery: sessionQueryService,
     ui,
     editor,
     appendNotice,
@@ -1924,22 +1960,106 @@ export function createTuiChat(
   // registry invalidation.
   let skillCommands: SlashCommand[] = []
   let skillCommandScan = 0
+  /** Advertised routes, read once per typing burst rather than per keystroke. */
+  const listModelRoutes = memoizeListing(
+    (provider: string) => ctx.llm.listModels(provider),
+    ARGUMENT_COMPLETION_CACHE_MS,
+  )
+  /**
+   * Every persisted session reduced to metadata `/resume` completion can rank.
+   *
+   * Titles come from the projection cache's already-written checkpoint rows
+   * only. A cold projection would fold a log tail, and a menu rendered between
+   * two keystrokes has no business reading logs — an untitled row falls back
+   * to its id, which is what the argument carries anyway.
+   */
+  const listResumeSessions = memoizeListing(async (): Promise<CompletableSession[]> => {
+    const service = sessionQueryService()
+    if (service === undefined) return []
+    const cache = ctx.get('sessionProjectionCache')
+    return (await service.listSessions()).map((record): CompletableSession => {
+      const cached = cache?.cachedSnapshot(record.header)
+      const title = cached !== undefined && 'title' in cached.values ? cached.values.title : undefined
+      return {
+        id: record.header.id,
+        ...record.header.cwd === undefined ? {} : { cwd: record.header.cwd },
+        createdAt: record.header.createdAt,
+        live: record.live,
+        ...typeof title === 'string' ? { title } : {},
+      }
+    })
+  }, ARGUMENT_COMPLETION_CACHE_MS)
+  /**
+   * The argument completion source for one command, or `undefined` for a
+   * command whose argument is free text (or that takes none).
+   *
+   * `argumentHint` describes the shape of an argument; these say which values
+   * exist in THIS session, so `/model `, `/preset `, `/details `, and
+   * `/resume ` offer the same rows their pickers would. Optional services are
+   * read inside the closure, not captured: the roster and the session store
+   * mount independently of the command registry, so a source resolved when the
+   * provider was built could be stale by the time a user types.
+   *
+   * Skills need nothing here: they are commands named `skill:<name>`, so the
+   * name-completion branch already lists them from `/skill:`.
+   * @param name - the registered command name.
+   * @returns the argument completion source, when this terminal has one.
+   */
+  const argumentCompletionsFor = (name: string): SlashCommand['getArgumentCompletions'] => {
+    switch (name) {
+      case 'model':
+        return prefix => modelArgumentCompletions(
+          { listProviders: () => ctx.llm.listProviders(), listModels: listModelRoutes },
+          prefix,
+          resolved.maxModelOptions,
+        )
+      case 'preset':
+        return (prefix) => {
+          const presets = ctx.get('agentPresets')
+          return presets === undefined
+            ? null
+            : presetArgumentCompletions(presets, prefix, resolved.maxModelOptions)
+        }
+      case 'details':
+        return detailsArgumentCompletions
+      case 'resume':
+        return prefix => resumeArgumentCompletions(
+          {
+            list: () => listResumeSessions('sessions'),
+            currentSessionId: agent.session.id,
+            cwd: agent.session.header.cwd,
+          },
+          prefix,
+          resolved.maxResumeOptions,
+        )
+      default:
+        return undefined
+    }
+  }
   const refreshCommandAutocomplete = (): void => {
     const base = new CombinedAutocompleteProvider(
       [
-        ...ctx.commands.list(agent).map(command => ({
-          name: command.name,
-          description: command.description,
-          ...(command.input === undefined ? {} : { argumentHint: command.input.hint }),
-        })),
+        ...ctx.commands.list(agent).map((command) => {
+          const getArgumentCompletions = argumentCompletionsFor(command.name)
+          return {
+            name: command.name,
+            description: command.description,
+            ...(command.input === undefined ? {} : { argumentHint: command.input.hint }),
+            ...(getArgumentCompletions === undefined ? {} : { getArgumentCompletions }),
+          }
+        }),
         ...skillCommands,
       ],
       agent.session.header.cwd ?? process.cwd(),
+      // With `fd` the base provider answers `@` itself, respecting the ignore
+      // files the repository already wrote; without it the walker below does,
+      // and the two never run together (see ReferenceAutocompleteProvider).
+      fileSearchCommand ?? null,
     )
     const sessionReferences = ctx.get('sessionReferenceResolver')
     editor.setAutocompleteProvider(new ReferenceAutocompleteProvider(
       base,
-      fileSearch,
+      fileSearchCommand === undefined ? fileSearch : undefined,
       sessionReferences,
       agent,
     ))
@@ -2083,7 +2203,11 @@ export function createTuiChat(
     commandCtx.commands.register({
       name: 'resume',
       description: 'List this workspace\'s resumable sessions',
-      handler: () => { resume.showResume(); return { kind: 'success' } },
+      // An argument narrows the same picker instead of resuming behind the
+      // user's back: switching sessions replaces this process, so the row is
+      // always confirmed on screen first.
+      input: { hint: '[session]' },
+      handler: ({ rawInput }) => { resume.showResume(rawInput.trim()); return { kind: 'success' } },
     })
     commandCtx.commands.register({
       name: 'status',

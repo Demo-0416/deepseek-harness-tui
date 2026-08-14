@@ -863,6 +863,21 @@ export class ResumePicker implements Component, Focusable {
   }
 
   /**
+   * Narrow the picker to a query the user already typed.
+   *
+   * `/resume <session>` is the same selection as `/resume` plus a search term,
+   * so it opens the same picker with the term already in its search box rather
+   * than resuming behind the user's back: the row still has to be looked at
+   * and confirmed, and Escape still clears the query instead of the overlay.
+   * @param query - the argument text, verbatim.
+   */
+  setQuery(query: string): void {
+    this.search.setValue(query)
+    this.selectedIndex = 0
+    this.invalidate()
+  }
+
+  /**
    * Replace the loading placeholder with the scanned candidate set.
    * @param candidates - the summarized rows the finished scan produced.
    */

@@ -20,9 +20,18 @@ import { activeAtToken, formatFileMention, WorkspaceFileSearch } from './file-au
 
 /** Merge path-only file candidates and optional session snapshots with commands. */
 export class ReferenceAutocompleteProvider implements AutocompleteProvider {
+  /**
+   * @param base - pi's provider, which also answers `@` when it was given an `fd` path.
+   * @param files - the in-process walker, or `undefined` when `fd` answers `@` instead.
+   *   The two are alternatives, never both: pi's provider and this one produce
+   *   the same paths from the same token, so running them together would put
+   *   every file in the menu twice.
+   * @param sessions - the optional session-reference resolver.
+   * @param agent - the agent whose session references are offered.
+   */
   constructor(
     private readonly base: CombinedAutocompleteProvider,
-    private readonly files: WorkspaceFileSearch,
+    private readonly files: WorkspaceFileSearch | undefined,
     private readonly sessions: SessionReferenceResolver | undefined,
     private readonly agent: Agent,
   ) {}
@@ -39,10 +48,12 @@ export class ReferenceAutocompleteProvider implements AutocompleteProvider {
     if (currentLine === undefined) return basePromise
     const token = activeAtToken(currentLine, cursorCol)
     if (token === undefined) {
-      this.files.invalidate()
+      this.files?.invalidate()
       return basePromise
     }
-    const filePromise = this.files.list(token.query, options.signal).catch(() => [])
+    const filePromise = this.files === undefined
+      ? Promise.resolve([])
+      : this.files.list(token.query, options.signal).catch(() => [])
     const sessionPromise = this.sessions === undefined || token.quoted
       ? Promise.resolve([])
       : this.sessions.listCandidates(this.agent, token.query, undefined, options.signal).catch(() => [])
@@ -75,8 +86,15 @@ export class ReferenceAutocompleteProvider implements AutocompleteProvider {
       }
     })
     const items = [...fileItems, ...sessionItems]
-    if (items.length === 0) return base
-    return { items: [...items, ...(base?.items ?? [])], prefix: token.prefix }
+    // Inside an `@` token the base provider returns file rows and nothing
+    // else, so they are restated in this terminal's vocabulary: the menu has
+    // to read the same whether a host's `fd` produced the rows or the walker
+    // above did.
+    const baseItems = base === null ? [] : base.items.map(fileItemLabel)
+    if (items.length === 0) {
+      return base === null ? null : { items: baseItems, prefix: base.prefix }
+    }
+    return { items: [...items, ...baseItems], prefix: token.prefix }
   }
 
   applyCompletion(
@@ -92,4 +110,20 @@ export class ReferenceAutocompleteProvider implements AutocompleteProvider {
   shouldTriggerFileCompletion(lines: string[], cursorLine: number, cursorCol: number): boolean {
     return this.base.shouldTriggerFileCompletion(lines, cursorLine, cursorCol)
   }
+}
+
+/**
+ * Restate one base-provider file row the way this terminal names its own.
+ *
+ * pi labels a row with the bare basename, this bundle prefixes it with what
+ * the row is, and a user should not be able to tell which source answered.
+ * The trailing slash is left exactly where it was: pi reads directory-ness off
+ * `item.label` when the completion is applied — a directory keeps completion
+ * open instead of finishing the mention with a space.
+ * @param item - one row produced by pi's file search.
+ * @returns the row under this terminal's label.
+ */
+function fileItemLabel(item: AutocompleteItem): AutocompleteItem {
+  const directory = item.label.endsWith('/')
+  return { ...item, label: `${directory ? 'Folder' : 'File'} · ${item.label}` }
 }

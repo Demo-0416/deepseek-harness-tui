@@ -48,8 +48,11 @@ export interface ResumeControllerDeps extends ChatChannelDeps, ChannelNotice {
 
 /** Session-resume controller for one chat channel. */
 export interface ResumeController {
-  /** Open the searchable session selector, scoped to this workspace until the user widens it. */
-  showResume(): void
+  /**
+   * Open the searchable session selector, scoped to this workspace until the user widens it.
+   * @param query - `/resume`'s argument, pre-filling the picker's search box; empty opens the full list.
+   */
+  showResume(query?: string): void
 }
 
 /**
@@ -280,7 +283,7 @@ export function createResumeController(deps: ResumeControllerDeps): ResumeContro
   }
 
   return {
-    showResume(): void {
+    showResume(query = ''): void {
       if (agent.status !== 'idle') {
         deps.appendNotice('Resume requires the current turn to finish or be cancelled first.', 'warning')
         return
@@ -309,6 +312,9 @@ export function createResumeController(deps: ResumeControllerDeps): ResumeContro
             (candidate) => { void handoffResume(candidate, session) },
             () => { void session.close() },
           )
+          // Set here rather than in the constructor: an overlay whose slot is
+          // still held opens late, and the query has to survive that wait.
+          if (query !== '') picker.setQuery(query)
           return picker
         },
         options: {

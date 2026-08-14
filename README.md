@@ -45,6 +45,15 @@ Every key below is what the terminal actually binds; `?` at an empty prompt,
 | Ctrl+D | exit on an empty prompt |
 | Shift+Ctrl+D | session debug panel |
 
+`@` lists the workspace through `fd` when the host has it, so completion honors
+`.gitignore`; without it a built-in walker takes over and skips build output by
+name. Set `fileSearchCommand` to pin the binary's path, or to `""` to always use
+the walker, and `fileSearchExcludedDirectories` to change what the walker skips.
+
+Commands complete their arguments too: `/model` offers every advertised
+`provider/model`, `/preset` the roster's presets, `/details` its tokens, and
+`/resume` this workspace's recent sessions.
+
 Bindings other than Ctrl+C are configurable: set `keybindings` on the bundle row
 (`{ "app.history.search": "ctrl+g" }`), keyed by action id and valued with one
 pi-tui key id or several. pi-tui's own editor bindings can be moved the same way.
@@ -56,7 +65,8 @@ pi-tui key id or several. pi-tui's own editor bindings can be moved the same way
   earlier prompt. With a host that can fork the session the conversation moves
   with it and the original stays resumable; otherwise the prompt comes back to
   the editor alone. Files are never restored — dsh keeps no file checkpoints.
-- **Resume** — `/resume`: pick and resume a past session.
+- **Resume** — `/resume [session]`: pick and resume a past session; an argument
+  opens the same picker with its search box already filled in.
 - **Plugins** — `/plugins`: search and inspect the Loader's entries.
 - **Status** — `/status`: session diagnostics, system prompt, registered tools.
 - **Help** — `/help`: keys and slash commands.

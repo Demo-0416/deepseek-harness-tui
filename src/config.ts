@@ -73,6 +73,13 @@ export interface TuiConfig {
   fileSearchMaxEntries?: number
   /** Directory basenames excluded from `@` traversal and completion. */
   fileSearchExcludedDirectories?: string[]
+  /**
+   * Path or command name of the `fd` binary backing gitignore-aware `@`
+   * completion. Unset discovers `fd`/`fdfind` on `PATH`; the empty string
+   * disables it and completion falls back to the in-process walker, which
+   * excludes {@link fileSearchExcludedDirectories} by name instead.
+   */
+  fileSearchCommand?: string
   /** Show the terminal's hardware cursor at the pi editor's IME marker. */
   showHardwareCursor?: boolean
   /** Color and prompt-template settings. */
@@ -104,6 +111,10 @@ const detailsDialogWidthSchema = z.number().step(1).min(20).default(72)
 const fileSearchMaxResultsSchema = z.number().step(1).min(1).default(DEFAULT_FILE_SEARCH_MAX_RESULTS)
 const fileSearchMaxEntriesSchema = z.number().step(1).min(1).default(DEFAULT_FILE_SEARCH_MAX_ENTRIES)
 const fileSearchExcludedDirectoriesSchema = z.array(z.string()).default([...DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES])
+// No default: an unset value discovers `fd` on PATH, while a configured empty
+// string is the deployment saying "do not spawn it", and the two must not
+// collapse into one value.
+const fileSearchCommandSchema = z.string()
 const showHardwareCursorSchema = z.boolean().default(false)
 const colorSchema = z.boolean().default(true)
 // No default: an unset value auto-detects truecolor from COLORTERM in `apply`.
@@ -147,6 +158,7 @@ const tuiConfigSchemaFields = {
   fileSearchMaxResults: fileSearchMaxResultsSchema,
   fileSearchMaxEntries: fileSearchMaxEntriesSchema,
   fileSearchExcludedDirectories: fileSearchExcludedDirectoriesSchema,
+  fileSearchCommand: fileSearchCommandSchema,
   showHardwareCursor: showHardwareCursorSchema,
   theme: TuiThemeConfigSchema,
   title: titleSchema,
@@ -198,6 +210,7 @@ export const Config: z<Config> = z.object({
   fileSearchMaxResults: tuiConfigSchemaFields.fileSearchMaxResults,
   fileSearchMaxEntries: tuiConfigSchemaFields.fileSearchMaxEntries,
   fileSearchExcludedDirectories: tuiConfigSchemaFields.fileSearchExcludedDirectories,
+  fileSearchCommand: tuiConfigSchemaFields.fileSearchCommand,
   showHardwareCursor: tuiConfigSchemaFields.showHardwareCursor,
   theme: tuiConfigSchemaFields.theme,
   title: tuiConfigSchemaFields.title,
@@ -232,6 +245,8 @@ export interface ResolvedTuiConfig {
   fileSearchMaxResults: number
   fileSearchMaxEntries: number
   fileSearchExcludedDirectories: string[]
+  /** Configured `fd` path or name; `undefined` leaves discovery to `PATH`. */
+  fileSearchCommand: string | undefined
   showHardwareCursor: boolean
   theme: ResolvedTuiThemeConfig
   title: string
@@ -263,6 +278,7 @@ export function resolveTuiConfig(config: TuiConfig | undefined): ResolvedTuiConf
     fileSearchMaxResults: config?.fileSearchMaxResults ?? DEFAULT_FILE_SEARCH_MAX_RESULTS,
     fileSearchMaxEntries: config?.fileSearchMaxEntries ?? DEFAULT_FILE_SEARCH_MAX_ENTRIES,
     fileSearchExcludedDirectories: [...(config?.fileSearchExcludedDirectories ?? DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES)],
+    fileSearchCommand: config?.fileSearchCommand,
     showHardwareCursor: config?.showHardwareCursor ?? false,
     theme: {
       color: config?.theme?.color ?? true,

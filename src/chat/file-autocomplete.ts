@@ -14,8 +14,43 @@ import type { ToolCallKind, ToolCallView, ToolDefinition } from '@deepseek-ai/ds
 export const DEFAULT_FILE_SEARCH_MAX_RESULTS = 20
 /** Default maximum entries retained in one workspace search index. */
 export const DEFAULT_FILE_SEARCH_MAX_ENTRIES = 10_000
-/** Directory basenames omitted from traversal unless the deployment overrides them. */
-export const DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES = ['.git', 'node_modules'] as const
+/**
+ * Directory basenames omitted from traversal unless the deployment overrides them.
+ *
+ * This walker only runs when the host has no `fd` (see `./fd.ts`), so it has to
+ * approximate by name what `fd` would have read out of `.gitignore`. The list
+ * is build and dependency output — the directories a repository ignores
+ * whatever its language is — and not a taste list: excluding a directory here
+ * makes it unreachable through `@`, so anything a user might plausibly want to
+ * mention (`.github`, `docs`, `vendor` in a repo that checks it in) stays.
+ */
+export const DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES = [
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  '.cache',
+  '.next',
+  '.nuxt',
+  '.turbo',
+  '.venv',
+  '__pycache__',
+  'target',
+] as const
+
+/**
+ * File name suffixes withheld from a query that names no extension.
+ *
+ * Logs and build stamps are written by the tools the session itself runs, so a
+ * long-lived workspace accumulates them faster than it accumulates source, and
+ * they crowd out the file the user is reaching for. Unlike the directory list
+ * this is not configurable, because it is not a policy: it is reachable the
+ * moment the query contains a `.`, which is exactly how a user asks for a file
+ * by extension.
+ */
+const NOISE_FILE_SUFFIXES = ['.log', '.tsbuildinfo'] as const
 
 /** Resolved limits and exclusions for one TUI workspace index. */
 export interface FileSearchConfig {
@@ -192,7 +227,9 @@ export class WorkspaceFileSearch {
     }
     const indexed = await waitForPromise(this.ensureIndex(), signal)
     return rankCandidates(
-      indexed.filter(candidate => visibleForGlobalQuery(candidate.path, query)),
+      indexed.filter(candidate =>
+        visibleForGlobalQuery(candidate.path, query)
+        && visibleForNoiseQuery(candidate, query)),
       query,
       this.config.maxResults,
     )
@@ -270,7 +307,9 @@ export class WorkspaceFileSearch {
         if (this.excludedDirectories.has(entry.name)) continue
         candidates.push({ path: `${displayDirectory}${entry.name}`, kind: 'directory' })
       } else if (entry.isFile()) {
-        candidates.push({ path: `${displayDirectory}${entry.name}`, kind: 'file' })
+        const candidate: FileSearchCandidate = { path: `${displayDirectory}${entry.name}`, kind: 'file' }
+        if (!visibleForNoiseQuery(candidate, fragment)) continue
+        candidates.push(candidate)
       }
     }
     return rankCandidates(candidates, fragment, this.config.maxResults)
@@ -316,6 +355,23 @@ async function readDirectory(absolute: string, signal: AbortSignal) {
     // branches remain useful and autocomplete is advisory.
     return []
   }
+}
+
+/**
+ * Whether a generated-artifact file is offered for this query.
+ *
+ * A query carrying a `.` is naming an extension, and the only way to reach
+ * `debug.log` is to be allowed to type it — so the filter lifts exactly then,
+ * the same way a leading `.` lifts the hidden-entry filter. Directories are
+ * never artifacts by suffix.
+ * @param candidate - the indexed or listed entry.
+ * @param query - the path text the user has typed inside this token segment.
+ * @returns false only for artifact files under a query that named no extension.
+ */
+function visibleForNoiseQuery(candidate: FileSearchCandidate, query: string): boolean {
+  if (candidate.kind === 'directory' || query.includes('.')) return true
+  const name = candidate.path.slice(candidate.path.lastIndexOf('/') + 1).toLowerCase()
+  return !NOISE_FILE_SUFFIXES.some(suffix => name.endsWith(suffix))
 }
 
 function visibleForGlobalQuery(path: string, query: string): boolean {
