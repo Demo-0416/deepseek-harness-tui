@@ -23,6 +23,7 @@ dsh --profile tui --continue                     # resume the most recent sessio
 dsh --profile tui --resume <sessionId>           # resume a specific session
 dsh --profile tui --preset code                  # start on the "code" agent preset
 dsh --profile tui -m kimi-coding/kimi-for-coding # override the model
+dsh --profile tui --print "run the tests"        # one task, one answer on stdout
 ```
 
 | Flag | Action |
@@ -31,11 +32,16 @@ dsh --profile tui -m kimi-coding/kimi-for-coding # override the model
 | `--preset <id>` | agent preset a fresh session is composed from; a resumed session keeps the preset its own log records |
 | `-r, --resume <sessionId>` | resume a session by id |
 | `-c, --continue` | continue the most recent session in this workspace |
-| `-p, --print <task>` | **not implemented here** — it is parsed and refused with a pointer to a headless profile, rather than opening a full-screen UI over a request that asked for no UI |
+| `-p, --print <task>` | run one task with no UI: the answer goes to stdout, the exit code is 0 only for a completed turn, and tool approvals are pinned to `never` because there is nobody to ask |
 | `-h, --help` | show this help |
 | `[prompt...]` | initial prompt, sent once the UI is up |
 
 Both stdin and stdout must be TTYs; the bundle refuses to start on a pipe.
+`--print` is the exception — it renders nothing, so it runs on a pipe, which is
+the only place it is useful. Every other flag means the same thing with it:
+`--print` runs against a `--resume`d or `--continue`d session as readily as
+against a fresh one, under the model and preset the rest of the command line
+selects.
 
 ### Keys
 
@@ -68,7 +74,7 @@ all three.
 | Surface | Keys |
 |---|---|
 | Panel (`/help`, `/hotkeys`, `/palette`, `/status`) | Up/Down scroll · PgUp/PgDn page · g/G or Home/End top or bottom · Esc or Ctrl+C close |
-| Question | Up/Down move · Space toggle (multi-select) · Tab or `c` custom answer, Esc back to the options · PgUp/PgDn page long detail · Enter submit · Esc or Ctrl+C cancel |
+| Question | Up/Down move · Space toggle (multi-select) · Tab/c custom answer, Esc back to the options · PgUp/PgDn page long detail · Enter submit · Esc or Ctrl+C cancel |
 | Permission prompt | Up/Down move · 1-4 answer straight away · Enter confirm · Esc or Ctrl+C deny |
 | History search (Ctrl+R) | type to match · Ctrl+R steps to an older match · Tab or Esc accepts into the editor · Enter sends it · Ctrl+C or an emptied query restores the draft |
 | Model picker (`/model`) | type to filter · Up/Down move · Left/Right or Shift+Tab adjust reasoning effort · Enter save as default · Ctrl+S use for this session only · Esc clears the filter, then closes |
@@ -90,9 +96,10 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/preset [<preset> \| copy <preset> <new-id>]` | show, switch, or copy this session's agent preset |
 | `/details [collapsed\|expanded\|hidden] [reasoning [on\|off]]` | tool-card visibility and reasoning display; without arguments it opens the selector |
 | `/copy` | copy the last answer to the system clipboard |
+| `/new` | start a blank session in this workspace; the current one keeps its history and stays resumable |
 | `/clear` | clear the transcript view; the session log is unchanged |
 | `/palette` | every color and attribute role this terminal renders |
-| `/export [path]` | write this session's log to a file and report the path |
+| `/export [path]` | write this session's log to a file and report the path; an existing file is replaced only after you confirm |
 | `/plugins` | search and inspect the Loader's plugin entries |
 | `/rewind` | go back to an earlier prompt in this session |
 | `/resume [session]` | list this workspace's resumable sessions; an argument fills the picker's search box |

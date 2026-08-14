@@ -160,6 +160,8 @@ export interface TuiHarnessOptions {
   handoffResume?: TuiRuntime['handoffResume']
   /** Provide a fake fork handoff, so the rewind surface takes its forking path. */
   handoffFork?: TuiRuntime['handoffFork']
+  /** Provide a fake blank-session handoff, so `/new` takes its replacing path. */
+  handoffNew?: TuiRuntime['handoffNew']
   /** Host-supplied exit line; absent exercises the no-message path. */
   goodbyeMessage?: TuiRuntime['goodbyeMessage']
   /** Set false to exercise the optional session-query degradation path. */
@@ -422,6 +424,7 @@ export async function createTuiTestHarness<TerminalType extends Terminal, Exit e
     ...(options.formatCwd === undefined ? {} : { formatCwd: options.formatCwd }),
     ...(options.handoffResume === undefined ? {} : { handoffResume: options.handoffResume }),
     ...(options.handoffFork === undefined ? {} : { handoffFork: options.handoffFork }),
+    ...(options.handoffNew === undefined ? {} : { handoffNew: options.handoffNew }),
     ...(options.goodbyeMessage === undefined ? {} : { goodbyeMessage: options.goodbyeMessage }),
     gitBranch: options.gitBranch ?? (() => 'tui-staging'),
   })

@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -34,6 +34,7 @@ import {
 } from '../../src/components/plugins-panel.ts'
 import { createPalette, markdownTheme } from '../../src/components/theme.ts'
 import { formatGoalPrompt, formatSessionStats, GOAL_PROMPT_MAX_WIDTH } from '../../src/chat/session-summary.ts'
+import { exportSessionLog } from '../../src/chat/export.ts'
 import {
   appendAssistant,
   createTuiTestContext,
@@ -600,6 +601,104 @@ describe('TUI /export', { skip: skipWithoutEntry }, () => {
     } finally {
       offFlush()
       await unmount(harness)
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('TUI /export over an existing file', { skip: skipWithoutEntry }, () => {
+  /** Enter, which takes the highlighted option of a question dialog. */
+  const ENTER = '\r'
+  /** Esc, which cancels a question dialog without answering it. */
+  const ESC = '\x1b'
+
+  /**
+   * Export onto a path that already has a file, and answer the confirmation
+   * with one key.
+   *
+   * The command promise cannot be awaited before the key is sent: the handler
+   * is blocked on the dialog, which is the behavior under test.
+   * @param harness - the mounted terminal.
+   * @param line - the `/export` line to run.
+   * @param key - the key to answer the confirmation with.
+   * @returns the notice text the command settled with.
+   */
+  async function exportAnswering(
+    harness: ParityHarness,
+    line: string,
+    key: string,
+  ): Promise<string | undefined> {
+    const pending = run(harness, line)
+    await delay(SETTLE_MS)
+    // Collapsed: the path is long enough to wrap, and where it wraps is the
+    // dialog's business.
+    const frame = harness.terminal.text().replace(/\s+/gu, ' ')
+    assert.match(frame, /already exists\. Replace it\?/u, frame)
+    harness.terminal.send(key)
+    return await pending
+  }
+
+  it('asks before replacing a file and writes only after a yes', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'dsh-tui-export-'))
+    const harness = await mount({
+      cwd: workspace,
+      config: { sessionId: 'overwrite-session' },
+      beforeMount(session) { appendAssistant(session, [{ type: 'text', text: 'first answer' }]) },
+    })
+    const destination = join(workspace, 'dsh-session-overwrite-session.jsonl')
+    try {
+      await delay(SETTLE_MS)
+      assert.equal(await run(harness, '/export'), `Session log exported to ${destination}`)
+      const first = await readFile(destination, 'utf8')
+
+      // The default destination is one path per session, so the second export
+      // of a session always lands on the first one's file: the common case for
+      // this command, and the one where a silent write loses a file.
+      const replaced = await exportAnswering(harness, '/export', ENTER)
+      assert.equal(replaced, `Session log exported to ${destination} (replaced)`)
+      const second = await readFile(destination, 'utf8')
+      assert.notEqual(second, first, 'the confirmed write really replaced the file')
+    } finally {
+      await unmount(harness)
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves the file alone when the confirmation is cancelled', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'dsh-tui-export-'))
+    const harness = await mount({ cwd: workspace, config: { sessionId: 'keep-session' } })
+    const destination = join(workspace, 'keep.jsonl')
+    try {
+      await delay(SETTLE_MS)
+      await writeFile(destination, 'not a session log\n', 'utf8')
+      const cancelled = await exportAnswering(harness, '/export keep.jsonl', ESC)
+      assert.equal(cancelled, `Session log export cancelled; ${destination} was left unchanged.`)
+      assert.equal(await readFile(destination, 'utf8'), 'not a session log\n')
+    } finally {
+      await unmount(harness)
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses rather than replacing when nothing can ask', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'dsh-tui-export-'))
+    const destination = join(workspace, 'kept.jsonl')
+    try {
+      await writeFile(destination, 'not a session log\n', 'utf8')
+      const { ctx, session } = await createTuiTestContext({ cwd: workspace })
+      // An embedder with no surface to ask on: consent is absent, and absent
+      // consent is a no.
+      const result = await exportSessionLog(
+        { persistence: undefined, sessions: undefined, cwd: workspace },
+        session,
+        'kept.jsonl',
+        AbortSignal.timeout(5_000),
+      )
+      assert.equal(result.kind, 'error')
+      assert.match(result.text ?? '', /already exists and nothing here can ask/u)
+      assert.equal(await readFile(destination, 'utf8'), 'not a session log\n')
+      await ctx.fiber.dispose()
+    } finally {
       await rm(workspace, { recursive: true, force: true })
     }
   })

@@ -36,9 +36,10 @@ export interface TuiStartupValues {
   /**
    * One-shot task text, when `--print` was passed.
    *
-   * Parsed but not served: this bundle has no headless answering path, so the
-   * runner refuses the flag (see `startupRefusal` in the runner) instead of
-   * starting the full-screen UI over a request that asked for the opposite.
+   * Selects the runner's headless path: the task is run to quiescence and its
+   * answer is written on stdout, with no renderer and no TTY requirement. Every
+   * other value here still applies — the one-shot run opens its session through
+   * the same startup path the interactive run does.
    */
   print: string | undefined
   /** Initial prompt typed on the command line, sent once the UI is up. */
@@ -58,7 +59,7 @@ export function tuiCommand(): Command {
     .option('--preset <id>', 'agent preset a fresh session is composed from')
     .option('-r, --resume <sessionId>', 'resume a session by id')
     .option('-c, --continue', 'continue the most recent session')
-    .option('-p, --print <task>', 'reserved: one-shot answering is not implemented in this profile')
+    .option('-p, --print <task>', 'run one task without a UI and write the answer on stdout')
     .argument('[prompt...]', 'initial prompt to send on start')
     .addHelpText('after', `
 Examples:
@@ -67,6 +68,7 @@ Examples:
   dsh --profile tui --continue                resume the most recent session
   dsh --profile tui --resume <sessionId>      resume a specific session
   dsh --profile tui --preset code             start on the "code" agent preset
+  dsh --profile tui --print "run the tests"   answer one task on stdout, no UI
 `)
 }
 

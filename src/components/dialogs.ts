@@ -258,6 +258,22 @@ export class PromptContextComponent implements Component {
   }
 }
 
+/**
+ * How the two keys that open a question's custom answer are named, wherever
+ * they are named.
+ *
+ * Both keys are bound — `Tab` and `c` — and neither belongs to the keybinding
+ * registry, so nothing generated from the registry can spell them: the dialog
+ * footer, the dialog's own "nothing selected" refusal, the shortcut list
+ * `/help`, `/hotkeys` and `?` print, and the README's question row are four
+ * hand-written places that have to agree. Three of them read this constant;
+ * the README is held to it by the docs suite.
+ */
+export const CUSTOM_ANSWER_KEYS = 'Tab/c'
+
+/** The custom-answer row as the question dialog's footer and the shortcut list both print it. */
+export const CUSTOM_ANSWER_HINT = `${CUSTOM_ANSWER_KEYS} custom answer`
+
 /** A user's answer to one question: chosen option labels and an optional custom answer. */
 export interface QuestionSelection {
   selected: string[]
@@ -1168,7 +1184,7 @@ export class QuestionDialog implements Component, Focusable {
         : [options[this.selectedIndex]?.label].filter((label): label is string => label !== undefined)
       const custom = this.question.multiSelect ? this.input.getValue().trim() : ''
       if (selected.length === 0 && custom === '') {
-        this.error = 'Select at least one option, or press Tab/c for a custom answer.'
+        this.error = `Select at least one option, or press ${CUSTOM_ANSWER_KEYS} for a custom answer.`
         return
       }
       this.done({ selected, ...(custom === '' ? {} : { custom }) })
@@ -1278,7 +1294,7 @@ export class QuestionDialog implements Component, Focusable {
         // Both keys are named because both are bound: `c` is the one a hand
         // already on the option list reaches for, and a shortcut nobody is
         // told about is a shortcut nobody uses.
-        'Tab/c custom answer',
+        CUSTOM_ANSWER_HINT,
         ...(this.options.length > 1 ? ['↑/↓ navigate'] : []),
         ...(this.question.multiSelect ? ['Space toggle'] : []),
         'Enter submit',

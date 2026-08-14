@@ -71,6 +71,20 @@ export interface TuiRuntime {
    */
   handoffFork?: (fork: TuiForkRequest) => Promise<never>
   /**
+   * Host-owned blank-session handoff: create a session with no history in this
+   * workspace and mount a chat over it. Success does not return, exactly as
+   * {@link TuiRuntime.handoffResume}.
+   *
+   * The session being left is not ended and not edited — it is flushed and
+   * released, and stays resumable — because there is no "clear this session"
+   * anywhere below this UI: the log is append-only, and starting over means a
+   * new log, not a truncated one.
+   *
+   * Absent leaves `/new` refusing rather than pretending: only a host that owns
+   * the agent handle can replace the mounted session.
+   */
+  handoffNew?: () => Promise<never>
+  /**
    * Line the host wants printed once the terminal is released on exit, such as
    * the command that resumes this session. Absent prints nothing. The host owns
    * the wording; the TUI owns rendering and escapes terminal controls, so

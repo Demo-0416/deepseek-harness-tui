@@ -159,12 +159,14 @@ import {
 } from './components/plugins-panel.ts'
 import {
   compactTargetLabel,
+  CUSTOM_ANSWER_HINT,
   DetailsDialog,
   diagnosticMeter,
   formatDiagnosticCount,
   formatDiagnosticNumber,
   formatDiagnosticTime,
   initialTarget,
+  QuestionDialog,
   StatusCardComponent,
   PromptContextComponent,
   targetLabel,
@@ -197,6 +199,7 @@ import {
   type PresetController,
 } from './chat/preset-command.ts'
 import { createQuestionQueue } from './chat/questions.ts'
+import { startPrintRun, type PrintIo } from './print.ts'
 import {
   exportSessionLog,
   type SessionArtifactReader,
@@ -453,7 +456,7 @@ function keyboardShortcuts(manager: KeybindingsManager): string[] {
     'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
     'Ctrl+C again on a turn that will not cancel exits without waiting for it',
     'In a panel: ↑/↓ scroll • PgUp/PgDn page • g/G top or bottom • Esc close',
-    'In a question: ↑/↓ move • Space multi-select • Tab custom answer • Enter confirm • Esc cancel',
+    `In a question: ↑/↓ move • Space multi-select • ${CUSTOM_ANSWER_HINT} • Enter confirm • Esc cancel`,
     'In an approval: ↑/↓ move • 1-4 answer straight away • Enter confirm • Esc deny',
   ]
 }
@@ -687,9 +690,28 @@ export function createTuiChat(
   // resolution the Web host's skill domain performs. Guarded per the optional
   // -service stance: an embedder's roster stub need not carry `serviceFor`.
   const presetRoster = ctx.get('agentPresets')
-  const skills = (typeof presetRoster?.serviceFor === 'function'
+  /**
+   * The skill registry this session currently composes, resolved on every use.
+   *
+   * `serviceFor` returns the VALUE of whichever standing mount the agent's
+   * scope pointed at when it was called, not a live handle: `/preset` re-links
+   * a blank session to another preset's composition, and a registry captured
+   * at mount would keep serving the preset the session opened on — `/skill:`
+   * completion, invocation, and the banner would all name skills this agent no
+   * longer has. Cheap enough to repeat: both arms are map lookups.
+   * @returns the registry serving this agent now, or `undefined` when none is mounted.
+   */
+  const skillRegistry = (): SkillRegistry | undefined => (typeof presetRoster?.serviceFor === 'function'
     ? presetRoster.serviceFor(agent, 'skills')
     : undefined) ?? ctx.get('skills')
+  /**
+   * Whether this deployment composes skills at all, decided once.
+   *
+   * Only the presence question is answered at mount — a profile without skills
+   * never grows them, and a profile with them keeps the listener and the first
+   * scan that a `/preset` switch later re-runs.
+   */
+  const skillsAvailable = skillRegistry() !== undefined
   const cwd = agent.session.header.cwd ?? process.cwd()
   /**
    * `fd` if this host has it, which is what makes `@` respect `.gitignore`:
@@ -1363,6 +1385,19 @@ export function createTuiChat(
     requestRender()
   })
 
+  /**
+   * Rows a question dialog may take: the configured ceiling, or whatever the
+   * editor leaves when the terminal is shorter than that.
+   *
+   * Read per render rather than captured, because both terms move: the terminal
+   * is resizable and the editor grows with the draft in it.
+   * @returns the row budget, never below one.
+   */
+  const questionMaxHeight = (): number => Math.max(1, Math.min(
+    resolved.questionDialogMaxHeight,
+    runtime.terminal.rows - editorRowCount(),
+  ))
+
   const questions = createQuestionQueue({
     ctx,
     resolved,
@@ -1370,10 +1405,7 @@ export function createTuiChat(
     overlayManager,
     requestRender,
     isDisposed,
-    questionMaxHeight: () => Math.max(1, Math.min(
-      resolved.questionDialogMaxHeight,
-      runtime.terminal.rows - editorRowCount(),
-    )),
+    questionMaxHeight,
   })
 
   /**
@@ -2077,8 +2109,10 @@ export function createTuiChat(
   const disposeCommandChanges = ctx.on('commands/change', refreshCommandAutocomplete)
   refreshCommandAutocomplete()
 
-  const refreshSkillCommands = (service: SkillRegistry): void => {
+  const refreshSkillCommands = (): void => {
     const scan = ++skillCommandScan
+    const service = skillRegistry()
+    if (service === undefined) return
     // `scope` selects the agent's preset layers; without it the read sees the
     // global layer alone, which the host composition leaves empty now that
     // skill discovery is a preset row.
@@ -2113,10 +2147,103 @@ export function createTuiChat(
       },
     )
   }
-  const disposeSkillChanges = skills === undefined
-    ? () => {}
-    : ctx.on('skills/change', () => { refreshSkillCommands(skills) })
-  if (skills !== undefined) refreshSkillCommands(skills)
+  const disposeSkillChanges = skillsAvailable
+    ? ctx.on('skills/change', () => { refreshSkillCommands() })
+    : () => {}
+  if (skillsAvailable) refreshSkillCommands()
+
+  /**
+   * Put a yes/no decision to the user on the same surface a model's question
+   * uses, and answer it.
+   *
+   * The question dialog is reused rather than a confirmation widget of its own:
+   * a user who has answered one option list in this terminal knows this one, and
+   * the two would otherwise diverge on navigation, cancelling, and width. Every
+   * way out that is not the affirmative option — Esc, a closed overlay, a
+   * disposed terminal — answers no, because these prompts guard destructive
+   * work and silence must never mean "go ahead".
+   * @param question - the decision, phrased as a question.
+   * @param confirmLabel - the option that means yes; every other answer means no.
+   * @param declineLabel - the option that means no, offered so cancelling is not the only refusal.
+   * @returns whether the user chose the affirmative option.
+   */
+  const askConfirmation = (
+    question: string,
+    confirmLabel: string,
+    declineLabel: string,
+  ): Promise<boolean> => {
+    if (disposed) return Promise.resolve(false)
+    return new Promise<boolean>((resolveAnswer) => {
+      let settled = false
+      const settle = (answer: boolean): void => {
+        if (settled) return
+        settled = true
+        resolveAnswer(answer)
+      }
+      const session = overlayManager.open({
+        create: () => new QuestionDialog(
+          {
+            id: 'tui-confirm',
+            question,
+            options: [{ label: confirmLabel }, { label: declineLabel }],
+          },
+          1,
+          1,
+          1,
+          resolved.maxQuestionOptions,
+          questionMaxHeight,
+          palette,
+          (selection) => {
+            void session.close()
+            settle(selection.selected.includes(confirmLabel))
+          },
+          () => {
+            void session.close()
+            settle(false)
+          },
+        ),
+        options: {
+          width: resolved.questionDialogWidth,
+          maxHeight: resolved.questionDialogMaxHeight,
+        },
+      }, 'inline')
+      // A terminal torn down under an open confirmation closes the overlay
+      // without answering it; the awaiting caller still has to be released.
+      void session.closed.then(() => { settle(false) })
+      requestRender()
+    })
+  }
+
+  /**
+   * Start over in a blank session (`/new`), leaving this one resumable.
+   *
+   * Deliberately not called "clear": nothing below this UI can truncate a
+   * session log, so the only honest way to start with an empty context is a new
+   * session, and the one being left is flushed and kept rather than emptied. A
+   * host that cannot replace the mounted agent says so instead of clearing the
+   * screen and leaving the model's context exactly as full as it was.
+   * @returns the command result the notice column reports.
+   */
+  const startNewSession = (): CommandResult => {
+    const start = runtime.handoffNew
+    if (start === undefined) {
+      return {
+        kind: 'error',
+        text: 'This runtime cannot open a new session in place. Exit and start dsh again for a blank session.',
+      }
+    }
+    // Idle-only, as `/resume` is: a running turn is writing to the log this
+    // teardown releases, and its tools are mid-call.
+    if (agent.status !== 'idle') {
+      return { kind: 'error', text: `A new session needs an idle agent (status: ${agent.status}).` }
+    }
+    appendNotice('Starting a blank session. This one keeps its history — /resume brings it back.')
+    void start().catch((error: unknown) => {
+      /* v8 ignore next -- a handoff that fails after teardown has no screen left to report on. */
+      if (!disposed) appendNotice(`Could not start a new session: ${errorChain(error)}`, 'error')
+    })
+    return { kind: 'success' }
+  }
 
   // The agent scope is minted by agent-loop and intentionally inherits only
   // that core plugin's dependencies. A child command producer declares its own
@@ -2158,6 +2285,11 @@ export function createTuiChat(
       handler: () => { copyLastAnswer(); return { kind: 'success' } },
     })
     commandCtx.commands.register({
+      name: 'new',
+      description: 'Start a blank session in this workspace (this one stays resumable)',
+      handler: () => startNewSession(),
+    })
+    commandCtx.commands.register({
       name: 'clear',
       description: 'Clear the transcript view (session history is unchanged)',
       handler: () => { transcript.clearTranscript(); requestRender(); return { kind: 'success' } },
@@ -2183,6 +2315,13 @@ export function createTuiChat(
         persistence: ctx.get('sessionPersistence') as SessionArtifactReader | undefined,
         sessions: ctx.get('sessions') as SessionFlusher | undefined,
         cwd,
+        // The default destination is one path per session, so exporting the
+        // same session twice lands on the first file. Asked, not assumed.
+        confirmOverwrite: destination => askConfirmation(
+          `${displayInlineText(destination)} already exists. Replace it?`,
+          'Replace the file',
+          'Keep it',
+        ),
       }, agent.session, rawInput, signal),
     })
     commandCtx.commands.register({
@@ -2321,6 +2460,11 @@ export function createTuiChat(
    * @returns a promise that settles once the invocation has run its course.
    */
   const invokeSkill = (name: string, instructions: string): Promise<void> => {
+    // Resolved per invocation, not at mount: after `/preset` re-links a blank
+    // session the registry captured at mount is the previous preset's, and a
+    // lookup against it either loads the wrong body or refuses a skill this
+    // agent does have.
+    const skills = skillRegistry()
     if (skills === undefined) {
       appendNotice('Skills are not available in this session.', 'warning')
       return Promise.resolve()
@@ -2845,6 +2989,12 @@ export function createTuiChat(
         fileSearch.invalidate()
       }
     }
+    // A preset switch re-links this agent's scope to another standing
+    // composition, whose skill rows are a different catalog. Nothing else
+    // announces that: `skills/change` fires when a registry's own contents
+    // move, not when the agent is pointed at a different registry, so the
+    // scan that fills `/skill:` completion and the banner is re-run here.
+    if (event.type === 'agent-preset/selected' && skillsAvailable) refreshSkillCommands()
     // `foldGoal` rejects a malformed change loudly, and this listener runs on
     // the shared event bus: a throw here would take every other subscriber's
     // notification with it, so a rejected refold keeps the last good goal.
@@ -3142,6 +3292,25 @@ export function disposeRootAndExit(
   )
 }
 
+/**
+ * End this run with `code`, through whichever exit the deployment owns.
+ *
+ * A launcher-provided bounded exit disposes the tree it owns; without one the
+ * app disposes its own root and exits. Shared by the interactive run and the
+ * one-shot `--print` run, which end for different reasons and must end the same
+ * way.
+ * @param ctx - the runner context.
+ * @param code - the process status to report.
+ */
+function requestExit(ctx: Context, code: number): void {
+  const appExit = ctx.get('appExit')
+  if (appExit === undefined) {
+    disposeRootAndExit(ctx, code)
+    return
+  }
+  appExit(code)
+}
+
 /** One `provider/model` route selected on the command line or by a default-model service. */
 interface ModelRoute {
   provider: string
@@ -3356,19 +3525,28 @@ export function startupFailureMessage(startup: TuiStartupValues, error: unknown)
 /**
  * Why a parsed command line cannot be served at all, when it cannot be.
  *
- * `--print` is the one flag this app parses and does not implement: it asks for
- * an answer without a UI, and the runner used to ignore it and open the chat —
- * so the caller who wanted text on stdout got a full-screen terminal instead,
- * and a script that piped the output got the TTY refusal from `apply` with no
- * word about the flag it actually passed. Refusing names the profile that does
- * have a headless path, which makes the flag a redirection rather than a wall.
+ * The one line a `--print` run produces is the answer to its task, so a task
+ * that is only whitespace has no answer to produce: the model would be sent an
+ * empty turn and the caller would get a blank line and a success code. Refused
+ * on the command line instead, before an agent is created and while stderr is
+ * still the only thing anyone is reading.
  * @param startup - the parsed command line.
  * @returns the refusal to write on stderr, or `undefined` when the run may proceed.
  */
 export function startupRefusal(startup: TuiStartupValues): string | undefined {
   if (startup.print === undefined) return undefined
-  return 'dsh-tui: --print is not implemented in this profile.\n'
-    + 'Use a headless profile for a one-shot answer, e.g. dsh --profile headless "run the tests".\n'
+  if (startup.print.trim() === '') {
+    return 'dsh-tui: --print needs a task to run.\n'
+      + 'Pass one, e.g. dsh --profile tui --print "run the tests".\n'
+  }
+  // Two tasks, one run: the positional prompt is the interactive path's first
+  // turn and `--print` never opens that path, so one of them would be dropped
+  // in silence. Which one is not a guess worth making for the caller.
+  if (startup.initialPrompt !== undefined) {
+    return 'dsh-tui: --print already carries the task; the prompt argument would be ignored.\n'
+      + 'Pass the task to --print alone.\n'
+  }
+  return undefined
 }
 
 /** The agent and chat this runner currently owns. */
@@ -3394,26 +3572,7 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
   const initialSkill = config.initialSkill ?? ctx.get('tuiInitialSkill')
   const goodbyeMessage = ctx.get('tuiGoodbyeMessage')
   const terminal = new ProcessTerminal()
-  const exit = (code: number): void => {
-    // A launcher-provided bounded exit disposes the tree it owns; without one
-    // the TUI disposes its own root and exits.
-    const appExit = ctx.get('appExit')
-    if (appExit === undefined) {
-      disposeRootAndExit(ctx, code)
-      return
-    }
-    appExit(code)
-  }
-  // Refused before the renderer exists, not after: `--print` asks for an answer
-  // without a UI, and the terminal this run would otherwise take over is the one
-  // thing the caller said they did not want. `ProcessTerminal`'s constructor
-  // touches nothing, so nothing has to be restored on this path.
-  const refusal = startupRefusal(startup)
-  if (refusal !== undefined) {
-    process.stderr.write(refusal)
-    exit(2)
-    return
-  }
+  const exit = (code: number): void => { requestExit(ctx, code) }
   const agentOptions = resolveAgentOptions(startup)
   // A host that owns the process (a launcher able to re-exec) wins; otherwise
   // resume happens in this process through `handoff` below.
@@ -3430,6 +3589,7 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
       ? (sessionId, cwd) => handoff(sessionId, cwd)
       : (sessionId, cwd) => hostResume.handoff(sessionId, cwd),
     handoffFork: fork => forkHandoff(fork),
+    handoffNew: () => newSessionHandoff(),
   }
 
   const mount = (handle: AgentHandle, draft?: string): void => {
@@ -3519,6 +3679,45 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
     return await new Promise<never>(() => {})
   }
 
+  /**
+   * In-process `/new`: flush the session being left, tear the chat and agent
+   * down, create a blank session in this workspace, and mount a fresh chat over
+   * it.
+   *
+   * The session left behind keeps its whole log and stays resumable — there is
+   * no truncating "clear" anywhere below this UI, and inventing one out of a
+   * fresh create would be a lie about what the log holds. The new session is
+   * composed exactly as a fresh start would compose it, so `--preset` and the
+   * saved default still decide what it runs.
+   * @returns Never; the replacement chat owns the terminal from here.
+   */
+  async function newSessionHandoff(): Promise<never> {
+    // Flushed before the handle is released, so the session the user just left
+    // is on disk complete when `/resume` lists it.
+    const leaving = mounted?.handle.agent.session
+    if (leaving !== undefined) await ctx.sessions.flush(leaving)
+    await teardown()
+    let created: AgentHandle
+    try {
+      const composition = await composeAgentPreset(ctx, startup.preset)
+      created = await ctx.agents.create({
+        sessionId: SessionId(`session-${randomUUID()}`),
+        meta: {
+          cwd: process.cwd(),
+          ...composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset },
+        },
+        ...agentOptions === undefined ? {} : { agentOptions },
+        ...composition.setup === undefined ? {} : { setup: composition.setup },
+      })
+    } catch (error: unknown) {
+      terminal.write(`dsh-tui: failed to start a new session: ${errorChain(error)}\n`)
+      exit(1)
+      throw error
+    }
+    mount(created)
+    return await new Promise<never>(() => {})
+  }
+
   // Registered before the first await so plugin teardown always reaches
   // whichever session is mounted when it runs.
   ctx.effect(() => () => teardown(), 'dsh-tui/session')
@@ -3542,12 +3741,38 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
 
 /**
  * Cordis entry point (`tui-runner`): owns the process terminal, the startup
- * agent, and the prompt-value registry this bundle's chat renders against.
+ * agent, and the prompt-value registry this bundle's chat renders against —
+ * except under `--print`, which owns none of them and writes one answer on
+ * stdout instead.
  * @param ctx - plugin context carrying the injected core services.
  * @param config - presentation configuration from the bundle row.
  */
-/* v8 ignore start -- production process wiring; fake-terminal tests cover createTuiChat */
+/* v8 ignore start -- production process wiring; fake-terminal tests cover createTuiChat, and the print suite covers runPrintTask */
 export function apply(ctx: Context, config: Config): void {
+  const startup = ctx.tuiStartup
+  // Decided before the TTY check, which is a requirement of the renderer and
+  // not of this app: `--print` exists to be used from a script, where stdout is
+  // a pipe by definition, and refusing it there would refuse it everywhere it
+  // is meant to run.
+  if (startup.print !== undefined) {
+    const io: PrintIo = {
+      stdout: process.stdout,
+      stderr: process.stderr,
+      exit: code => { requestExit(ctx, code) },
+    }
+    const refusal = startupRefusal(startup)
+    if (refusal !== undefined) {
+      io.stderr.write(refusal)
+      io.exit(2)
+      return
+    }
+    startPrintRun(ctx, startup.print, {
+      // The same opening the interactive run uses, so --model, --preset,
+      // --resume and --continue keep one meaning across both.
+      openAgent: () => openStartupAgent(ctx, startup, resolveAgentOptions(startup)),
+    }, io)
+    return
+  }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error('dsh-tui: both stdin and stdout must be TTYs; use a headless profile for pipes')
   }

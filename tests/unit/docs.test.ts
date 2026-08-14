@@ -20,6 +20,7 @@ import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { KeybindingsManager } from '@earendil-works/pi-tui'
 import { Config } from '../../src/config.ts'
+import { CUSTOM_ANSWER_HINT } from '../../src/components/dialogs.ts'
 import { APP_KEYBINDINGS, KEYBINDINGS, formatKeyId, type AppKeybinding } from '../../src/keybindings.ts'
 import { startupRefusal } from '../../src/index.ts'
 import type { TuiStartupValues } from '../../src/startup.ts'
@@ -147,15 +148,22 @@ describe('README usage table', () => {
     }
   })
 
-  it('does not promise the one flag this profile refuses', () => {
-    // `--print` asks for an answer without a UI and this bundle has no headless
-    // path, so the runner refuses it before the renderer exists. The row and the
-    // refusal have to agree, or the flag is a promise again.
-    assert.match(startupRefusal(startup({ print: 'run the tests' })) ?? '', /--print is not implemented/u)
+  it('serves --print rather than refusing it, and refuses only an empty task', () => {
+    // The flag runs a task without a UI; only a task that is not a task is
+    // refused, and it is refused on the command line rather than by sending the
+    // model an empty turn and printing a blank line.
+    assert.equal(startupRefusal(startup({ print: 'run the tests' })), undefined)
     assert.equal(startupRefusal(startup({ initialPrompt: 'fix the tests' })), undefined)
+    assert.match(startupRefusal(startup({ print: '   ' })) ?? '', /--print needs a task/u)
+    // Two tasks in one command line: the positional prompt only ever reaches
+    // the interactive path, which `--print` does not open.
+    assert.match(
+      startupRefusal(startup({ print: 'run the tests', initialPrompt: 'fix them' })) ?? '',
+      /would be ignored/u,
+    )
     const printRow = tableUnder('Usage').find(row => (row[0] ?? '').includes('--print'))
     assert.ok(printRow !== undefined, 'the README documents --print')
-    assert.match(printRow[1] ?? '', /not implemented/u)
+    assert.doesNotMatch(printRow[1] ?? '', /not implemented/u)
   })
 })
 
@@ -260,6 +268,25 @@ describe('one shortcut table, three surfaces', { skip: skipWithoutEntry }, () =>
         }
       }
     }
+  })
+
+  it('names the question dialog\'s own two keys the way the dialog names them', async () => {
+    // `c` belongs to no registry action, so the case above cannot see it: the
+    // key is bound inside the question dialog and spelled out by hand in four
+    // places. Three of them read one constant; this holds the fourth, the
+    // README, to the same words, which is what "one shortcut table" has to mean
+    // for a key the registry does not own.
+    const surfaces = await shortcutSurfaces()
+    for (const [surface, text] of Object.entries(surfaces)) {
+      assert.ok(text.includes(CUSTOM_ANSWER_HINT), `${surface} names ${CUSTOM_ANSWER_HINT}:\n${text}`)
+    }
+    const questionRow = tableUnder('While a surface holds the keyboard')
+      .find(row => (row[0] ?? '') === 'Question')
+    assert.ok(questionRow !== undefined, 'the README documents the question surface')
+    assert.ok(
+      (questionRow[1] ?? '').includes(CUSTOM_ANSWER_HINT),
+      `the README's question row names "${CUSTOM_ANSWER_HINT}": ${questionRow[1] ?? ''}`,
+    )
   })
 
   it('renames a rebound key on all three at once', async () => {

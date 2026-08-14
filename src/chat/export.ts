@@ -71,6 +71,30 @@ export interface SessionLogExportDeps {
   readonly sessions: SessionFlusher | undefined
   /** Workspace a relative destination resolves against. */
   readonly cwd: string
+  /**
+   * Ask the user whether an existing file may be replaced.
+   *
+   * Optional, and its absence means "never replace one": an embedder that has
+   * no surface to ask on must not lose a file on the user's behalf. The default
+   * destination is stable per session, so the second `/export` of one session
+   * lands on the first one's file — this is the common case, not a corner one.
+   * @param destination - the absolute path that already has a file on it.
+   * @returns whether to write over it.
+   */
+  readonly confirmOverwrite?: (destination: string) => Promise<boolean>
+}
+
+/**
+ * Whether a failed exclusive create failed because the path was taken.
+ *
+ * Structural rather than typed: `writeFile` rejects with a plain `Error`
+ * carrying a `code`, and every other failure (a directory in the way, a
+ * read-only volume) has to keep travelling to the error result.
+ * @param error - the rejection from an exclusive write.
+ * @returns true when the destination already exists.
+ */
+function destinationExists(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'EEXIST'
 }
 
 /**
@@ -105,7 +129,12 @@ export function serializeSessionLog(session: Session): string {
  * A path argument is taken as written (resolved against the workspace when
  * relative); without one the file is `dsh-session-<id>.jsonl` in the workspace,
  * or the backend's own artifact name when it has one.
- * @param deps - persistence, session store, and workspace.
+ *
+ * An existing file is never written over unsaid. The write is attempted
+ * exclusively first, so "does this path exist" is answered by the write itself
+ * rather than by a check another process can invalidate between the two calls;
+ * only an `EEXIST` asks, and only a yes writes again without the flag.
+ * @param deps - persistence, session store, workspace, and overwrite consent.
  * @param session - the session to export.
  * @param rawInput - the command's argument text; empty selects the default path.
  * @param signal - cancellation owned by the dispatching command.
@@ -133,7 +162,30 @@ export async function exportSessionLog(
     const destination = requested === ''
       ? resolvePath(deps.cwd, basename)
       : isAbsolute(requested) ? requested : resolvePath(deps.cwd, requested)
-    await writeFile(destination, content, 'utf8')
+    try {
+      await writeFile(destination, content, { encoding: 'utf8', flag: 'wx' })
+    } catch (error: unknown) {
+      if (!destinationExists(error)) throw error
+      // No asker means no consent. The file stays and the refusal names the
+      // path, so the next `/export` can be given another one.
+      if (deps.confirmOverwrite === undefined) {
+        return {
+          kind: 'error',
+          text: `Session log export refused: ${displayInlineText(destination)} already exists`
+            + ' and nothing here can ask whether to replace it. Pass another path.',
+        }
+      }
+      const approved = await deps.confirmOverwrite(destination)
+      if (!approved) {
+        return {
+          kind: 'success',
+          text: `Session log export cancelled; ${displayInlineText(destination)} was left unchanged.`,
+        }
+      }
+      signal.throwIfAborted()
+      await writeFile(destination, content, 'utf8')
+      return { kind: 'success', text: `Session log exported to ${displayInlineText(destination)} (replaced)` }
+    }
     return { kind: 'success', text: `Session log exported to ${displayInlineText(destination)}` }
   } catch (error: unknown) {
     return { kind: 'error', text: `Session log export failed: ${displayInlineText(errorChain(error))}` }
