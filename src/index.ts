@@ -2190,11 +2190,17 @@ export function createTuiChat(
       description: 'Search and inspect the Loader\'s plugin entries',
       handler: () => { showPlugins(); return { kind: 'success' } },
     })
-    commandCtx.commands.register({
-      name: 'reload',
-      description: 'EXPERIMENTAL (dev): re-read loader config files and apply the diff (idle only)',
-      handler: () => { runReload(); return { kind: 'success' } },
-    })
+    // Registered only where someone asked for it. A command that re-mounts
+    // Loader entries under a live session belongs to whoever is editing those
+    // files, and `/help` is read as a menu: an entry there labelled
+    // EXPERIMENTAL is still an entry a user will try once.
+    if (config.experimentalCommands === true) {
+      commandCtx.commands.register({
+        name: 'reload',
+        description: 'EXPERIMENTAL (dev): re-read loader config files and apply the diff (idle only)',
+        handler: () => { runReload(); return { kind: 'success' } },
+      })
+    }
     commandCtx.commands.register({
       name: 'rewind',
       description: 'Go back to an earlier prompt in this session (files are never restored)',
@@ -3347,6 +3353,24 @@ export function startupFailureMessage(startup: TuiStartupValues, error: unknown)
   return `dsh-tui: cannot start a session: ${cause}\n`
 }
 
+/**
+ * Why a parsed command line cannot be served at all, when it cannot be.
+ *
+ * `--print` is the one flag this app parses and does not implement: it asks for
+ * an answer without a UI, and the runner used to ignore it and open the chat —
+ * so the caller who wanted text on stdout got a full-screen terminal instead,
+ * and a script that piped the output got the TTY refusal from `apply` with no
+ * word about the flag it actually passed. Refusing names the profile that does
+ * have a headless path, which makes the flag a redirection rather than a wall.
+ * @param startup - the parsed command line.
+ * @returns the refusal to write on stderr, or `undefined` when the run may proceed.
+ */
+export function startupRefusal(startup: TuiStartupValues): string | undefined {
+  if (startup.print === undefined) return undefined
+  return 'dsh-tui: --print is not implemented in this profile.\n'
+    + 'Use a headless profile for a one-shot answer, e.g. dsh --profile headless "run the tests".\n'
+}
+
 /** The agent and chat this runner currently owns. */
 interface MountedSession {
   handle: AgentHandle
@@ -3362,9 +3386,6 @@ interface MountedSession {
  */
 async function runTui(ctx: Context, config: Config): Promise<void> {
   const startup = ctx.tuiStartup
-  // TODO(dsh-tui): `--print` should answer one task headlessly and exit without
-  // ever starting the renderer. Until that path exists the flag is ignored and
-  // the interactive UI starts as usual.
   // Truecolor is a terminal capability, so detect it here at the process
   // boundary from COLORTERM; an explicit theme value still wins.
   const truecolor = config.theme?.truecolor ?? ['truecolor', '24bit'].includes(process.env['COLORTERM'] ?? '')
@@ -3382,6 +3403,16 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
       return
     }
     appExit(code)
+  }
+  // Refused before the renderer exists, not after: `--print` asks for an answer
+  // without a UI, and the terminal this run would otherwise take over is the one
+  // thing the caller said they did not want. `ProcessTerminal`'s constructor
+  // touches nothing, so nothing has to be restored on this path.
+  const refusal = startupRefusal(startup)
+  if (refusal !== undefined) {
+    process.stderr.write(refusal)
+    exit(2)
+    return
   }
   const agentOptions = resolveAgentOptions(startup)
   // A host that owns the process (a launcher able to re-exec) wins; otherwise

@@ -3,7 +3,7 @@
 #   tui-startup parses this app's own command line (the launcher only knows
 #   --profile/--patch and the web/plugin subcommands) and provides the parsed
 #   values as the `tuiStartup` service; tui-runner consumes that service and
-#   owns the Ink render loop, the agent session, and the approval answerer.
+#   owns the pi-tui render loop, the agent session, and the approval answerer.
 
 # Host-layer capability rows mirrored from the web-app bundle so the TUI
 # profile matches `dsh --profile web` feature-for-feature (browser/HTTP-only

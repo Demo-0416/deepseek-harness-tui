@@ -33,7 +33,13 @@ export interface TuiStartupValues {
   resume: string | undefined
   /** Continue the most recent session, when `--continue` was passed. */
   continueLatest: boolean
-  /** One-shot task text, when `--print` was passed; the TUI stays headless. */
+  /**
+   * One-shot task text, when `--print` was passed.
+   *
+   * Parsed but not served: this bundle has no headless answering path, so the
+   * runner refuses the flag (see `startupRefusal` in the runner) instead of
+   * starting the full-screen UI over a request that asked for the opposite.
+   */
   print: string | undefined
   /** Initial prompt typed on the command line, sent once the UI is up. */
   initialPrompt: string | undefined
@@ -52,7 +58,7 @@ export function tuiCommand(): Command {
     .option('--preset <id>', 'agent preset a fresh session is composed from')
     .option('-r, --resume <sessionId>', 'resume a session by id')
     .option('-c, --continue', 'continue the most recent session')
-    .option('-p, --print <task>', 'one-shot: answer one task and exit without the UI')
+    .option('-p, --print <task>', 'reserved: one-shot answering is not implemented in this profile')
     .argument('[prompt...]', 'initial prompt to send on start')
     .addHelpText('after', `
 Examples:
@@ -60,7 +66,6 @@ Examples:
   dsh --profile tui "fix the failing test"    start and send an initial prompt
   dsh --profile tui --continue                resume the most recent session
   dsh --profile tui --resume <sessionId>      resume a specific session
-  dsh --profile tui --print "run the tests"   one-shot answer and exit
   dsh --profile tui --preset code             start on the "code" agent preset
 `)
 }

@@ -170,7 +170,16 @@ export const TuiConfigSchema: z<TuiConfig> = z.object(tuiConfigSchemaFields)
 
 /** Serializable plugin configuration. */
 export interface Config extends TuiConfig {
-  /** Extra dim line under the startup banner. When absent, the wordmark sweeps in on start. */
+  /**
+   * Extra dim line under the startup banner.
+   *
+   * Optional in the schema as well as in this interface, because absence is a
+   * behavior and not a missing value: with no key at all the wordmark sweeps in
+   * over the first frames, and any string — the empty one included — states the
+   * deployment's own line instead and keeps the banner still, which is what
+   * makes a snapshot fixture frame-deterministic. A deployment that wants
+   * neither the sweep nor a sentence writes `""`.
+   */
   welcome?: string
   /** Exact shared agent/session identity driven by this terminal. Defaults to `main`. */
   sessionId?: string
@@ -187,14 +196,30 @@ export interface Config extends TuiConfig {
    * again; never by a person, and never submitted on the user's behalf.
    */
   initialDraft?: string
+  /**
+   * Register this bundle's experimental developer commands, which today means
+   * `/reload` alone.
+   *
+   * Off by default because `/reload` re-reads the Loader's config files and
+   * applies the diff to a live tree: it can dispose and re-mount plugin entries
+   * under the session on screen, which is a thing someone editing those files
+   * wants and a thing nobody else does. Labelling it in `/help` was not enough —
+   * every command in that list reads as an offer, and this one is a tool for the
+   * person who already knows what a Loader entry is.
+   */
+  experimentalCommands?: boolean
 }
 
 /** Schemastery schema for the full plugin configuration. */
 export const Config: z<Config> = z.object({
+  // Deliberately neither `.required()` nor `.default('')`: the startup banner
+  // reads the absence of this key, so a default would delete the sweep-reveal
+  // path from every deployment that never mentioned a welcome line.
   welcome: z.string(),
   sessionId: z.string().default('main'),
   initialSkill: z.string(),
   initialDraft: z.string(),
+  experimentalCommands: z.boolean().default(false),
   showReasoning: tuiConfigSchemaFields.showReasoning,
   markdownRenderer: tuiConfigSchemaFields.markdownRenderer,
   maxToolOutputLines: tuiConfigSchemaFields.maxToolOutputLines,
@@ -202,6 +227,7 @@ export const Config: z<Config> = z.object({
   maxQuestionOptions: tuiConfigSchemaFields.maxQuestionOptions,
   maxModelOptions: tuiConfigSchemaFields.maxModelOptions,
   maxResumeOptions: tuiConfigSchemaFields.maxResumeOptions,
+  resumeScanConcurrency: tuiConfigSchemaFields.resumeScanConcurrency,
   questionDialogWidth: tuiConfigSchemaFields.questionDialogWidth,
   questionDialogMaxHeight: tuiConfigSchemaFields.questionDialogMaxHeight,
   modelDialogWidth: tuiConfigSchemaFields.modelDialogWidth,
