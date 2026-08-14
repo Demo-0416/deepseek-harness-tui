@@ -61,20 +61,30 @@ export function hasRewindTarget(events: readonly SessionEvent[]): boolean {
 /**
  * How many leading events a fork placed before `seq` may keep.
  *
- * A seed must be a prefix that contains no open turn, step, or tool call
- * (`AgentRegistry.create` rejects anything else), so the only legal cut is
- * immediately after a completed turn — the same rule the API's own fork applies.
- * The cut lands on the last such boundary before the prompt, which is why a
- * prompt sent during a turn that never completed cannot be rewound to.
+ * A seed must be a prefix that does not end inside an open turn
+ * (`SessionStore.fork` rejects anything else), so the cut lands on the last
+ * safe position before the prompt: after the last closed turn, plus any
+ * between-turn events (headers, lifecycle) that follow it. For the first
+ * prompt that is the pre-turn prefix — possibly empty, which is a legal seed.
+ * A turn left open by a crash is never entered: the cut stays before its
+ * `turn/start`, exactly as the API's own fork boundary requires.
  * @param events - The session's event log.
  * @param seq - Sequence of the `user/message` being rewound to.
- * @returns The seed length, or `undefined` when no completed turn precedes it.
+ * @returns The seed length.
  */
-export function forkSeedLength(events: readonly SessionEvent[], seq: number): number | undefined {
-  let cut: number | undefined
+export function forkSeedLength(events: readonly SessionEvent[], seq: number): number {
+  let cut = 0
+  let inTurn = false
   for (const [index, event] of events.entries()) {
     if (event.seq >= seq) break
-    if (event.type === 'turn/end') cut = index + 1
+    if (event.type === 'turn/start') {
+      inTurn = true
+    } else if (event.type === 'turn/end') {
+      inTurn = false
+      cut = index + 1
+    } else if (!inTurn) {
+      cut = index + 1
+    }
   }
   return cut
 }

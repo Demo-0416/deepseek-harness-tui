@@ -367,7 +367,6 @@ export declare const EN_MESSAGES: {
     readonly 'notice.newSessionUnsupported': "This runtime cannot open a new session in place. Exit and start dsh again for a blank session.";
     readonly 'notice.newSessionBusy': "A new session needs an idle agent (status: {status}).";
     readonly 'notice.rewindNoFork': "Rewind put that prompt back in the editor. This runtime cannot fork a session, so the conversation above it is unchanged.";
-    readonly 'notice.rewindNoTurn': "Rewind put that prompt back in the editor. No completed turn precedes it, so there was nothing to fork to.";
     readonly 'notice.rewindBusy': "Cancel the active turn before rewinding.";
     readonly 'notice.rewindForking': "Forking this session to the point before that prompt; the original stays resumable.";
     readonly 'notice.rewindFailed': "Rewind failed: {error}";

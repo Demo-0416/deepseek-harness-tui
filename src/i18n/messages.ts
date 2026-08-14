@@ -501,8 +501,6 @@ export const EN_MESSAGES = {
   'notice.newSessionBusy': 'A new session needs an idle agent (status: {status}).',
   'notice.rewindNoFork':
     'Rewind put that prompt back in the editor. This runtime cannot fork a session, so the conversation above it is unchanged.',
-  'notice.rewindNoTurn':
-    'Rewind put that prompt back in the editor. No completed turn precedes it, so there was nothing to fork to.',
   'notice.rewindBusy': 'Cancel the active turn before rewinding.',
   'notice.rewindForking': 'Forking this session to the point before that prompt; the original stays resumable.',
   'notice.rewindFailed': 'Rewind failed: {error}',
@@ -1035,7 +1033,6 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'notice.newSessionUnsupported': '当前运行时不能就地开新会话。退出后重新启动 dsh 即可得到一个空会话。',
   'notice.newSessionBusy': '开新会话需要 agent 处于空闲状态（当前：{status}）。',
   'notice.rewindNoFork': '那条提问已经放回编辑器。当前运行时不能分叉会话，所以它上面的对话没有变化。',
-  'notice.rewindNoTurn': '那条提问已经放回编辑器。它前面没有已完成的一轮，没有可以分叉的位置。',
   'notice.rewindBusy': '先取消正在执行的这一轮，再回退。',
   'notice.rewindForking': '正在从那条提问之前的位置分叉本会话；原会话仍可 resume。',
   'notice.rewindFailed': '回退失败：{error}',

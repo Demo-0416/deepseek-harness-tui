@@ -3699,7 +3699,8 @@ export function createTuiChat(
    * empty prompt).
    *
    * What "back" means depends on the host. One that can fork the session
-   * branches it at the last completed turn before the chosen prompt and mounts
+   * branches it at the last safe boundary before the chosen prompt — after the
+   * last closed turn, or the log head for the first prompt — and mounts
    * the branch, leaving this session whole and resumable. One that cannot only
    * puts the prompt's text back in the editor. Neither touches a file: dsh keeps
    * no working-tree snapshots, and the panel says so instead of implying one.
@@ -3708,16 +3709,15 @@ export function createTuiChat(
   const rewindTo = (target: RewindTarget): void => {
     const events = agent.session.events
     const fork = runtime.handoffFork
-    const seedLength = fork === undefined ? undefined : forkSeedLength(events, target.seq)
     editor.setText(target.text)
     requestRender()
-    if (fork === undefined || seedLength === undefined) {
-      appendNotice(t(fork === undefined ? 'notice.rewindNoFork' : 'notice.rewindNoTurn'), 'warning')
+    if (fork === undefined) {
+      appendNotice(t('notice.rewindNoFork'), 'warning')
       return
     }
     appendNotice(t('notice.rewindForking'))
     void fork({
-      seed: events.slice(0, seedLength),
+      seed: events.slice(0, forkSeedLength(events, target.seq)),
       parentSession: agent.session.id,
       cwd,
       draft: target.text,

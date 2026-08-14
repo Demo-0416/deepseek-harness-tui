@@ -128,12 +128,67 @@ describe('fork boundaries', () => {
     assert.equal(seed.filter(event => event.type === 'turn/start').length, 1)
   })
 
-  it('refuses a prompt with no completed turn behind it', async () => {
+  it('cuts at the log head for the first prompt, an empty but legal seed', async () => {
     const session = await seededSession()
     const first = rewindTargets(session.events)[0]
     assert.ok(first !== undefined)
 
-    assert.equal(forkSeedLength(session.events, first.seq), undefined)
+    // The fixture's log opens with the first prompt's own `turn/start`, so
+    // nothing before the prompt may survive the cut — and an empty prefix is
+    // exactly what `SessionStore.fork` accepts as "fork an empty child".
+    assert.equal(forkSeedLength(session.events, first.seq), 0)
+  })
+
+  it('keeps between-turn events after the closed turn in the seed', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const session = ctx.sessions.create(SessionId('rewind-between'), { meta: { cwd: '/workspace' } })
+    session.append('turn/start', { turn: 1 })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'first prompt' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    // Producer context relayed between turns: legal at a fork boundary, so a
+    // cut before the next turn must keep it rather than retreat to `turn/end`.
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'injected between turns' }],
+      source: { kind: 'plugin', plugin: 'workspace', form: 'relay' },
+    }), { surfaceOp: 'append' })
+    session.append('turn/start', { turn: 2 })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'second prompt' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+
+    const second = rewindTargets(session.events).at(-1)
+    assert.ok(second !== undefined)
+    const length = forkSeedLength(session.events, second.seq)
+    const seed = session.events.slice(0, length)
+    assert.equal(types(seed).at(-1), 'user/message')
+    assert.ok(!seed.some(event => event.type === 'turn/start' && event.data.turn === 2))
+  })
+
+  it('never cuts inside a turn that was left open', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const session = ctx.sessions.create(SessionId('rewind-open'), { meta: { cwd: '/workspace' } })
+    // Turn 1 never ends — the shape a crash leaves behind.
+    session.append('turn/start', { turn: 1 })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'first prompt' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    session.append('turn/start', { turn: 2 })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'second prompt' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+
+    const second = rewindTargets(session.events).at(-1)
+    assert.ok(second !== undefined)
+    // No `turn/end` was ever written, so the only safe boundary is the log head.
+    assert.equal(forkSeedLength(session.events, second.seq), 0)
   })
 
   it('drops the turn the chosen prompt belongs to, whatever came after it', async () => {
@@ -258,12 +313,15 @@ describe('the Rewind panel', { skip: skipWithoutEntry }, () => {
       await press(harness, ENTER)
       await delay(SETTLE_MS)
 
-      // No completed turn precedes the first prompt, so there is nothing to
-      // fork to — and the terminal says exactly that instead of forking wrong.
-      assert.equal(forks.length, 0)
-      const frame = unwrapped(harness.terminal.text())
-      assert.match(frame, /No completed turn precedes it/u)
-      assert.match(frame, /the first thing I asked/u)
+      // The first prompt has no completed turn before it, so the fork's seed
+      // is the log head: an empty prefix, which is a legal fork of the session
+      // back to before anything was asked.
+      assert.equal(forks.length, 1)
+      const fork = forks[0]
+      assert.ok(fork !== undefined)
+      assert.equal(fork.draft, 'the first thing I asked')
+      assert.equal(fork.seed.length, 0)
+      assert.match(unwrapped(harness.terminal.text()), /the original stays resumable/u)
     } finally {
       await unmount(harness)
     }
