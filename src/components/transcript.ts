@@ -432,7 +432,8 @@ export class HeaderComponent implements Component {
       truncateToWidth(wordmark, this.revealWidth ?? usable, ''),
       ...detail(model === undefined ? cwd : `${displayText(model)} · ${cwd}`),
       ...this.info.resumed === undefined ? [] : detail(
-        `resumed ${displayText(this.info.resumed)}${title === undefined ? '' : ` · ${displayText(title)}`}`,
+        t('banner.resumed', { id: displayText(this.info.resumed) })
+        + (title === undefined ? '' : ` · ${displayText(title)}`),
       ),
       ...welcome === undefined ? [] : detail(displayText(welcome)),
       ...this.skillRows(usable),
@@ -1502,7 +1503,9 @@ export class CollapsedGroupComponent extends CachedCardComponent {
     // The row wraps rather than truncating, unlike a card header: the key that
     // opens the group is the last thing on it, and a narrow terminal must not
     // be the reason the user never learns the row can be opened.
-    const head = `${text} ${this.palette.dim(t('collapse.expandHint', { key: this.expandKey() }))}`
+    // Lower-cased on this row alone, which is how the upstream transcript
+    // prints it; `/help` and `/hotkeys` keep the registry's own capitalisation.
+    const head = `${text} ${this.palette.dim(t('collapse.expandHint', { key: this.expandKey().toLowerCase() }))}`
     const rows = ['']
     let first = true
     for (const row of wrapTextWithAnsi(head, Math.max(20, width - GUTTER_WIDTH - 2))) {

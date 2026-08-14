@@ -43,8 +43,14 @@ export interface DoctorCheck {
 const NODE_LTS_MAJOR = 22
 const NODE_LTS_MIN_MINOR = 19
 const NODE_CURRENT_MAJOR = 24
-/** The range, as `/doctor` states it when the running version misses it. */
-const NODE_SUPPORTED_RANGE = '22.19+ or 24+'
+/**
+ * The range, as `/doctor` states it when the running version misses it.
+ *
+ * Written as the semver range `package.json` already carries rather than as
+ * prose: it is interpolated into a translated sentence, and an English `or`
+ * inside it rendered as `Node 22.19+ or 24+` in the middle of a Chinese line.
+ */
+const NODE_SUPPORTED_RANGE = '^22.19.0 || >=24.0.0'
 
 /** Below this many columns the transcript's cards and diffs wrap to unreadable. */
 const NARROW_COLUMNS = 60

@@ -330,6 +330,44 @@ describe('a mounted terminal answers /lang', { skip: skipWithoutEntry }, () => {
     }
   })
 
+  it('starts in the language the store it writes to already holds', async () => {
+    // The startup path this covers: `apply()` resolves a store before the Host
+    // has finished mounting, so it can read the file while `/lang` writes to
+    // the settings namespace. The terminal therefore reads its own store again
+    // on mount — otherwise a language chosen last session never comes back.
+    const home = await mkdtemp(join(tmpdir(), 'dsh-tui-home-'))
+    const previousHome = process.env['DSH_HOME']
+    process.env['DSH_HOME'] = home
+    const terminal = new HeadlessTerminal(120, 40)
+    const before = terminal.frames
+    const harness = await createTuiTestHarness(terminal, () => {}, {
+      config: { title: 'DSH i18n', welcome: 'ready.', theme: { color: false } },
+      services: {
+        settings: {
+          get: (ns: string) => ns === LOCALE_SETTINGS_NAMESPACE ? { [LOCALE_PREFERENCE_FIELD]: 'zh' } : undefined,
+          update: () => Promise.resolve(),
+        },
+      },
+    })
+    await terminal.waitForFrame(before)
+    try {
+      assert.equal(currentLocale(), 'zh', 'the mount adopted the settings-backed preference')
+      await harness.ctx.commands.execute(harness.agent, '/hotkeys', AbortSignal.timeout(5_000))
+      await delay(SETTLE_MS)
+      const frame = terminal.text().replace(/\s+/gu, ' ')
+      assert.match(frame, /Enter 发送/u, `and every surface it opens is Chinese:\n${frame}`)
+      terminal.send(ESC)
+      await delay(SETTLE_MS)
+    } finally {
+      await disposeTuiTestHarness(harness)
+      await terminal.dispose()
+      setLocale('en')
+      if (previousHome === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previousHome
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('renders the /config rows in the chosen language, Language row included', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dsh-tui-home-'))
     const previousHome = process.env['DSH_HOME']

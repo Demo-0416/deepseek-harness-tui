@@ -452,6 +452,32 @@ describe('the mounted /config and /theme', { skip: skipWithoutEntry }, () => {
     }
   })
 
+  it('puts the previewed theme back when another surface takes the slot', async () => {
+    const settings = new FakeSettings()
+    const harness = await mount(settings)
+    try {
+      ;(harness.controller as unknown as SubmitHandle).submit('/theme')
+      await delay(SETTLE_MS)
+      // One move down previews `light` on the screen behind the dialog.
+      harness.terminal.send(ARROW_DOWN)
+      await delay(SETTLE_MS)
+      // A dismissable surface is closed outright when an inline one arrives —
+      // no key reaches the dialog, so the dialog cannot undo its own preview.
+      ;(harness.controller as unknown as SubmitHandle).submit('/config')
+      await delay(SETTLE_MS)
+      await harness.terminal.flush()
+      const panel = harness.terminal.text()
+      assert.match(panel, /Thinking display/u, `the panel took the slot:\n${panel}`)
+      // The preference the panel reports is the one the selector opened on: a
+      // preview nobody confirmed must not outlive the surface that painted it.
+      assert.match(panel, /Theme\s+auto/u, `the preview was rolled back:\n${panel}`)
+      assert.deepEqual(settings.writes, [], 'and nothing was persisted')
+    } finally {
+      await disposeTuiTestHarness(harness)
+      await harness.terminal.dispose()
+    }
+  })
+
   it('applies a theme typed on the command line and writes it to the settings document', async () => {
     const settings = new FakeSettings()
     const harness = await mount(settings)

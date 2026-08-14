@@ -122,11 +122,19 @@ left. Every other binding is configurable — see `keybindings` below.
 Those are this bundle's own commands. Whatever else the profile mounts registers
 its own on top of them, and `/help` lists what the running session actually has.
 
-`/lang` switches this terminal's own text — commands, panels, hints, dialog
-buttons — between English (the default) and Chinese; the conversation itself is
-never translated. The choice is written to the Host's `locale` settings section
-when a settings provider owns one, which is the same preference the web client
-reads, and to `$DSH_HOME/tui-locale.json` (`~/.dsh/tui-locale.json`) otherwise.
+`/lang` switches this terminal's own chrome — the command list, the panels
+(`/help`, `/status`, `/config`, `/search`, `/skills`, `/mcp`, `/doctor`,
+`/plugins`), the prompt and status rows, the dialogs and their buttons, and the
+notices those surfaces write — between English (the default) and Chinese; the
+conversation itself is never translated. A few command answers are still
+English-only whatever the language is: `/model`, `/preset` and `/resume` print
+their own report text, and the turn-outcome notices the transcript folds
+("Turn cancelled.", "The model reached its output-token limit.") come from the
+session log rather than from the message table.
+
+The choice is written to the Host's `locale` settings section when a settings
+provider owns one, which is the same preference the web client reads, and to
+`$DSH_HOME/tui-locale.json` (`~/.dsh/tui-locale.json`) otherwise.
 
 ### `@` file references
 

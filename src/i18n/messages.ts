@@ -132,7 +132,9 @@ export const EN_MESSAGES = {
   'search.role.tool': 'Tool',
   'search.role.notice': 'Notice',
   'search.role.context': 'Context',
-  'search.role.reference': 'Files',
+  // A `reference` row is a session-reference attachment, not a file list; it is
+  // named after the thing it carries, exactly like `notice.referencedSessions`.
+  'search.role.reference': 'Sessions',
   'search.role.compaction': 'Compacted',
 
   // `/mcp`. The counted rows are plural pairs; the "nothing is mounted" block is
@@ -300,6 +302,10 @@ export const EN_MESSAGES = {
   'dialog.question.escInterrupt': 'Esc interrupt',
   'dialog.question.moreAbove': '↑ {count} more',
   'dialog.question.moreBelow': '↓ {count} more',
+  // The two rows the dialog only prints when the terminal cannot hold it: the
+  // refusal above a compacted footer, and the count of rows clipped off the top.
+  'dialog.question.error': 'Error: {message}',
+  'dialog.question.linesHidden': '↑ {count} lines hidden',
 
   // The prompt context row and the status row under it.
   'prompt.modelUnset': 'model unset',
@@ -370,6 +376,7 @@ export const EN_MESSAGES = {
   'status.flash.copiedOsc52': 'Sent to clipboard via OSC 52.',
 
   // The `/status` card.
+  'status.card.title': 'Session status',
   'status.row.session': 'Session',
   'status.row.title': 'Title',
   'status.row.directory': 'Directory',
@@ -459,6 +466,15 @@ export const EN_MESSAGES = {
   // Rendered by the transcript reconciler rather than by a command, but the
   // same kind of chrome: a label over names the session carries.
   'notice.referencedSessions': 'Referenced sessions · {labels}',
+  // The rest of the transcript's own chrome — rows the terminal writes about
+  // the conversation, not rows the model or a tool produced.
+  'transcript.compactionMarker': '… earlier context was compacted …',
+  'transcript.steeringBadge': 'Steering',
+  'banner.resumed': 'resumed {id}',
+  // `/export` asking before it replaces a file, and the two answers it offers.
+  'export.overwrite.question': '{path} already exists. Replace it?',
+  'export.overwrite.replace': 'Replace the file',
+  'export.overwrite.keep': 'Keep it',
 
   // The three tool-card phases as the `/config` value column shows them. Unlike
   // the four theme ids two rows down, these are not the argument of any
@@ -571,7 +587,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'search.role.tool': '工具',
   'search.role.notice': '提示',
   'search.role.context': '上下文',
-  'search.role.reference': '文件',
+  'search.role.reference': '引用的会话',
   'search.role.compaction': '已压缩',
 
   'mcp.servers.one': '{count} 个 server',
@@ -709,6 +725,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'dialog.question.escInterrupt': 'Esc 中断',
   'dialog.question.moreAbove': '↑ 还有 {count} 项',
   'dialog.question.moreBelow': '↓ 还有 {count} 项',
+  'dialog.question.error': '错误：{message}',
+  'dialog.question.linesHidden': '↑ 还有 {count} 行未显示',
 
   'prompt.modelUnset': '未设置模型',
   'prompt.cache': '缓存 {rate}%',
@@ -761,6 +779,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.flash.copiedTmux': '已复制到 tmux 缓冲区（prefix+] 粘贴）。',
   'status.flash.copiedOsc52': '已通过 OSC 52 发送到剪贴板。',
 
+  'status.card.title': '会话状态',
   'status.row.session': '会话',
   'status.row.title': '标题',
   'status.row.directory': '目录',
@@ -830,6 +849,12 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'notice.reloadDone': '配置重载完成。未改动的文件已跳过；不合法的文件保持原来的运行态（详见日志）。',
   'notice.reloadFailed': '配置重载失败：{error}',
   'notice.referencedSessions': '引用的会话 · {labels}',
+  'transcript.compactionMarker': '… 更早的上下文已被压缩 …',
+  'transcript.steeringBadge': '插入指令',
+  'banner.resumed': '已恢复 {id}',
+  'export.overwrite.question': '{path} 已存在，要覆盖吗？',
+  'export.overwrite.replace': '覆盖这个文件',
+  'export.overwrite.keep': '保留原文件',
 
   'settings.toolCards.collapsed': '折叠',
   'settings.toolCards.expanded': '展开',

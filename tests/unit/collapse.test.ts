@@ -192,6 +192,30 @@ describe('shell command classification', () => {
     assert.equal(classifyShellCommand('wc -l < a.txt').isRead, true)
   })
 
+  it('refuses a command that writes without a redirect at all', () => {
+    const none = { isSearch: false, isRead: false, isList: false }
+    // A substitution runs a command this classifier never sees: the leading
+    // word still says `cat`, and the line still deletes a tree.
+    assert.deepEqual(classifyShellCommand('cat $(rm -rf build)'), none)
+    assert.deepEqual(classifyShellCommand('cat `rm -rf build`'), none)
+    assert.deepEqual(classifyShellCommand('cat <(rm x)'), none)
+    assert.deepEqual(classifyShellCommand('grep "$(rm x)" src'), none)
+    // `sort` and `uniq` take an output path of their own.
+    assert.deepEqual(classifyShellCommand('sort -o overwritten.txt input.txt'), none)
+    assert.deepEqual(classifyShellCommand('sort --output=out.txt in.txt'), none)
+    assert.deepEqual(classifyShellCommand('uniq in.txt out.txt'), none)
+    // The read-only forms of the same two commands still collapse.
+    assert.equal(classifyShellCommand('sort -u names.txt').isRead, true)
+    assert.equal(classifyShellCommand('uniq -c names.txt').isRead, true)
+    assert.equal(classifyShellCommand('uniq -f 2 names.txt').isRead, true)
+    assert.equal(classifyShellCommand('cat a.txt | sort | uniq').isRead, true)
+    // And a `${VAR}` expansion is not a command substitution.
+    assert.equal(classifyShellCommand('cat ${DIR}/a.txt').isRead, true)
+    // The tool-level view of the same hole: no card, no command text.
+    assert.equal(classifyToolCall('bash', { command: 'sort -o out.txt in.txt' }), undefined)
+    assert.equal(classifyToolCall('bash', { command: 'cat $(rm -rf build)' }), undefined)
+  })
+
   it('reads a discarded or duplicated descriptor as the noise it is', () => {
     // `2>&1` used to split into `2>` + `&` + `1`, leaving `1` to be read as a
     // command name — which disqualified every `rg … 2>&1` and broke the run
@@ -259,6 +283,13 @@ describe('tool call classification', () => {
     assert.equal(classifyToolCall('mcp__slack__send_message', {}), undefined)
     assert.equal(classifyToolCall('mcp__jira__create_issue', {}), undefined)
     assert.equal(classifyToolCall('mcp__broken', {}), undefined)
+    // A mutation whose object happens to be a query is still a mutation: the
+    // two-token window exists for `slack_search_public`, not for these.
+    assert.equal(classifyToolCall('mcp__notion__delete_view', {}), undefined)
+    assert.equal(classifyToolCall('mcp__jira__create_search_filter', {}), undefined)
+    assert.equal(classifyToolCall('mcp__x__update_query', {}), undefined)
+    assert.equal(classifyToolCall('mcp__x__deleteView', {}), undefined)
+    assert.equal(classifyToolCall('mcp__x__save_search', {}), undefined)
   })
 })
 
@@ -271,7 +302,9 @@ describe('collapse grouping', () => {
       call('bash', { command: 'ls src' }),
     ]
     const group = onlyGroup(nodes)
-    assert.equal(group.index, 1)
+    // The summary row renders at the LAST member, so it can never land above a
+    // row that arrived between two of its own calls.
+    assert.equal(group.index, 3)
     assert.equal(group.keys.length, 3)
     assert.equal(collapsedSummary(group), 'Searched for 1 pattern, read 1 file, listed 1 directory')
   })
@@ -360,7 +393,7 @@ describe('collapse grouping', () => {
     const planned = collapseToolGroups(nodes, { isHidden: id => id === 'cleared' })
     const group = planned.get(1)
     assert.ok(group !== undefined, 'the visible calls still group')
-    assert.equal(group.index, 1)
+    assert.equal(group.index, 2, 'the row renders at the last member the transcript kept')
     assert.equal(group.readCount, 2)
     assert.equal(planned.get(0), undefined)
   })
@@ -569,8 +602,23 @@ describe('collapsed groups on the Ctrl+O cycle', () => {
     assert.match(rendered, /Searched for 1 pattern, read 1 file/, rendered)
     // The key comes from the manager, not from the message: a deployment that
     // moved `app.tools.cycle` moves this hint with it.
-    assert.match(rendered, /\(Ctrl\+O to expand\)/, rendered)
+    assert.match(rendered, /\(ctrl\+o to expand\)/, rendered)
     assert.ok(!rendered.includes('grep('), `the group's own cards are off screen:\n${rendered}`)
+  })
+
+  it('renders the summary row below a notice that arrived inside the run', () => {
+    const { reconciler, rows } = mountReconciler('collapsed')
+    reconciler.reconcile([
+      call('read', { file_path: '/workspace/a.ts' }, { id: 'r1' }),
+      { kind: 'notice', key: 'notice:1', version: 0, time: START, text: 'Turn cancelled.', tone: 'warning' },
+      call('read', { file_path: '/workspace/b.ts' }, { id: 'r2' }),
+    ])
+    const rendered = rows()
+    const notice = rendered.findIndex(row => row.includes('Turn cancelled.'))
+    const summary = rendered.findIndex(row => row.includes('Read 2 files'))
+    assert.ok(notice !== -1 && summary !== -1, `both rows render:\n${rendered.join('\n')}`)
+    // A row claiming two files must not stand above the second one's arrival.
+    assert.ok(summary > notice, `the summary follows the notice it counts past:\n${rendered.join('\n')}`)
   })
 
   it('renders every card on the expanded phase, and none on the hidden one', () => {

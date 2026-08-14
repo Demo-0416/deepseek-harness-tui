@@ -48,11 +48,14 @@ import {
  * Transcript row standing in for one compacted range. The conversation the
  * compaction replaced stays rendered above it: the marker reports where the
  * model stopped seeing that history, not that the history is gone.
+ *
+ * The English form, for the docs suite and for tests; the row itself is read
+ * from the message table per render, so `/lang` moves it.
  */
-export const COMPACTION_MARKER = '… earlier context was compacted …'
+export const COMPACTION_MARKER = t('transcript.compactionMarker', undefined, 'en')
 
-/** Label above a prompt that was submitted into a running turn. */
-export const STEERING_BADGE = 'Steering'
+/** Label above a prompt that was submitted into a running turn, in English. */
+export const STEERING_BADGE = t('transcript.steeringBadge', undefined, 'en')
 
 /**
  * The status line one Ctrl+O phase reports.
@@ -323,8 +326,10 @@ export class TranscriptReconciler {
         if (!node.argsComplete || this.isHiddenCall(node.callId)) continue
         const group = collapsed.get(index)
         if (group !== undefined) {
-          // Every member maps to the same group; only the first one renders it,
-          // and the rest are absorbed into the counts that row carries.
+          // Every member maps to the same group; only the last one renders it,
+          // and the rest are absorbed into the counts that row carries. The
+          // last rather than the first so the row never lands above a notice —
+          // or a process-local row — that arrived between two of its members.
           if (group.index !== index) continue
           const row = this.groupView(group)
           seen.add(groupKey(group))
@@ -371,7 +376,7 @@ export class TranscriptReconciler {
           if (!node.landed) break
           seen.add(node.key)
           children.push(this.plainView(node.key, node.version, () =>
-            block(new Text(this.deps.palette.dim(COMPACTION_MARKER), 0, 0))))
+            block(new Text(this.deps.palette.dim(t('transcript.compactionMarker')), 0, 0))))
           break
         case 'context':
           // Injected context is traffic between the harness and the model, not
@@ -591,7 +596,7 @@ export class TranscriptReconciler {
     if (node.source !== 'steering') return block(body)
     const container = new Container()
     container.addChild(new Spacer(1))
-    container.addChild(new Text(this.deps.palette.dim(STEERING_BADGE), 0, 0))
+    container.addChild(new Text(this.deps.palette.dim(t('transcript.steeringBadge')), 0, 0))
     container.addChild(body)
     return container
   }

@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { Container, type Component } from '@earendil-works/pi-tui'
+import { Container, visibleWidth, type Component } from '@earendil-works/pi-tui'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { StepTimingTracker } from '../../src/chat/timing.ts'
 import { TranscriptReconciler, type TranscriptDeps } from '../../src/components/reconciler.ts'
@@ -26,6 +26,8 @@ import {
   UserMessageComponent,
   type MarkdownPolicy,
 } from '../../src/components/transcript.ts'
+import { StatusCardComponent, type StatusCardRow } from '../../src/components/dialogs.ts'
+import { setLocale, t } from '../../src/i18n/index.ts'
 import { claudeMarkdownTheme } from '../../src/render/markdown.ts'
 import { claudeSchemeColors } from '../../src/render/palette.ts'
 import type { AssistantNode, ChatNode, ToolCallNode, UserMessageNode } from '../../src/core/types.ts'
@@ -236,6 +238,39 @@ describe('user message block', () => {
       rows().join('').includes(`48;2;${String(fill.r)};${String(fill.g)};${String(fill.b)}m`),
       'the block is filled for the terminal the user is actually on',
     )
+  })
+})
+
+describe('status card', () => {
+  it('measures its label column in display columns, so a CJK label neither clips nor skews', () => {
+    setLocale('zh')
+    try {
+      // Built inside the locale switch: the labels are what `/status` passes,
+      // and they are only Chinese once the locale moved.
+      const groups: readonly (readonly StatusCardRow[])[] = [[
+        [t('status.row.session'), 'sess-01HZ'],
+        [t('status.row.preset'), 'default'],
+        [t('status.row.kvCache'), 'n/a (0 read + 0 write)'],
+        [t('status.row.sessionTotals'), '2 turns · 5 steps · model 1.2s and a long tail that must wrap here'],
+      ]]
+      const rows = new StatusCardComponent(groups, createPalette(true)).render(70)
+      const widths = new Set(rows.map(row => visibleWidth(row)))
+      assert.equal(widths.size, 1, `every row of the card is one width:\n${rows.join('\n')}`)
+      // The colon survives: a label column sized in code units cut `KV 缓存:`
+      // down to `KV 缓存` and `会话累计:` down to `会话累`.
+      for (const label of [t('status.row.session'), t('status.row.preset'), t('status.row.kvCache'), t('status.row.sessionTotals')]) {
+        assert.ok(
+          rows.some(row => row.includes(`${label}:`)),
+          `the card prints "${label}:" in full:\n${rows.join('\n')}`,
+        )
+      }
+      assert.ok(
+        rows[0]?.includes(t('status.card.title')) === true,
+        `the card's own title is translated too:\n${rows.join('\n')}`,
+      )
+    } finally {
+      setLocale('en')
+    }
   })
 })
 

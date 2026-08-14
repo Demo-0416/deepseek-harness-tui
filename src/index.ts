@@ -813,6 +813,15 @@ export function createTuiChat(
    * property of the deployment, not of the moment the command runs.
    */
   const localeStore = resolveLocaleStore(ctx)
+  // …and read again from *this* store, because `apply()` resolved its own
+  // before the first frame. Which store answers depends on whether the Host's
+  // `locale` namespace was registered yet, so the two resolutions can disagree:
+  // the earlier one lands on the file (nothing written → English) while `/lang`
+  // writes to settings, and the language switched last session never comes
+  // back. Reading the store that will be written keeps the pair honest, and a
+  // second `setLocale` to the locale already active is a no-op.
+  const storedLocale = localeStore.load()
+  if (storedLocale !== undefined) setLocale(storedLocale)
   /**
    * The fallback index, used only when this host has no `fd`. It is built
    * either way so the tool-result listener can drop it without knowing which
@@ -1896,16 +1905,28 @@ export function createTuiChat(
    * One selector, two doors: a value picked here is painted while the highlight
    * moves and written on Enter, so the two entries cannot drift into two
    * different vocabularies for the same four themes.
+   *
+   * The preview is undone from here rather than from the dialog, because the
+   * dialog is not told when it goes away: the surface is `dismissable`, so a
+   * permission prompt or a question arriving mid-selection takes the slot back
+   * through `close()` without routing a key through `handleInput`. Restoring on
+   * `closed` covers that path and the dialog's own Esc alike — the screen and
+   * the stored preference cannot end up disagreeing.
    */
   let themeOverlay: TuiOverlaySession | undefined
   const showThemeSelector = (): void => {
     void themeOverlay?.close()
+    const opened = themePreference
+    let committed = false
     const session = overlayManager.open({
       create: () => new ThemeDialog(
         themePreference,
         palette,
         applyThemePreference,
-        saveThemePreference,
+        theme => {
+          committed = true
+          saveThemePreference(theme)
+        },
         () => { void session.close() },
       ),
       options: { width: resolved.settingsDialogWidth },
@@ -1916,6 +1937,9 @@ export function createTuiChat(
     themeOverlay = session
     void session.closed.then(() => {
       if (themeOverlay === session) themeOverlay = undefined
+      // Nothing was chosen, so whatever the highlight painted on the way is not
+      // a preference: put the theme the selector opened on back.
+      if (!committed && themePreference !== opened) applyThemePreference(opened)
     })
     requestRender()
   }
@@ -2814,9 +2838,9 @@ export function createTuiChat(
         // The default destination is one path per session, so exporting the
         // same session twice lands on the first file. Asked, not assumed.
         confirmOverwrite: destination => askConfirmation(
-          `${displayInlineText(destination)} already exists. Replace it?`,
-          'Replace the file',
-          'Keep it',
+          t('export.overwrite.question', { path: displayInlineText(destination) }),
+          t('export.overwrite.replace'),
+          t('export.overwrite.keep'),
         ),
       }, agent.session, rawInput, signal),
     })
@@ -4281,7 +4305,10 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
 export function apply(ctx: Context, config: Config): void {
   // Before the first frame, and before `--print` writes its first line: the
   // language is a property of this process, so every surface it opens — banner,
-  // refusal, panel — has to be in the one the user last chose.
+  // refusal, panel — has to be in the one the user last chose. This runs while
+  // the Host may still be mounting, so the store resolved here can be the file
+  // one where `/lang` will use settings; `createTuiChat` reads its own store
+  // again for exactly that reason.
   const storedLocale = resolveLocaleStore(ctx).load()
   if (storedLocale !== undefined) setLocale(storedLocale)
   const startup = ctx.tuiStartup

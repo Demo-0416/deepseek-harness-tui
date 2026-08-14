@@ -207,13 +207,18 @@ export class StatusCardComponent implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
+    const title = t('status.card.title')
     const labels = this.groups.flatMap(group => group.map(([label]) => `${label}:`))
-    const naturalLabelWidth = Math.max(...labels.map(label => label.length))
+    // Display columns, not UTF-16 code units: every other measurement in this
+    // method (the truncation, the padding, the border) counts columns, and a
+    // Chinese label is two columns per character. Mixing the two units clipped
+    // `KV 缓存:` to `KV 缓存` and left the value column ragged.
+    const naturalLabelWidth = Math.max(...labels.map(label => visibleWidth(label)))
     const naturalBodyWidth = Math.max(...this.groups.flatMap(group => group.map(([, value]) =>
       1 + naturalLabelWidth + 2 + visibleWidth(value))))
     const cardWidth = Math.min(
       Math.max(8, width),
-      Math.max('Session status'.length + 5, naturalBodyWidth + 4),
+      Math.max(visibleWidth(title) + 5, naturalBodyWidth + 4),
     )
     const innerWidth = Math.max(1, cardWidth - 4)
     const labelWidth = Math.min(
@@ -225,7 +230,10 @@ export class StatusCardComponent implements Component {
       if (groupIndex > 0) body.push('')
       for (const [label, value] of group) {
         const plainLabel = truncateToWidth(`${label}:`, labelWidth, '')
-        const prefix = ` ${this.palette.dim(plainLabel.padEnd(labelWidth))}  `
+        // Padded by columns for the same reason the width above is measured in
+        // them: `padEnd` counts code units, so a Chinese label came out short.
+        const padded = plainLabel + ' '.repeat(Math.max(0, labelWidth - visibleWidth(plainLabel)))
+        const prefix = ` ${this.palette.dim(padded)}  `
         const continuation = ' '.repeat(1 + labelWidth + 2)
         const valueWidth = Math.max(1, innerWidth - visibleWidth(prefix))
         const wrapped = wrapTextWithAnsi(value, valueWidth)
@@ -235,9 +243,9 @@ export class StatusCardComponent implements Component {
       }
     }
 
-    const title = truncateToWidth('Session status', Math.max(1, cardWidth - 5), '')
-    const topTail = '─'.repeat(Math.max(0, cardWidth - visibleWidth(title) - 5))
-    const top = `${this.palette.dim('╭─ ')}${this.palette.bold(this.palette.accent(title))}${this.palette.dim(` ${topTail}╮`)}`
+    const clippedTitle = truncateToWidth(title, Math.max(1, cardWidth - 5), '')
+    const topTail = '─'.repeat(Math.max(0, cardWidth - visibleWidth(clippedTitle) - 5))
+    const top = `${this.palette.dim('╭─ ')}${this.palette.bold(this.palette.accent(clippedTitle))}${this.palette.dim(` ${topTail}╮`)}`
     const lines = [top]
     for (const line of body) {
       const clipped = truncateToWidth(line, innerWidth, '')
@@ -1373,7 +1381,7 @@ export class QuestionDialog implements Component, Focusable {
       const compactFooter = [
         ...this.error === ''
           ? []
-          : [truncateToWidth(this.palette.error(`Error: ${this.error}`), innerWidth, '…')],
+          : [truncateToWidth(this.palette.error(t('dialog.question.error', { message: this.error })), innerWidth, '…')],
         this.compactOptionControls(
           innerWidth,
           headerBudget === 1 && contentLines.length > headerBudget,
@@ -1407,9 +1415,9 @@ export class QuestionDialog implements Component, Focusable {
     }
     if (visibleRows.length > maxHeight) {
       visibleRows = maxHeight === 1
-        ? [this.palette.dim(`↑ ${visibleRows.length} lines hidden`)]
+        ? [this.palette.dim(t('dialog.question.linesHidden', { count: visibleRows.length }))]
         : [
-          this.palette.dim(`↑ ${visibleRows.length - maxHeight + 1} lines hidden`),
+          this.palette.dim(t('dialog.question.linesHidden', { count: visibleRows.length - maxHeight + 1 })),
           ...visibleRows.slice(-(maxHeight - 1)),
         ]
     }
@@ -1491,9 +1499,10 @@ export class QuestionDialog implements Component, Focusable {
 
   /** Render custom-mode controls on one row when the header must compact. */
   private compactCustomControls(innerWidth: number): string {
-    const controls = this.options.length > 0
-      ? 'Enter submit • Esc options'
-      : 'Enter submit • Esc cancel'
+    const controls = [
+      t('dialog.question.submit'),
+      t(this.options.length > 0 ? 'dialog.question.escOptions' : 'dialog.question.escCancel'),
+    ].join(' • ')
     const fallback = this.options.length > 0 ? '↵ Esc options' : 'Enter Esc cancel'
     const line = visibleWidth(controls) <= innerWidth ? controls : fallback
     return this.palette.dim(truncateToWidth(line, innerWidth, '…'))
@@ -1503,10 +1512,10 @@ export class QuestionDialog implements Component, Focusable {
   private compactOptionControls(innerWidth: number, showPager = false): string {
     const controls = [
       ...(this.options.length > 1 ? ['↑/↓'] : []),
-      'Tab custom',
-      ...(this.question.multiSelect ? ['Space toggle'] : []),
+      t('dialog.question.customAnswer', { keys: CUSTOM_ANSWER_KEYS }),
+      ...(this.question.multiSelect ? [t('dialog.question.spaceToggle')] : []),
       'Enter',
-      'Esc interrupt',
+      t('dialog.question.escInterrupt'),
       ...(showPager ? ['PgUp/PgDn'] : []),
     ].join(' • ')
     const optionNavigation = this.options.length > 1 ? '↑↓ ' : ''

@@ -83,6 +83,58 @@ const NULL_DEVICE = '/dev/null'
  */
 const FIND_MUTATING_FLAGS = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf'])
 
+/**
+ * Shell syntax that runs a second command this classifier never sees.
+ *
+ * `cat $(rm -rf build)`, ``cat `rm -rf build` `` and `cat <(rm x)` all read as
+ * a bare `cat` once split into segments, because the inner command is an
+ * argument, a quoted-looking word, or a redirect target rather than a segment
+ * of its own. Nothing here parses those, and a command this module cannot parse
+ * is not read-only — the same stance {@link splitCommandWithOperators} already
+ * takes for an unbalanced quote.
+ */
+const COMMAND_SUBSTITUTION = /\$\(|`|<\(/u
+
+/**
+ * Whether a whitelisted verb writes a file through its own arguments rather
+ * than through a shell redirect.
+ *
+ * `sort` and `uniq` are in {@link BASH_READ_COMMANDS} because a pipeline uses
+ * them to pick text apart, but both also take an output path — `sort -o out in`
+ * truncates `out`, and `uniq in out` writes `out`. Neither carries a redirect,
+ * so the redirect analysis never sees them, and the write folds into the
+ * transcript's `Read 1 file` row with no card behind it.
+ * @param base - The segment's leading word.
+ * @param words - Every whitespace-separated word of the segment, `base` first.
+ * @returns Whether this invocation writes a file through its arguments.
+ */
+function writesThroughArguments(base: string, words: readonly string[]): boolean {
+  const args = words.slice(1)
+  if (base === 'sort') {
+    // `-o out`, `--output out`, `--output=out`, and the short-flag clusters
+    // that end in `o` (`sort -no out`) all name an output path.
+    return args.some(word => word.startsWith('--output') || /^-[a-zA-Z]*o$/u.test(word))
+  }
+  if (base === 'uniq') {
+    // `uniq [OPTION]... [INPUT [OUTPUT]]`: a second operand is the output file.
+    // The three options that take a value are skipped so their value is not
+    // miscounted as an operand.
+    const valued = new Set(['-f', '-s', '-w', '--skip-fields', '--skip-chars', '--check-chars'])
+    let operands = 0
+    for (let index = 0; index < args.length; index += 1) {
+      const word = args[index] as string
+      if (valued.has(word)) {
+        index += 1
+        continue
+      }
+      if (word.startsWith('-') && word !== '-') continue
+      operands += 1
+    }
+    return operands >= 2
+  }
+  return false
+}
+
 /** Operator tokens that merely separate commands. */
 const SEPARATOR_OPERATORS = new Set(['|', '||', '&&', ';', '&'])
 
@@ -101,6 +153,21 @@ const MCP_PREFIX = 'mcp__'
 const MCP_READ_VERBS = new Set([
   'search', 'find', 'get', 'list', 'read', 'fetch', 'query',
   'describe', 'view', 'lookup', 'browse', 'inspect', 'show',
+])
+
+/**
+ * Leading verbs that make an MCP tool a mutation, whatever its object is.
+ *
+ * The two-token window below exists for servers that namespace their tools
+ * (`slack_search_public`), and it is what let `delete_search_index`,
+ * `create_search_filter` and `save_search` read as queries: their object
+ * happens to be a query. A first token in this set settles the question before
+ * the window is consulted.
+ */
+const MCP_WRITE_VERBS = new Set([
+  'create', 'update', 'delete', 'remove', 'write', 'set', 'add', 'send',
+  'post', 'patch', 'save', 'clear', 'drop', 'move', 'rename', 'upload',
+  'insert', 'edit', 'append', 'archive', 'close', 'cancel', 'run', 'execute',
 ])
 
 /** One kind of read-only operation a collapsed group counts. */
@@ -126,7 +193,16 @@ export interface CollapseClassification {
 
 /** One run of consecutive read-only calls, as the collapsed row reports it. */
 export interface CollapsedGroup {
-  /** Node index of the first member: where the summary row renders. */
+  /**
+   * Node index of the **last** member: where the summary row renders.
+   *
+   * The last rather than the first, because a group carries non-breaking nodes
+   * over itself (a notice, a process-local row anchored mid-run) and those
+   * render at their own index. A row at the first member's index therefore
+   * printed `Read 2 files` *above* the notice that arrived between the two
+   * reads, claiming both files before the second one happened. At the last
+   * member's index the summary can never precede content it already counts.
+   */
   readonly index: number
   /** Node keys of every member, in log order (the expanded phase's cards). */
   readonly keys: readonly string[]
@@ -237,6 +313,11 @@ function splitCommandWithOperators(command: string): string[] | undefined {
  * instead — which is what this did — folded a real file write into the
  * transcript's `Read 1 file` row, with no card and no command text behind it.
  *
+ * The same reasoning disqualifies a command that runs another one out of this
+ * classifier's sight ({@link COMMAND_SUBSTITUTION}) or writes through an
+ * argument instead of a redirect ({@link writesThroughArguments}): the leading
+ * word says `cat`, and the line still deletes a tree or truncates a file.
+ *
  * A command of nothing but neutral words (`echo hi`) is not collapsible either
  * — it read nothing.
  * @param command - The raw command line.
@@ -248,6 +329,9 @@ export function classifyShellCommand(command: string): {
   isList: boolean
 } {
   const none = { isSearch: false, isRead: false, isList: false }
+  // Checked on the raw line rather than per segment: a substitution can sit
+  // inside a quoted word, which never becomes a segment of its own.
+  if (COMMAND_SUBSTITUTION.test(command)) return none
   const parts = splitCommandWithOperators(command)
   if (parts === undefined || parts.length === 0) return none
   let hasSearch = false
@@ -283,6 +367,8 @@ export function classifyShellCommand(command: string): {
     if (!isSearch && !isRead && !isList) return none
     // `find` is the one search command that ships its own mutations.
     if (base === 'find' && words.some(word => FIND_MUTATING_FLAGS.has(word))) return none
+    // And `sort`/`uniq` are the two readers that ship their own file sink.
+    if (writesThroughArguments(base, words)) return none
     if (isSearch) hasSearch = true
     if (isRead) hasRead = true
     if (isList) hasList = true
@@ -335,6 +421,9 @@ function isMcpQuery(raw: string): boolean {
     .toLowerCase()
     .split('_')
     .filter(part => part !== '')
+  // A mutation names itself first, and its object may well be a query:
+  // `delete_search_index` is not a search, however the window reads it.
+  if (verb[0] !== undefined && MCP_WRITE_VERBS.has(verb[0])) return false
   // A server that namespaces its tools (`slack_search_public`) puts the verb
   // second; one that does not (`search_files`) puts it first.
   return verb.slice(0, 2).some(part => MCP_READ_VERBS.has(part))
@@ -484,9 +573,9 @@ export interface CollapseOptions {
  * @param nodes - The snapshot's nodes, in log order.
  * @param options - Range and per-call exclusions.
  * @returns A map from node index to the group that index belongs to. Every
- *   member index maps to the same object, whose `index` names the member the
- *   summary row replaces. Indices of a single-member run are absent, so the
- *   caller renders their card.
+ *   member index maps to the same object, whose `index` names the last member —
+ *   the one whose place the summary row takes. Indices of a single-member run
+ *   are absent, so the caller renders their card.
  */
 export function collapseToolGroups(
   nodes: readonly ChatNode[],
@@ -534,6 +623,9 @@ export function collapseToolGroups(
         hint: undefined,
       }
       absorb(draft, node, classification)
+      // The summary row renders at the member that arrived last; see
+      // `CollapsedGroup.index`.
+      draft.index = index
       members.push(index)
       continue
     }
@@ -563,8 +655,9 @@ function absorb(draft: GroupDraft, node: ToolCallNode, classification: CollapseC
       break
     default:
       if (classification.path !== undefined) draft.readPaths.add(classification.path)
-      // A read with no path of its own (a shell `cat`) is counted as an
-      // operation, and only ever consulted when no call named a path.
+      // A read with no path of its own (a shell `cat`) is counted as one more
+      // read, since its argument was never parsed: `sealGroup` adds these to
+      // the distinct named paths rather than choosing between the two.
       else draft.readOperations += 1
       break
   }

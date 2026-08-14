@@ -174,7 +174,9 @@ describe('/doctor Node check', () => {
     })
     const old = verdict(await checks({ nodeVersion: 'v20.11.0' }), 'Node')
     assert.equal(old.status, 'fail')
-    assert.match(old.advice ?? '', /22\.19\+ or 24\+/u)
+    // The range is stated as the semver range `engines.node` carries, with no
+    // English connective in it: it is interpolated into a translated sentence.
+    assert.match(old.advice ?? '', /\^22\.19\.0 \|\| >=24\.0\.0/u)
   })
 })
 

@@ -65,7 +65,11 @@ export interface TuiConfig {
   modelDialogWidth?: number
   /** Model-selector maximum height in terminal rows. */
   modelDialogMaxHeight?: number
-  /** `/config` panel and `/theme` selector width in terminal columns. */
+  /**
+   * `/theme` selector width in terminal columns. The `/config` panel takes its
+   * width from the terminal and only its row budget from this bundle's config,
+   * so this is the selector's alone.
+   */
   settingsDialogWidth?: number
   /** Maximum fuzzy file candidates displayed for one `@` query. */
   fileSearchMaxResults?: number
