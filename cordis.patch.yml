@@ -1,4 +1,4 @@
-# dsh-tui bundle patch: an interactive terminal UI riding over dsh-base.
+# deepseek-harness-tui bundle patch: an interactive terminal UI riding over dsh-base.
 # Two rows, mirroring the headless bundle's split:
 #   tui-startup parses this app's own command line (the launcher only knows
 #   --profile/--patch and the web/plugin subcommands) and provides the parsed
@@ -214,8 +214,8 @@
 
 - insert:
     - id: tui-startup
-      name: 'dsh-tui/startup'
+      name: 'deepseek-harness-tui/startup'
 
     - id: tui-runner
-      name: 'dsh-tui'
+      name: 'deepseek-harness-tui'
       inject: [tuiStartup]
