@@ -81,6 +81,7 @@ all three.
 | Resume picker (`/resume`) | type to search · Up/Down move · PgUp/PgDn page · Tab switches between this workspace and all · Enter resume · Esc clears the search, then closes |
 | Rewind (`/rewind`) | Up/Down move · PgUp/PgDn page · Home/End first or last · Enter go back to that prompt · Esc close |
 | Plugins (`/plugins`) | type to filter · Up/Down move · PgUp/PgDn page · Enter expand one entry · Esc close |
+| Skills (`/skills`) | type to filter · Up/Down move · PgUp/PgDn page · Enter read one skill (Up/Down scroll · g/G or Home/End top or bottom) · Esc leaves the skill, then clears the filter, then closes |
 | Details (`/details`) | Tab cycles the highlighted setting, applied immediately · Esc close |
 
 Ctrl+C is the one key that is never rebindable: it is how a terminal is always
@@ -103,6 +104,7 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/plugins` | search and inspect the Loader's plugin entries |
 | `/rewind` | go back to an earlier prompt in this session |
 | `/resume [session]` | list this workspace's resumable sessions; an argument fills the picker's search box |
+| `/skills` | search this session's skills and read one in full |
 | `/status` | session diagnostics, system prompt, registered tools |
 | `/exit`, `/quit` | exit after the active turn reaches idle |
 | `/skill:<name> [instructions]` | load a skill into the conversation |
@@ -138,6 +140,8 @@ recent sessions.
 - **Resume** — `/resume [session]`: pick and resume a past session, in this
   workspace or (Tab) in all of them.
 - **Plugins** — `/plugins`: search and inspect the Loader's entries.
+- **Skills** — `/skills`: search what this session composes and read one skill's
+  body; `/skill:<name>` is how you then load it into the conversation.
 - **Status** — `/status`: session diagnostics, system prompt, registered tools.
 - **Help** — `/help`: keys and slash commands.
 
