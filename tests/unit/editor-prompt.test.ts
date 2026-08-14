@@ -103,7 +103,33 @@ describe('editor inline prompt', () => {
 
     assert.equal(rows[0], '─'.repeat(WIDTH))
     assert.equal(rows[2], '─'.repeat(WIDTH))
-    assert.equal(rows[1], `${PROMPT} hello${' '.repeat(WIDTH - 9)} `)
+    assert.equal(rows[1], `${PROMPT}hello${' '.repeat(WIDTH - 7)}`)
+    assertFullWidth(editor.render(WIDTH), WIDTH)
+  })
+
+  it('leaves exactly one column between the caret and the text, padding included', () => {
+    // The gap the user sees is the whole point: `❯ ` plus pi-tui's own padding
+    // column used to render two spaces where Claude Code renders one, on the
+    // typed row and the placeholder row alike.
+    const editor = mountEditor()
+    editor.promptPrefix = PROMPT
+    editor.hint = 'ask anything'
+    const placeholder = plain(editor.render(WIDTH))[1] ?? ''
+    editor.setText('typed')
+    const typed = plain(editor.render(WIDTH))[1] ?? ''
+
+    assert.equal(placeholder.indexOf('ask'), 2)
+    assert.equal(typed.indexOf('typed'), 2)
+    assert.ok(!typed.startsWith('❯  '), `one space after the caret: ${JSON.stringify(typed)}`)
+  })
+
+  it('keeps pi-tui\'s padding when the prompt supplies no gap of its own', () => {
+    const editor = mountEditor()
+    editor.promptPrefix = '>'
+    editor.setText('typed')
+
+    // Nothing to absorb: the padding column is the only separator there is.
+    assert.equal(plain(editor.render(WIDTH))[1]?.indexOf('typed'), 2)
     assertFullWidth(editor.render(WIDTH), WIDTH)
   })
 
@@ -114,14 +140,14 @@ describe('editor inline prompt', () => {
     const rows = plain(editor.render(WIDTH))
 
     assert.equal(rows.length, 5)
-    assert.equal(rows[1], `${PROMPT} first${' '.repeat(WIDTH - 9)} `)
-    assert.equal(rows[2], `   second${' '.repeat(WIDTH - 10)} `)
-    assert.equal(rows[3], `   third${' '.repeat(WIDTH - 9)} `)
+    assert.equal(rows[1], `${PROMPT}first${' '.repeat(WIDTH - 7)}`)
+    assert.equal(rows[2], `  second${' '.repeat(WIDTH - 8)}`)
+    assert.equal(rows[3], `  third${' '.repeat(WIDTH - 7)}`)
     // One text column for every row: the prompt shifts row 1 by exactly what
     // the indent shifts the rows under it.
     assert.deepEqual(
       [rows[1]?.indexOf('first'), rows[2]?.indexOf('second'), rows[3]?.indexOf('third')],
-      [3, 3, 3],
+      [2, 2, 2],
     )
   })
 
@@ -175,7 +201,7 @@ describe('editor cursor marker', () => {
 
     assert.ok(marker > 0, 'the first content row carries the cursor marker')
     // What `TUI.extractCursorPosition` computes: prompt (2) + padding (1) + `hi`.
-    assert.equal(visibleWidth(row.slice(0, marker)), 5)
+    assert.equal(visibleWidth(row.slice(0, marker)), 4)
     assert.ok(row.slice(0, marker).startsWith(PROMPT))
     assertFullWidth(lines, WIDTH)
   })
@@ -191,7 +217,7 @@ describe('editor placeholder', () => {
 
     assert.equal(rows[0], '─'.repeat(WIDTH))
     assert.equal(rows[2], '─'.repeat(WIDTH))
-    assert.ok(rows[1]?.startsWith(`${PROMPT} press enter to steer`), `placeholder row: ${JSON.stringify(rows[1])}`)
+    assert.ok(rows[1]?.startsWith(`${PROMPT}press enter to steer`), `placeholder row: ${JSON.stringify(rows[1])}`)
     assertFullWidth(lines, WIDTH)
   })
 
@@ -202,7 +228,7 @@ describe('editor placeholder', () => {
     const lines = editor.render(WIDTH)
 
     assertFullWidth(lines, WIDTH)
-    assert.equal(plain(lines)[1], `${PROMPT} ${'x'.repeat(WIDTH - 3)}`)
+    assert.equal(plain(lines)[1], `${PROMPT}${'x'.repeat(WIDTH - 2)}`)
   })
 
   it('gives way to typed text', () => {
@@ -211,7 +237,29 @@ describe('editor placeholder', () => {
     editor.hint = 'placeholder'
     editor.setText('typed')
 
-    assert.equal(plain(editor.render(WIDTH))[1], `${PROMPT} typed${' '.repeat(WIDTH - 9)} `)
+    assert.equal(plain(editor.render(WIDTH))[1], `${PROMPT}typed${' '.repeat(WIDTH - 7)}`)
+  })
+})
+
+describe('editor history mirror', () => {
+  it('keeps pi-tui\'s own rules, so Ctrl+R and the up arrow see one history', () => {
+    const editor = mountEditor()
+    editor.addToHistory('first prompt')
+    editor.addToHistory('   ')
+    editor.addToHistory('second prompt')
+    editor.addToHistory('second prompt')
+    editor.addToHistory('  third prompt  ')
+
+    assert.deepEqual(editor.historyEntries(), ['third prompt', 'second prompt', 'first prompt'])
+  })
+
+  it('drops the oldest entry past pi-tui\'s own limit', () => {
+    const editor = mountEditor()
+    for (let index = 0; index < 105; index += 1) editor.addToHistory(`prompt ${String(index)}`)
+
+    assert.equal(editor.historyEntries().length, 100)
+    assert.equal(editor.historyEntries()[0], 'prompt 104')
+    assert.equal(editor.historyEntries().at(-1), 'prompt 5')
   })
 })
 

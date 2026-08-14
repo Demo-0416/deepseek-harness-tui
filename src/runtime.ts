@@ -7,7 +7,7 @@
  */
 
 import type { Terminal } from '@earendil-works/pi-tui'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 
 /** Process-lifecycle owner used by the shipped CLI for an atomic resume handoff. */
 export interface TuiResumeHost {
@@ -23,6 +23,18 @@ export interface TuiResumeHost {
    *   teardown.
    */
   handoff(sessionId: SessionId, cwd: string): Promise<never>
+}
+
+/** What a rewind asks the host to build: a fork of this session, cut short. */
+export interface TuiForkRequest {
+  /** The parent's log prefix the fork starts from; ends on a completed turn. */
+  readonly seed: readonly SessionEvent[]
+  /** The session this fork descends from, recorded as the fork's lineage. */
+  readonly parentSession: SessionId
+  /** Workspace the fork runs in; the parent's, since a rewind never moves it. */
+  readonly cwd: string
+  /** Text placed in the forked chat's editor, unsent, for the user to edit and send. */
+  readonly draft?: string
 }
 
 /** Runtime boundary used by the interactive TUI. */
@@ -47,6 +59,17 @@ export interface TuiRuntime {
   now?(): number
   /** Host-owned process handoff; absent leaves the session selectable but not resumable in place. */
   handoffResume?: TuiResumeHost['handoff']
+  /**
+   * Host-owned fork handoff: create a session seeded with the request's log
+   * prefix and mount a chat over it, leaving the source session untouched.
+   * Success does not return, exactly as {@link TuiRuntime.handoffResume}.
+   *
+   * Absent leaves Rewind able to bring an earlier prompt back to the editor but
+   * not to move the conversation back with it — only a host that owns the agent
+   * handle can replace the mounted session.
+   * @param fork - The seed, lineage, workspace, and draft the new chat opens with.
+   */
+  handoffFork?: (fork: TuiForkRequest) => Promise<never>
   /**
    * Line the host wants printed once the terminal is released on exit, such as
    * the command that resumes this session. Absent prints nothing. The host owns

@@ -24,6 +24,7 @@ import {
   matchesKey,
   type Component,
   type EditorTheme,
+  type KeybindingsManager,
   type SlashCommand,
   type TerminalColorScheme,
   type TUI,
@@ -101,6 +102,7 @@ import type {
 } from './extension/types.ts'
 import { ApprovalDialog } from './components/approval.ts'
 import { displayInlineText, displayText } from './components/text.ts'
+import { contentText } from './components/content.ts'
 import { brandText, createPalette, markdownTheme, renderPalette, selectTheme } from './components/theme.ts'
 import { cardPhaseNotice, TranscriptReconciler } from './components/reconciler.ts'
 import { SessionStore } from './core/session-store.ts'
@@ -137,6 +139,15 @@ import {
 } from './components/transcript.ts'
 import { claudeMarkdownTheme } from './render/markdown.ts'
 import { ScrollablePanel } from './components/panel.ts'
+import { HistorySearchPanel, type HistorySearchOutcome } from './components/history-search.ts'
+import { RewindPanel } from './components/rewind.ts'
+import { forkSeedLength, hasRewindTarget, rewindTargets, type RewindTarget } from './chat/rewind.ts'
+import {
+  APP_KEYBINDINGS,
+  installKeybindings,
+  keyLabel,
+  type AppKeybinding,
+} from './keybindings.ts'
 import {
   PluginsPanel,
   type PluginInventoryReader,
@@ -164,7 +175,7 @@ import { ReferenceAutocompleteProvider } from './chat/autocomplete.ts'
 import { clipboardPath, copyToClipboard } from './chat/clipboard.ts'
 import {
   BANNER_REVEAL_INTERVAL_MS,
-  BANNER_REVEAL_STEPS,
+  bannerRevealWidth,
   formatCwd,
   gitBranch,
   HintEditor,
@@ -192,7 +203,7 @@ import {
   goalStatusRows,
 } from './chat/session-summary.ts'
 import { createResumeController } from './chat/resume.ts'
-import type { TuiResumeHost, TuiRuntime } from './runtime.ts'
+import type { TuiForkRequest, TuiResumeHost, TuiRuntime } from './runtime.ts'
 import { toolCallTouchesFiles, WorkspaceFileSearch } from './chat/file-autocomplete.ts'
 import {
   AGENT_START_TIMEOUT_MS,
@@ -203,7 +214,7 @@ import type { TuiStartupValues } from './startup.ts'
 
 export { TuiPromptService } from './prompt.ts'
 export { renderSkillInvocation } from './chat/skill-invocation.ts'
-export type { TuiResumeHost, TuiRuntime } from './runtime.ts'
+export type { TuiForkRequest, TuiResumeHost, TuiRuntime } from './runtime.ts'
 export {
   resolveTuiConfig,
   TuiConfigSchema,
@@ -349,11 +360,18 @@ function lastActivityTime(session: Session): number | undefined {
 }
 
 /**
- * How long a transient confirmation (the Ctrl+O card cycle, the Ctrl+R
- * reasoning toggle) stays on the status row before the row goes back to what it
- * was showing.
+ * How long a transient confirmation (the Ctrl+O card cycle, the Ctrl+T plan
+ * toggle) stays on the status row before the row goes back to what it was
+ * showing.
  */
 const STATUS_FLASH_MS = 1_500
+
+/**
+ * How long a first Esc stays armed for the second one that clears the draft or
+ * opens Rewind. Claude Code's own double-press window, and short enough that
+ * two unrelated cancels are never mistaken for one gesture.
+ */
+const ESCAPE_DOUBLE_PRESS_MS = 800
 
 /**
  * How long a first Ctrl+C at an empty prompt stays armed for the second one
@@ -390,14 +408,33 @@ const MIN_PANEL_ROWS = 5
  */
 const DISPOSED_RECOVERY = 'Run /resume to open another session, or press ctrl+d to exit.'
 
-/** Every key the terminal binds, as `/hotkeys` and `/help` both list them. */
-const KEYBOARD_SHORTCUTS: readonly string[] = [
-  'Enter send • Shift/Alt+Enter newline • Up/Down prompt history',
-  'Esc cancel turn • Ctrl+O cycle cards (collapse/expand/hide) • Ctrl+R toggle reasoning • Ctrl+L redraw',
-  'Ctrl+X copy the last answer • Ctrl+D exit on an empty prompt',
-  'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
-  'Ctrl+C again on a turn that will not cancel exits without waiting for it',
-]
+/**
+ * Every key this terminal binds, as `/hotkeys`, `/help` and `?` list them.
+ *
+ * Built from the installed keybinding manager rather than written out, because
+ * a deployment can rebind any of these: a help page that named the default key
+ * after the user moved it would be worse than no help page. Only the keys this
+ * registry does not own — the editor's own, the ones a panel or a dialog binds
+ * while it has focus, and Ctrl+C, which is never rebindable — are spelled out.
+ * @param manager - the installed keybinding manager.
+ * @returns one line per group, in reading order.
+ */
+function keyboardShortcuts(manager: KeybindingsManager): string[] {
+  const key = (action: AppKeybinding): string => keyLabel(manager, action)
+  return [
+    'Enter send • Shift/Alt+Enter newline • Up/Down prompt history • Tab accept a completion',
+    '@ reference a file • / run a command • /skill:<name> load a skill • ? this list',
+    `${key('app.history.search')} search prompt history backwards • ${key('app.todos.toggle')} expand or collapse the plan`,
+    `${key('app.tools.cycle')} cycle tool cards (preview/full/hidden) • ${key('app.message.copy')} copy the last answer • ${key('app.screen.redraw')} redraw`,
+    `${key('app.cancel')} cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind`,
+    `${key('app.exit')} exit on an empty prompt • Shift+Ctrl+D session debug panel`,
+    'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
+    'Ctrl+C again on a turn that will not cancel exits without waiting for it',
+    'In a panel: ↑/↓ scroll • PgUp/PgDn page • g/G top or bottom • Esc close',
+    'In a question: ↑/↓ move • Space multi-select • Tab custom answer • Enter confirm • Esc cancel',
+    'In an approval: ↑/↓ move • 1-4 answer straight away • Enter confirm • Esc deny',
+  ]
+}
 
 /**
  * Read the live default model selection, when a default-model service is
@@ -531,6 +568,11 @@ export function createTuiChat(
   const agent = ctx.agents.get(sessionId)
   if (agent === undefined) throw new Error(`dsh-tui: session "${sessionId}" is not running`)
   const resolved = resolveTuiConfig(config)
+  // Published before the first component: pi-tui resolves every key through one
+  // process-global registry, and `Editor.handleInput` reads it on its first
+  // line, so an editor constructed ahead of this would answer to pi-tui's
+  // defaults for the rest of its life.
+  const keybindings = installKeybindings(resolved.keybindings)
   const palette = createPalette(resolved.theme.color)
   const mdTheme = markdownTheme(palette)
   const ui: TUI = new TuiMainScreen(runtime.terminal, resolved.showHardwareCursor)
@@ -551,7 +593,7 @@ export function createTuiChat(
     paddingX: 1,
   })
   editor.promptPrefix = renderInputPrompt()
-  const todo = new TodoComponent(palette)
+  const todo = new TodoComponent(palette, () => runtime.terminal.rows)
   /**
    * The row above the prompt: a live compaction's stopwatch while one runs,
    * otherwise whatever transient confirmation is flashing, otherwise nothing.
@@ -564,6 +606,10 @@ export function createTuiChat(
   let exitArmed: ReturnType<typeof setTimeout> | undefined
   /** The status row's wording while that exit is armed, so disarming can take it down. */
   let armedAsk: string | undefined
+  /** Timer of an armed first Esc; while it runs, a second one clears or rewinds. */
+  let escapeArmed: ReturnType<typeof setTimeout> | undefined
+  /** The status row's wording while that Esc is armed, so disarming can take it down. */
+  let escapeAsk: string | undefined
   /**
    * Whether the running turn has already been asked to stop (Esc, or a Ctrl+C
    * this terminal sent). Read by the Ctrl+C ladder to tell "cancel this turn"
@@ -589,10 +635,11 @@ export function createTuiChat(
     timer: ReturnType<typeof setInterval>
   } | undefined
   // TUI steering submissions that the inbox has not yet claimed or discarded,
-  // for the prompt's queued badge. The same claimed/discarded signals settle
-  // the optimistic echo in the store (one node per MessageId), so this set
+  // for the prompt's queued badge, keyed by MessageId and carrying the text a
+  // cancel hands back to the editor. The same claimed/discarded signals settle
+  // the optimistic echo in the store (one node per MessageId), so this map
   // counts pending work and owns no transcript state of its own.
-  const pendingSteering = new Set<MessageId>()
+  const pendingSteering = new Map<MessageId, string>()
   let disposed = false
   /**
    * Whether this terminal's agent left the registry while the terminal stayed.
@@ -1504,6 +1551,24 @@ export function createTuiChat(
       : toolsVisibility === 'expanded' ? 'hidden' : 'collapsed')
   }
 
+  /**
+   * Show the plan's items or its one-line summary (Ctrl+T).
+   *
+   * The panel used to be unconditional, so a session with a long plan spent the
+   * rows above the prompt on it from the moment the agent wrote one until the
+   * moment it cleared it, with no key that took it back down.
+   */
+  const toggleTodos = (): void => {
+    if (!todo.hasTodos()) {
+      flashStatus('No plan in this session yet.')
+      return
+    }
+    todo.setExpanded(!todo.isExpanded())
+    todo.invalidate()
+    flashStatus(todo.isExpanded() ? 'Plan expanded.' : 'Plan collapsed.')
+    requestRender()
+  }
+
   const setReasoning = (show: boolean): void => {
     showReasoning = show
     // Every mounted step toggles in place, so a running stream keeps streaming
@@ -1512,10 +1577,13 @@ export function createTuiChat(
     flashStatus(`Reasoning blocks ${showReasoning ? 'shown' : 'hidden'}.`)
   }
 
-  const toggleReasoning = (): void => { setReasoning(!showReasoning) }
-
+  // Reasoning display has no key of its own: Ctrl+O's expanded phase already
+  // shows the thinking blocks, and Ctrl+R is worth more as history search than
+  // as a second switch over the same rows. `/details` and the selector below
+  // still set it, and a deployment can still turn it off in config.
+  //
   // The selector and the argument grammar mutate the same closure state the
-  // Ctrl+O cycle and Ctrl+R toggle drive, so every entry converges.
+  // Ctrl+O cycle drives, so every entry converges.
   let detailsOverlay: TuiOverlaySession | undefined
   const showDetailsSelector = (): void => {
     void detailsOverlay?.close()
@@ -1545,8 +1613,9 @@ export function createTuiChat(
     requestRender()
   }
 
-  // `/details` names the same transcript-detail state the Ctrl+O cycle and
-  // Ctrl+R toggle mutate, so a user can jump to a mode without cycling.
+  // `/details` names the same transcript-detail state the Ctrl+O cycle mutates,
+  // plus the reasoning switch that has no key of its own, so a user can jump to
+  // a mode without cycling.
   const runDetails = (rawInput: string): CommandResult => {
     const tokens = rawInput.split(/\s+/u).filter(token => token !== '')
     if (tokens.length === 0) {
@@ -1624,8 +1693,36 @@ export function createTuiChat(
   // says what it is (the status card, the palette table), so the heading's job
   // is naming the answer you are reading, and how to ask for it again.
   const showHotkeys = (): void => {
-    showPanel('/hotkeys', KEYBOARD_SHORTCUTS.map(line => palette.dim(line)))
+    showPanel('/hotkeys', keyboardShortcuts(keybindings).map(line => palette.dim(line)))
   }
+
+  /**
+   * What this terminal knows about itself (Shift+Ctrl+D).
+   *
+   * pi-tui dispatches that key ahead of focus and overlays, so this is the one
+   * surface reachable from any state — which is exactly what a debug dump is
+   * for. It reports what a bug report needs and nothing the transcript already
+   * shows: identity, lifecycle, log size, screen, and the resolved keys, since a
+   * rebound key is the first thing to suspect when a key "does nothing".
+   */
+  const showDebug = (): void => {
+    const conflicts = keybindings.getConflicts()
+    showPanel('debug (shift+ctrl+d)', [
+      `session ${displayText(agent.session.id)} · agent ${agent.status}${agentGone ? ' · detached' : ''}`,
+      `events ${String(agent.session.events.length)} · context ${String(Math.round(contextTokens()))} tokens`,
+      `terminal ${String(runtime.terminal.columns)}x${String(runtime.terminal.rows)} · editor ${String(editorRowCount())} rows`,
+      `cards ${toolsVisibility} · reasoning ${showReasoning ? 'shown' : 'hidden'} · plan ${todo.isExpanded() ? 'expanded' : 'collapsed'}`,
+      `overlay ${overlayManager.hasActiveOverlay() ? 'active' : 'none'} · pending steering ${String(pendingSteering.size)}`,
+      '',
+      ...Object.keys(APP_KEYBINDINGS).map(action => `${action} → ${keyLabel(keybindings, action as AppKeybinding)}`),
+      ...conflicts.length === 0
+        ? []
+        : ['', ...conflicts.map(conflict => `conflict: ${conflict.key} claimed by ${conflict.keybindings.join(', ')}`)],
+    ].map(line => palette.dim(line)))
+  }
+  // pi-tui hands this key over before focus is resolved, so it works with a
+  // panel or a dialog open; nothing else in this UI claims it.
+  ui.onDebug = showDebug
 
   const showHelp = (): void => {
     const commandLines = ctx.commands.list(agent).map((command) => {
@@ -1633,7 +1730,7 @@ export function createTuiChat(
       return `/${command.name}${input} — ${command.description}`
     })
     showPanel('/help', [
-      ...KEYBOARD_SHORTCUTS,
+      ...keyboardShortcuts(keybindings),
       '',
       ...commandLines,
       '/skill:<name> [instructions] — load a skill into the conversation',
@@ -1920,6 +2017,11 @@ export function createTuiChat(
       handler: () => { runReload(); return { kind: 'success' } },
     })
     commandCtx.commands.register({
+      name: 'rewind',
+      description: 'Go back to an earlier prompt in this session (files are never restored)',
+      handler: () => { showRewind(); return { kind: 'success' } },
+    })
+    commandCtx.commands.register({
       name: 'resume',
       description: 'List this workspace\'s resumable sessions',
       handler: () => { resume.showResume(); return { kind: 'success' } },
@@ -2005,7 +2107,7 @@ export function createTuiChat(
       // Steering is never subject to prompt admission; a running driver
       // consumes it at its next step boundary.
       agent.steer(message)
-      pendingSteering.add(message.id)
+      pendingSteering.set(message.id, contentText(content).trim())
       refreshStatus()
       return
     }
@@ -2217,6 +2319,19 @@ export function createTuiChat(
     })
   }
   editor.onSubmit = submitLine
+  /**
+   * `?` on an empty prompt opens the shortcut list, and is not typed.
+   *
+   * Claude Code's rule exactly (`PromptInput.tsx`): the help opens only when the
+   * whole input is a single `?`, and the character itself never lands in the
+   * draft — a `?` typed inside a sentence is a question mark, not a keystroke.
+   */
+  editor.onChange = (text: string): void => {
+    if (text !== '?') return
+    editor.setText('')
+    showHotkeys()
+    requestRender()
+  }
 
   /**
    * Open the gate the launcher-seeded skill held, and replay what waited behind
@@ -2233,6 +2348,195 @@ export function createTuiChat(
     for (const line of held) submitLine(line)
   }
 
+  /**
+   * Put every queued steering prompt back in the editor, newest submission last.
+   *
+   * Cancelling a turn empties the agent's inbox, so a prompt the user typed and
+   * sent while the turn ran is discarded with it. Claude Code hands those back
+   * to the input frame rather than dropping them, and so does this: the text is
+   * prepended to whatever is being typed now, which is the order the user wrote
+   * them in. The map itself is settled by the inbox's own discard events, not
+   * here — until those land the prompts really are still queued.
+   */
+  const popQueuedSteering = (): void => {
+    if (pendingSteering.size === 0) return
+    const queued = [...pendingSteering.values()].filter(text => text !== '')
+    if (queued.length === 0) return
+    const draft = editor.getText()
+    editor.setText(draft === '' ? queued.join('\n') : `${queued.join('\n')}\n${draft}`)
+    // `Editor.setText` mutates the buffer without asking for a redraw.
+    requestRender()
+  }
+
+  /** Drop the armed first Esc, so the next one asks again instead of acting. */
+  const disarmEscape = (): void => {
+    if (escapeArmed === undefined) return
+    clearTimeout(escapeArmed)
+    escapeArmed = undefined
+    if (flashingStatus?.text === escapeAsk) {
+      clearFlash()
+      requestRender()
+    }
+    escapeAsk = undefined
+  }
+
+  /**
+   * Arm the second Esc for {@link ESCAPE_DOUBLE_PRESS_MS} and say what it will do.
+   * @param ask - the wording the status row holds for the whole window.
+   */
+  const armEscape = (ask: string): void => {
+    disarmEscape()
+    escapeArmed = setTimeout(() => { escapeArmed = undefined }, ESCAPE_DOUBLE_PRESS_MS)
+    escapeAsk = ask
+    flashStatus(ask, ESCAPE_DOUBLE_PRESS_MS)
+  }
+
+  /** Overlay of a live Ctrl+R search, so a second press replaces rather than stacks. */
+  let historyOverlay: TuiOverlaySession | undefined
+  /**
+   * Search the prompt history backwards (Ctrl+R).
+   *
+   * The draft is captured on the way in and restored by a cancel, which is the
+   * half of Claude Code's behavior that matters most: a search entered by
+   * accident must give back exactly what the user was typing.
+   */
+  const showHistorySearch = (): void => {
+    const entries = editor.historyEntries()
+    if (entries.length === 0) {
+      flashStatus('No prompt history in this session yet.')
+      return
+    }
+    void historyOverlay?.close()
+    const draft = editor.getText()
+    const session = overlayManager.open({
+      create: () => new HistorySearchPanel(
+        entries,
+        palette,
+        (text: string, outcome: HistorySearchOutcome) => {
+          void session.close()
+          editor.setText(text)
+          requestRender()
+          if (outcome === 'submit') submitLine(text)
+        },
+        () => {
+          void session.close()
+          editor.setText(draft)
+          requestRender()
+        },
+      ),
+      dismissable: true,
+    }, 'inline')
+    historyOverlay = session
+    void session.closed.then(() => {
+      if (historyOverlay === session) historyOverlay = undefined
+    })
+    requestRender()
+  }
+
+  /**
+   * Go back to an earlier prompt in this session (`/rewind`, double Esc on an
+   * empty prompt).
+   *
+   * What "back" means depends on the host. One that can fork the session
+   * branches it at the last completed turn before the chosen prompt and mounts
+   * the branch, leaving this session whole and resumable. One that cannot only
+   * puts the prompt's text back in the editor. Neither touches a file: dsh keeps
+   * no working-tree snapshots, and the panel says so instead of implying one.
+   * @param target - the prompt the user picked.
+   */
+  const rewindTo = (target: RewindTarget): void => {
+    const events = agent.session.events
+    const fork = runtime.handoffFork
+    const seedLength = fork === undefined ? undefined : forkSeedLength(events, target.seq)
+    editor.setText(target.text)
+    requestRender()
+    if (fork === undefined || seedLength === undefined) {
+      appendNotice(fork === undefined
+        ? 'Rewind put that prompt back in the editor. This runtime cannot fork a session, so the conversation above it is unchanged.'
+        : 'Rewind put that prompt back in the editor. No completed turn precedes it, so there was nothing to fork to.', 'warning')
+      return
+    }
+    appendNotice('Forking this session to the point before that prompt; the original stays resumable.')
+    void fork({
+      seed: events.slice(0, seedLength),
+      parentSession: agent.session.id,
+      cwd,
+      draft: target.text,
+    }).catch((error: unknown) => {
+      /* v8 ignore next -- a fork that fails after teardown has no screen left to report on. */
+      if (!disposed) appendNotice(`Rewind failed: ${errorChain(error)}`, 'error')
+    })
+  }
+
+  const showRewind = (): void => {
+    if (agent.status === 'running') {
+      appendNotice('Cancel the active turn before rewinding.', 'warning')
+      return
+    }
+    void panelOverlay?.close()
+    const targets = rewindTargets(agent.session.events)
+    const session = overlayManager.open({
+      create: () => new RewindPanel(
+        targets,
+        runtime.handoffFork !== undefined,
+        panelRows,
+        palette,
+        (target: RewindTarget) => {
+          void session.close()
+          rewindTo(target)
+        },
+        () => { void session.close() },
+      ),
+      dismissable: true,
+    }, 'inline')
+    panelOverlay = session
+    void session.closed.then(() => {
+      if (panelOverlay === session) panelOverlay = undefined
+    })
+    requestRender()
+  }
+
+  /**
+   * Esc, in Claude Code's own order.
+   *
+   * Running: cancel, and hand back whatever was queued behind the turn. Idle
+   * with a draft: two presses clear it, and the cleared text goes into the
+   * history first, so a draft abandoned by accident is one Ctrl+R away. Idle
+   * with an empty prompt: two presses open Rewind — but only when there is a
+   * prompt to go back to, since arming a key that opens an empty panel teaches
+   * the wrong thing about it.
+   */
+  const handleEscape = (): void => {
+    if (agent.status === 'running') {
+      disarmEscape()
+      popQueuedSteering()
+      cancelActiveTurn()
+      return
+    }
+    const draft = editor.getText()
+    if (draft !== '') {
+      if (escapeArmed === undefined) {
+        armEscape('Press esc again to clear the draft.')
+        return
+      }
+      disarmEscape()
+      // Stored before it is dropped, exactly as Claude Code does: a draft the
+      // user threw away is still something they typed, and Ctrl+R is how they
+      // get it back.
+      editor.addToHistory(draft)
+      editor.setText('')
+      requestRender()
+      return
+    }
+    if (!hasRewindTarget(agent.session.events)) return
+    if (escapeArmed === undefined) {
+      armEscape('Press esc again to rewind to an earlier prompt.')
+      return
+    }
+    disarmEscape()
+    showRewind()
+  }
+
   const removeInputListener = ui.addInputListener((data) => {
     if (overlayManager.hasActiveOverlay()) return undefined
     // `matchesKey` reports the key, not the transition: under the Kitty
@@ -2242,27 +2546,35 @@ export function createTuiChat(
     // key's events so they never reach the editor. Terminals without the
     // protocol send press only, so this changes nothing for them.
     const press = !isKeyRelease(data) && !isKeyRepeat(data)
-    if (matchesKey(data, Key.ctrl('o'))) {
+    if (keybindings.matches(data, 'app.tools.cycle')) {
       if (press) toggleTools()
       return { consume: true }
     }
-    if (matchesKey(data, Key.ctrl('r'))) {
-      if (press) toggleReasoning()
+    if (keybindings.matches(data, 'app.history.search')) {
+      if (press) showHistorySearch()
       return { consume: true }
     }
-    if (matchesKey(data, Key.ctrl('x'))) {
+    if (keybindings.matches(data, 'app.todos.toggle')) {
+      if (press) toggleTodos()
+      return { consume: true }
+    }
+    if (keybindings.matches(data, 'app.message.copy')) {
       if (press) copyLastAnswer()
       return { consume: true }
     }
-    if (matchesKey(data, Key.ctrl('l'))) {
+    if (keybindings.matches(data, 'app.screen.redraw')) {
       if (press) {
         ui.invalidate()
         ui.requestRender(true)
       }
       return { consume: true }
     }
-    if (matchesKey(data, Key.escape) && agent.status === 'running') {
-      if (press) cancelActiveTurn()
+    if (keybindings.matches(data, 'app.cancel')) {
+      // An open completion popup owns Esc first: the editor closes it, and a
+      // key that dismissed the popup and cancelled the turn in one press would
+      // make the popup dangerous to open mid-run.
+      if (editor.isShowingAutocomplete()) return undefined
+      if (press) handleEscape()
       return { consume: true }
     }
     if (matchesKey(data, Key.ctrl('c'))) {
@@ -2303,7 +2615,7 @@ export function createTuiChat(
       }
       return { consume: true }
     }
-    if (matchesKey(data, Key.ctrl('d'))) {
+    if (keybindings.matches(data, 'app.exit')) {
       if (press) {
         // Ctrl+D is the empty-prompt EOF it is in every shell: a draft in the
         // editor is unsent work, and ending the session on top of it threw away
@@ -2429,6 +2741,7 @@ export function createTuiChat(
     skillAbort.abort()
     fileSearch.dispose()
     clearFlash()
+    disarmEscape()
     removeInputListener()
     disposeCommandChanges()
     disposeSkillChanges()
@@ -2463,12 +2776,16 @@ export function createTuiChat(
   }
   const startBannerReveal = (): void => {
     if (config.welcome !== undefined) return
-    const total = Math.max(1, runtime.terminal.columns)
-    const step = Math.max(1, Math.ceil(total / BANNER_REVEAL_STEPS))
-    let shown = 0
+    let frame = 0
     header.setRevealWidth(0)
     revealTimer = setInterval(() => {
-      shown += step
+      // The width is re-read every frame rather than captured at the start: a
+      // terminal resized mid-sweep used to keep wiping toward the width the
+      // animation began at, which left the wipe running past the edge of a
+      // narrowed frame and stopping short of a widened one.
+      frame += 1
+      const total = Math.max(1, runtime.terminal.columns)
+      const shown = bannerRevealWidth(frame, total)
       if (shown >= total) {
         stopBannerReveal()
       } else {
@@ -2485,6 +2802,12 @@ export function createTuiChat(
   applySnapshot(initial)
   for (const node of initial.nodes) {
     if (node.kind === 'user-message' && node.source === 'user') editor.addToHistory(node.text)
+  }
+  // A rewind handoff opens its forked chat with the prompt it went back to
+  // already in the editor, unsent: the point of going back is to say it
+  // differently, and sending it unread would take that choice away.
+  if (config.initialDraft !== undefined && config.initialDraft !== '') {
+    editor.setText(config.initialDraft)
   }
   const restoredGoal = goalState.goal
   /* v8 ignore next -- goal replay coverage lives with the goal seam; the TUI only formats its startup notice. */
@@ -2892,13 +3215,15 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
     handoffResume: hostResume === undefined
       ? (sessionId, cwd) => handoff(sessionId, cwd)
       : (sessionId, cwd) => hostResume.handoff(sessionId, cwd),
+    handoffFork: fork => forkHandoff(fork),
   }
 
-  const mount = (handle: AgentHandle): void => {
+  const mount = (handle: AgentHandle, draft?: string): void => {
     const controller = createTuiChat(ctx, {
       ...config,
       theme: { ...config.theme, truecolor },
       ...initialSkill === undefined ? {} : { initialSkill },
+      ...draft === undefined || draft === '' ? {} : { initialDraft: draft },
       sessionId: handle.agent.session.id,
     }, runtime)
     mounted = { handle, controller }
@@ -2944,6 +3269,39 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
     mount(resumed)
     // Success never returns: the replacement chat owns the terminal from here,
     // exactly as a process-replacing host would.
+    return await new Promise<never>(() => {})
+  }
+
+  /**
+   * In-process rewind: tear the current chat and agent down, create the fork the
+   * rewind asked for, and mount a fresh chat over it.
+   *
+   * The parent session is never touched — it keeps its whole log and stays
+   * resumable — so a rewind is a branch, not an edit. Files on disk are not part
+   * of the fork in either direction: dsh snapshots no working tree, and the
+   * Rewind panel says so rather than implying a restore this cannot do.
+   * @param fork - The seed, lineage, workspace, and draft the new chat opens with.
+   * @returns Never; the replacement chat owns the terminal from here.
+   */
+  async function forkHandoff(fork: TuiForkRequest): Promise<never> {
+    await teardown()
+    let forked: AgentHandle
+    try {
+      forked = await ctx.agents.create({
+        sessionId: SessionId(`session-${randomUUID()}`),
+        seed: fork.seed,
+        meta: { cwd: fork.cwd, parentSession: fork.parentSession, seedLength: fork.seed.length },
+        ...agentOptions === undefined ? {} : { agentOptions },
+        // The fork replays the parent's turns, so it is rebuilt under the
+        // composition the parent's own log records, exactly as a resume is.
+        ...await composeResumedPreset(ctx, fork.parentSession),
+      })
+    } catch (error: unknown) {
+      terminal.write(`dsh-tui: failed to fork session "${fork.parentSession}": ${errorChain(error)}\n`)
+      exit(1)
+      throw error
+    }
+    mount(forked, fork.draft)
     return await new Promise<never>(() => {})
   }
 

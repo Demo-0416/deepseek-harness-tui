@@ -285,14 +285,15 @@ describe('TUI smoke', { skip: skipWithoutEntry }, () => {
 
       await renderAfter(harness, () => { harness.terminal.send('hello42') })
 
-      // The prompt and the draft share one row: the prompt opens the frame's
-      // first content row and the editor's padding column follows it, so typed
-      // text starts where every wrapped continuation row starts.
+      // The prompt and the draft share one row, separated by exactly the gap the
+      // prompt itself ends with: the editor's own padding column is spent by
+      // that gap rather than added to it, which is where Claude Code's single
+      // space after `❯` comes from.
       const after = harness.terminal.text()
       assert.notEqual(after, before)
       assert.equal(
         editorPromptRow(after).row,
-        `${INPUT_PROMPT} hello42`,
+        `${INPUT_PROMPT}hello42`,
         `typed input must land on the prompt row:\n${after}`,
       )
     } finally {

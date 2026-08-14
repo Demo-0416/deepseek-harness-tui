@@ -26,6 +26,8 @@ import {
 } from '../harness.ts'
 import { HeadlessTerminal } from '../headless-terminal.ts'
 import { cardPhaseNotice } from '../../src/components/reconciler.ts'
+import { TodoComponent } from '../../src/components/transcript.ts'
+import { createPalette } from '../../src/components/theme.ts'
 
 /** `src/index.ts` is landed by a separate port; without it this suite cannot run. */
 const entryAvailable = await tuiEntryAvailable()
@@ -107,6 +109,67 @@ describe('Ctrl+O phase notice', () => {
     assert.equal(cardPhaseNotice('collapsed'), 'Tool cards collapsed; context hidden.')
     assert.equal(cardPhaseNotice('expanded'), 'Tool and context cards expanded.')
     assert.equal(cardPhaseNotice('hidden'), 'Tool cards hidden.')
+  })
+})
+
+describe('the plan panel', () => {
+  /** Six items, so every budget case has something to drop. */
+  const TODOS = [
+    { content: 'first item', status: 'completed' as const },
+    { content: 'second item', status: 'in_progress' as const },
+    { content: 'third item', status: 'pending' as const },
+    { content: 'fourth item', status: 'pending' as const },
+    { content: 'fifth item', status: 'pending' as const },
+    { content: 'sixth item', status: 'pending' as const },
+  ]
+
+  /**
+   * Build a panel over a fixed terminal height.
+   * @param rows - The terminal's row count.
+   * @returns The panel, already carrying {@link TODOS}.
+   */
+  function panel(rows: number): TodoComponent {
+    const component = new TodoComponent(createPalette(false), () => rows)
+    component.update(TODOS)
+    return component
+  }
+
+  it('shows the whole plan on a terminal with room for it', () => {
+    const lines = panel(40).render(60).join('\n')
+
+    assert.match(lines, /Plan/u)
+    assert.match(lines, /sixth item/u)
+    assert.doesNotMatch(lines, /\+/u)
+  })
+
+  it('drops the least urgent items and counts what it dropped', () => {
+    // 18 rows budget 4 items, so two pending items fall off the end.
+    const lines = panel(18).render(60).join('\n')
+
+    assert.match(lines, /second item/u)
+    assert.doesNotMatch(lines, /sixth item/u)
+    // In-progress first, then pending, then completed: the item being worked on
+    // is never the one a short panel drops, and the finished one goes first.
+    assert.match(lines, /… \+1 pending, 1 completed/u)
+  })
+
+  it('falls back to the summary row on a terminal with no rows to spare', () => {
+    const lines = panel(8).render(60).join('\n')
+
+    assert.match(lines, /Plan 1\/6 done · Next: second item/u)
+    assert.doesNotMatch(lines, /third item/u)
+  })
+
+  it('summarizes a finished plan without naming a next item', () => {
+    const component = new TodoComponent(createPalette(false), () => 40)
+    component.update([{ content: 'the only item', status: 'completed' }])
+    component.setExpanded(false)
+
+    assert.match(component.render(60).join('\n'), /Plan 1\/1 done$/u)
+  })
+
+  it('renders nothing at all until the session has a plan', () => {
+    assert.deepEqual(new TodoComponent(createPalette(false), () => 40).render(60), [])
   })
 })
 

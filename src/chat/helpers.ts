@@ -25,6 +25,12 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 const EDITOR_FRAME_GLYPH = '─'
 
 /**
+ * Entries pi-tui's own editor history keeps ({@link Editor.addToHistory} pops
+ * past it), mirrored here so the two never disagree on which prompt is oldest.
+ */
+const HISTORY_LIMIT = 100
+
+/**
  * Editor that carries its prompt inside the frame and shows a placeholder
  * without making it editable content.
  *
@@ -49,10 +55,67 @@ export class HintEditor extends Editor {
    * render width and the text column never moves between rows.
    */
   promptPrefix = ''
+  /**
+   * Every prompt this editor has been given, newest first, under pi-tui's own
+   * history rules (see {@link HintEditor.addToHistory}).
+   *
+   * pi-tui keeps its history private and exports no reader (`Editor.history` is
+   * `private`, `EditorOptions` takes no seed), so the reverse-incremental search
+   * Ctrl+R runs has to search a mirror. Feeding both from the one override is
+   * what keeps the mirror and the arrow keys' history from disagreeing about
+   * which prompt is the most recent.
+   */
+  private readonly entries: string[] = []
+
+  /**
+   * The prompt history, newest first.
+   *
+   * Named around the parent's private `history` field rather than after it: an
+   * instance field shadows a subclass method of the same name, so a `history()`
+   * accessor here would be replaced by pi-tui's own array at construction.
+   * @returns The mirrored entries; the array is the editor's own, so callers read it.
+   */
+  historyEntries(): readonly string[] {
+    return this.entries
+  }
+
+  /**
+   * Record a submitted prompt, in pi-tui's history and in the searchable mirror.
+   *
+   * Deliberately duplicates the parent's three rules rather than approximating
+   * them: entries are trimmed, blank ones are dropped, and a prompt equal to the
+   * newest entry is not stored twice. A mirror that kept an entry the parent
+   * dropped would make Ctrl+R offer a prompt the up arrow cannot reach.
+   * @param text - The submitted prompt.
+   */
+  override addToHistory(text: string): void {
+    super.addToHistory(text)
+    const trimmed = text.trim()
+    if (trimmed === '' || this.entries[0] === trimmed) return
+    this.entries.unshift(trimmed)
+    if (this.entries.length > HISTORY_LIMIT) this.entries.pop()
+  }
 
   override render(width: number): string[] {
     const prefixWidth = visibleWidth(this.promptPrefix)
-    const inner = width - prefixWidth
+    // The prompt ships its own gap (`❯ `), and pi-tui opens every content row
+    // with `paddingX` spaces of its own; printed one after the other they put
+    // two columns between the caret and the text, where Claude Code has one. So
+    // one padding column is spent by the prompt rather than added to it: the
+    // frame gives up one column less, row 1 drops that column, and the rows
+    // under it indent by one less. A prompt that ends in a glyph keeps the
+    // padding, because there the padding is the only gap there is.
+    const padding = this.getPaddingX()
+    let absorbed = stripTerminalSequences(this.promptPrefix).endsWith(' ') ? Math.min(1, padding) : 0
+    let inner = width - prefixWidth + absorbed
+    // pi-tui drops its padding entirely on a frame too narrow to seat it
+    // (`maxPadding = (width - 1) / 2`), and a column that is not rendered cannot
+    // be spent: such a frame falls back to the un-absorbed layout, where the
+    // prompt's own gap is the only one and no content column is dropped.
+    if (absorbed > 0 && Math.floor(Math.max(0, inner - 1) / 2) < padding) {
+      absorbed = 0
+      inner = width - prefixWidth
+    }
     // A frame with no room for the prompt plus one text column renders bare
     // rather than overflowing; anything else lays the editor out inside what the
     // prompt leaves. Rendering at the full width and prepending afterwards would
@@ -60,14 +123,17 @@ export class HintEditor extends Editor {
     // line — and leave `lastWidth`, which cursor navigation wraps against, wrong.
     if (prefixWidth === 0 || inner < 1) return this.renderFrame(width)
     const lines = this.renderFrame(inner)
-    const indent = ' '.repeat(prefixWidth)
-    const fill = this.borderColor(EDITOR_FRAME_GLYPH.repeat(prefixWidth))
+    const indent = ' '.repeat(prefixWidth - absorbed)
+    const fill = this.borderColor(EDITOR_FRAME_GLYPH.repeat(prefixWidth - absorbed))
     return lines.map((line, index) => {
+      // Tested on the row as pi-tui rendered it, before the absorbed padding
+      // column is dropped: with the padding gone, a row of typed dashes would
+      // read as a frame rule and lose its prompt.
       if (index === 0 || stripTerminalSequences(line).startsWith(EDITOR_FRAME_GLYPH)) return `${line}${fill}`
       // The prompt lands ahead of pi-tui's zero-width cursor marker, and the TUI
       // reads the hardware cursor column as the visible width before that marker,
       // so the cursor follows the text right without any arithmetic here.
-      return index === 1 ? `${this.promptPrefix}${line}` : `${indent}${line}`
+      return index === 1 ? `${this.promptPrefix}${line.slice(absorbed)}` : `${indent}${line}`
     })
   }
 
@@ -188,3 +254,19 @@ export const BANNER_REVEAL_INTERVAL_MS = 15
 
 /** Number of sweep frames the banner reveal spreads the terminal width over. */
 export const BANNER_REVEAL_STEPS = 24
+
+/**
+ * How much of the wordmark the sweep has uncovered after `frame` frames.
+ *
+ * A pure function of the frame and the width it is asked about, so the caller
+ * can re-read the terminal every frame: the sweep is always the same fraction of
+ * the CURRENT width, and a terminal resized mid-sweep stays aligned instead of
+ * wiping toward the width the animation started at.
+ * @param frame - Frames elapsed since the sweep began, starting at 1.
+ * @param columns - The terminal's current width.
+ * @returns Columns revealed, never past the width itself.
+ */
+export function bannerRevealWidth(frame: number, columns: number): number {
+  const total = Math.max(1, columns)
+  return Math.min(total, Math.max(1, Math.ceil(total / BANNER_REVEAL_STEPS)) * frame)
+}

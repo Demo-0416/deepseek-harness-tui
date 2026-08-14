@@ -79,6 +79,13 @@ export interface TuiConfig {
   theme?: TuiThemeConfig
   /** Terminal window title while the UI is mounted; a logged session title prefixes it. */
   title?: string
+  /**
+   * Key overrides for this terminal's own actions (`app.tools.cycle`,
+   * `app.history.search`, …) and for pi-tui's built-ins, keyed by action id and
+   * valued with one pi-tui key id or several. An action left out keeps its
+   * default; an action bound to `[]` is unbound.
+   */
+  keybindings?: Record<string, string | string[]>
 }
 
 const showReasoningSchema = z.boolean().default(true)
@@ -121,6 +128,7 @@ const TuiThemeConfigSchema: z<TuiThemeConfig> = z.object({
   inputPlaceholder: z.string().default(DEFAULT_INPUT_PLACEHOLDER),
 })
 const titleSchema = z.string().default('DeepSeek Harness')
+const keybindingsSchema = z.dict(z.union([z.string(), z.array(z.string())]))
 
 const tuiConfigSchemaFields = {
   showReasoning: showReasoningSchema,
@@ -142,6 +150,7 @@ const tuiConfigSchemaFields = {
   showHardwareCursor: showHardwareCursorSchema,
   theme: TuiThemeConfigSchema,
   title: titleSchema,
+  keybindings: keybindingsSchema,
 }
 
 /** Schemastery schema for presentation settings embedded by app bundles. */
@@ -160,6 +169,12 @@ export interface Config extends TuiConfig {
    * leaves the first turn to the user.
    */
   initialSkill?: string
+  /**
+   * Text the editor opens with, unsent. Set by a rewind handoff so the prompt
+   * the user chose to go back to is in the input frame, ready to edit and send
+   * again; never by a person, and never submitted on the user's behalf.
+   */
+  initialDraft?: string
 }
 
 /** Schemastery schema for the full plugin configuration. */
@@ -167,6 +182,7 @@ export const Config: z<Config> = z.object({
   welcome: z.string(),
   sessionId: z.string().default('main'),
   initialSkill: z.string(),
+  initialDraft: z.string(),
   showReasoning: tuiConfigSchemaFields.showReasoning,
   markdownRenderer: tuiConfigSchemaFields.markdownRenderer,
   maxToolOutputLines: tuiConfigSchemaFields.maxToolOutputLines,
@@ -185,6 +201,7 @@ export const Config: z<Config> = z.object({
   showHardwareCursor: tuiConfigSchemaFields.showHardwareCursor,
   theme: tuiConfigSchemaFields.theme,
   title: tuiConfigSchemaFields.title,
+  keybindings: tuiConfigSchemaFields.keybindings,
 })
 
 /** Fully defaulted TUI theme settings. */
@@ -218,6 +235,8 @@ export interface ResolvedTuiConfig {
   showHardwareCursor: boolean
   theme: ResolvedTuiThemeConfig
   title: string
+  /** Key overrides, empty when the deployment configured none. */
+  keybindings: Record<string, string | string[]>
 }
 
 /**
@@ -254,5 +273,6 @@ export function resolveTuiConfig(config: TuiConfig | undefined): ResolvedTuiConf
       inputPlaceholder: config?.theme?.inputPlaceholder ?? DEFAULT_INPUT_PLACEHOLDER,
     },
     title: config?.title ?? 'DeepSeek Harness',
+    keybindings: { ...config?.keybindings },
   }
 }

@@ -23,34 +23,43 @@ dsh --profile tui -p "run the tests"  # one-shot: answer and exit
 
 ### Keys
 
+Every key below is what the terminal actually binds; `?` at an empty prompt,
+`/hotkeys`, and `/help` print the same list from the same table.
+
 | Key | Action |
 |---|---|
-| Enter | send message |
-| Ctrl+J | insert newline |
-| Ctrl+C | cancel the active turn, or quit when idle |
-| Esc | return to chat / cancel |
-| ↑ / ↓ | history (in composer), navigate (in pickers) |
-| Ctrl+K | kill to end of line |
-| Ctrl+U | kill to start of line |
-| Alt+B / Alt+F | word left / right |
-| `?` | help |
-| Ctrl+S | sessions |
-| Ctrl+F | search |
-| Ctrl+T | trajectory |
-| Ctrl+B | subagents |
-| Ctrl+P | plugins |
-| Ctrl+, | settings |
+| Enter | send |
+| Shift+Enter / Alt+Enter | newline |
+| ↑ / ↓ | prompt history (composer), navigate (pickers) |
+| Tab | accept a completion |
+| `@` | reference a file |
+| `/` | run a command; `/skill:<name>` loads a skill |
+| `?` | shortcut help, on an empty prompt |
+| Ctrl+R | search the prompt history backwards |
+| Ctrl+T | expand or collapse the plan |
+| Ctrl+O | cycle tool cards: preview, full, hidden |
+| Ctrl+X | copy the last answer |
+| Ctrl+L | redraw |
+| Esc | cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind |
+| Ctrl+C | cancel while running, clear the draft while typing, twice to exit while idle |
+| Ctrl+D | exit on an empty prompt |
+| Shift+Ctrl+D | session debug panel |
 
-### Screens
+Bindings other than Ctrl+C are configurable: set `keybindings` on the bundle row
+(`{ "app.history.search": "ctrl+g" }`), keyed by action id and valued with one
+pi-tui key id or several. pi-tui's own editor bindings can be moved the same way.
 
-- **Chat** — the main view: streaming messages, tool calls, todos, status bar.
-- **Sessions** — pick and resume past sessions.
-- **Search** — search within the current session.
-- **Trajectory** — raw event log of the current session.
-- **Subagents** — subagent activity in the current session.
-- **Plugins** — loaded dsh plugins.
-- **Settings** — theme, approval policy.
-- **Help** — keybindings and slash commands.
+### Surfaces
+
+- **Chat** — the main view: streaming messages, tool cards, the plan, status row.
+- **Rewind** — `/rewind`, or a double Esc at an empty prompt: go back to an
+  earlier prompt. With a host that can fork the session the conversation moves
+  with it and the original stays resumable; otherwise the prompt comes back to
+  the editor alone. Files are never restored — dsh keeps no file checkpoints.
+- **Resume** — `/resume`: pick and resume a past session.
+- **Plugins** — `/plugins`: search and inspect the Loader's entries.
+- **Status** — `/status`: session diagnostics, system prompt, registered tools.
+- **Help** — `/help`: keys and slash commands.
 
 ## Development
 

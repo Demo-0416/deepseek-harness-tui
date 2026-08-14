@@ -1337,11 +1337,42 @@ export class ContextCardComponent extends CachedCardComponent {
   }
 }
 
-/** The plan/todo panel rendered above the prompt. */
+/** Terminal rows the plan panel never grows past, matching Claude Code's own cap. */
+const TODO_MAX_ROWS = 10
+
+/**
+ * Rows the screen owes the transcript, the prompt and the status line before the
+ * plan panel may spend any: below this the panel shows its one-line summary
+ * whatever the user asked for.
+ */
+const TODO_ROW_RESERVE = 14
+
+/** Order the expanded panel drops items in when it cannot show them all. */
+const TODO_PRIORITY: Record<TodoItem['status'], number> = { in_progress: 0, pending: 1, completed: 2 }
+
+/**
+ * The plan/todo panel rendered above the prompt, expanded or collapsed.
+ *
+ * The panel used to be unconditional: any session whose agent wrote a plan paid
+ * for it on every frame, with no key that took it back down. Ctrl+T collapses it
+ * to a single summary row — what is left to do and what is being done now —
+ * which is the same trade Claude Code offers, and the same one a long plan on a
+ * short terminal forces anyway.
+ */
 export class TodoComponent implements Component {
   private todos: readonly TodoItem[] = []
+  private expanded = true
 
-  constructor(private readonly palette: Palette) {}
+  /**
+   * @param palette - Active role palette.
+   * @param terminalRows - The terminal's current height, read per render so a
+   *   resize re-budgets the panel; the default leaves the panel unbounded for
+   *   callers (tests, snapshots) that measure it on its own.
+   */
+  constructor(
+    private readonly palette: Palette,
+    private readonly terminalRows: () => number = () => Number.MAX_SAFE_INTEGER,
+  ) {}
 
   /**
    * Replace the rendered plan items.
@@ -1351,27 +1382,112 @@ export class TodoComponent implements Component {
     this.todos = todos
   }
 
+  /** Whether this session has a plan at all, which is what makes Ctrl+T meaningful. */
+  hasTodos(): boolean {
+    return this.todos.length > 0
+  }
+
+  /** Whether the panel is showing its items rather than its one-line summary. */
+  isExpanded(): boolean {
+    return this.expanded
+  }
+
+  /**
+   * Show the items or the summary row.
+   * @param expanded - `true` for the item list, `false` for the summary row.
+   */
+  setExpanded(expanded: boolean): void {
+    this.expanded = expanded
+  }
+
   invalidate(): void {}
+
+  /**
+   * Items in display order, most urgent first, so a truncated panel drops the
+   * least interesting rows rather than whatever happens to sort last.
+   * @returns The items, in-progress first and completed last.
+   */
+  private ordered(): readonly TodoItem[] {
+    return [...this.todos]
+      .map((todo, index) => ({ todo, index }))
+      .sort((left, right) => TODO_PRIORITY[left.todo.status] - TODO_PRIORITY[right.todo.status]
+        || left.index - right.index)
+      .map(entry => entry.todo)
+  }
+
+  /**
+   * How many items the expanded panel may show on this terminal.
+   * @returns The item budget; zero on a terminal with no room to spare.
+   */
+  private itemBudget(): number {
+    const rows = this.terminalRows()
+    if (rows <= TODO_MAX_ROWS) return 0
+    return Math.min(TODO_MAX_ROWS, Math.max(3, rows - TODO_ROW_RESERVE))
+  }
+
+  /** One item as its icon and text, already truncated to the width. */
+  private renderItem(todo: TodoItem, width: number): string {
+    // Claude Code's three-state box: a checked item, a filled box for the one
+    // in flight (in the brand orange, the same accent the assistant bullet
+    // uses), and a hollow box for what is still queued.
+    const icon = todo.status === 'completed'
+      ? accent(this.palette, CLAUDE_COLORS.success, '✔')
+      : todo.status === 'in_progress'
+        ? accent(this.palette, CLAUDE_COLORS.claude, '◼')
+        : this.palette.dim('◻')
+    const content = displayText(todo.content)
+    // A finished item is struck through as well as recessed, and the one in
+    // flight is bold, so a glance at the panel separates done from doing from
+    // queued without reading the icons.
+    const text: string = todo.status === 'completed'
+      ? this.palette.strike(this.palette.dim(content))
+      : todo.status === 'in_progress' ? this.palette.bold(content) : content
+    return truncateToWidth(`  ${icon} ${text}`, width, '')
+  }
+
+  /** Counts of each status, for the summary and overflow rows. */
+  private counts(todos: readonly TodoItem[]): { inProgress: number; pending: number; completed: number } {
+    return {
+      inProgress: todos.filter(todo => todo.status === 'in_progress').length,
+      pending: todos.filter(todo => todo.status === 'pending').length,
+      completed: todos.filter(todo => todo.status === 'completed').length,
+    }
+  }
+
+  /**
+   * The collapsed row: how much of the plan is done, and what is being worked
+   * on now (or what comes next when nothing is in flight).
+   * @param width - Render width.
+   * @returns The single summary row.
+   */
+  private renderSummary(width: number): string {
+    const { completed } = this.counts(this.todos)
+    const active = this.todos.find(todo => todo.status === 'in_progress')
+      ?? this.todos.find(todo => todo.status === 'pending')
+    const next = active === undefined ? '' : ` · Next: ${displayText(active.content)}`
+    const summary = `Plan ${String(completed)}/${String(this.todos.length)} done${next}`
+    return truncateToWidth(this.palette.dim(`  ${summary}`), width, '…')
+  }
 
   render(width: number): string[] {
     if (this.todos.length === 0) return []
+    const budget = this.itemBudget()
+    // A terminal with no rows to spare gets the summary whatever the toggle
+    // says: Claude Code hides the panel entirely there, but a plan the user
+    // cannot see and cannot ask about is worse than one dim row.
+    if (!this.expanded || budget === 0) return plainIfNoColor(this.palette, ['', this.renderSummary(width)])
+    const ordered = this.ordered()
+    const shown = ordered.slice(0, budget)
+    const hidden = this.counts(ordered.slice(budget))
     const lines: string[] = [this.palette.bold(this.palette.accent('Plan'))]
-    for (const todo of this.todos) {
-      // Claude Code's three-state box: a checked item, a filled box for the one
-      // in flight (in the brand orange, the same accent the assistant bullet
-      // uses), and a hollow box for what is still queued.
-      const icon = todo.status === 'completed'
-        ? accent(this.palette, CLAUDE_COLORS.success, '✔')
-        : todo.status === 'in_progress'
-          ? accent(this.palette, CLAUDE_COLORS.claude, '◼')
-          : this.palette.dim('◻')
-      const content = displayText(todo.content)
-      // A finished item is struck through as well as recessed, so a glance at
-      // the panel separates done from pending without reading the icons.
-      const text: string = todo.status === 'completed'
-        ? this.palette.strike(this.palette.dim(content))
-        : content
-      lines.push(truncateToWidth(`  ${icon} ${text}`, width, ''))
+    for (const todo of shown) lines.push(this.renderItem(todo, width))
+    const overflow = [
+      hidden.inProgress === 0 ? undefined : `${String(hidden.inProgress)} in progress`,
+      hidden.pending === 0 ? undefined : `${String(hidden.pending)} pending`,
+      hidden.completed === 0 ? undefined : `${String(hidden.completed)} completed`,
+    ].filter((part): part is string => part !== undefined)
+    if (overflow.length > 0) {
+      lines.push(truncateToWidth(this.palette.dim(`   … +${overflow.join(', ')}`), width, ''))
     }
     return plainIfNoColor(this.palette, ['', ...lines])
   }

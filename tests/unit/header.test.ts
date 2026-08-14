@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { visibleWidth } from '@earendil-works/pi-tui'
 import { HeaderComponent, type HeaderInfo } from '../../src/components/transcript.ts'
+import { BANNER_REVEAL_STEPS, bannerRevealWidth } from '../../src/chat/helpers.ts'
 import { createPalette } from '../../src/components/theme.ts'
 
 /** Color disabled: every assertion here is about text, not escapes. */
@@ -130,5 +131,31 @@ describe('startup banner', () => {
 
     skills.push('lark-doc')
     assert.deepEqual(header.render(WIDE).map(row => row.trimEnd()), [...IDENTITY_ROWS, '', ' [Skills]', ' lark-doc'])
+  })
+})
+
+describe('banner sweep reveal', () => {
+  it('uncovers the same fraction of whatever width it is asked about', () => {
+    // The property a resize depends on: half the frames, half the width, at any
+    // terminal size. A sweep that captured its width at the start instead would
+    // keep wiping toward a frame that is no longer there.
+    const half = Math.ceil(BANNER_REVEAL_STEPS / 2)
+
+    assert.equal(bannerRevealWidth(half, 80) / 80 > 0.45, true)
+    assert.equal(bannerRevealWidth(half, 160) / 160 > 0.45, true)
+    assert.ok(bannerRevealWidth(half, 160) > bannerRevealWidth(half, 80))
+  })
+
+  it('finishes at the width, never past it', () => {
+    assert.equal(bannerRevealWidth(BANNER_REVEAL_STEPS, 80), 80)
+    assert.equal(bannerRevealWidth(BANNER_REVEAL_STEPS * 4, 80), 80)
+    // A terminal narrowed mid-sweep finishes on the next frame rather than
+    // spending the frames the wider one had left.
+    assert.equal(bannerRevealWidth(BANNER_REVEAL_STEPS, 4), 4)
+  })
+
+  it('reveals at least one column on the first frame, at any width', () => {
+    assert.equal(bannerRevealWidth(1, 1), 1)
+    assert.ok(bannerRevealWidth(1, 200) >= 1)
   })
 })
