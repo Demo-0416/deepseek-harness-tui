@@ -25,6 +25,7 @@ import {
   type SkillDetailState,
 } from '../../src/components/skills-panel.ts'
 import { createPalette } from '../../src/components/theme.ts'
+import { setLocale } from '../../src/i18n/index.ts'
 import {
   createTuiTestHarness,
   disposeTuiTestHarness,
@@ -241,6 +242,25 @@ describe('skills panel', () => {
       rows.join('\n'),
     )
     assert.ok(!rows.some(row => row.trim() === 'line 500'))
+  })
+
+  it('renders its own chrome in the active locale, and the skills verbatim', () => {
+    const { panel } = skillsPanel(SAMPLE_SKILLS)
+    setLocale('zh')
+    try {
+      const rows = panelRows(panel)
+      assert.ok(rows[2]?.startsWith(' 筛选：'), rows.join('\n'))
+      assert.equal(rows[3], ' 3/3 个 skill · 2 个用户可调用')
+      // The catalog itself is the registry's text, not this terminal's: a
+      // skill's name and its routing description are never translated.
+      assert.ok(rows.some(row => row.includes('Read and edit Feishu documents')), rows.join('\n'))
+      assert.equal(rows.at(-1), ' 输入以筛选 · ↑↓ 移动 · enter 查看详情 · esc 关闭')
+      assert.equal(skillBodyTruncated(900, undefined), '… 只显示前 400 行，共 900 行。')
+    } finally {
+      setLocale('en')
+    }
+    // The lookup is per frame, so the switch back repaints without remounting.
+    assert.equal(panelRows(panel)[3], ' 3/3 skills · 2 user invocable')
   })
 })
 

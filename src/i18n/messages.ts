@@ -46,6 +46,7 @@ export const EN_MESSAGES = {
   'command.exit.description': 'Exit after the active turn reaches idle',
   'command.quit.description': 'Exit after the active turn reaches idle',
   'command.lang.description': 'Show or switch the interface language',
+  'command.skills.description': 'Search this session\'s skills and read one in full',
 
   // `/lang` itself.
   'lang.name.en': 'English',
@@ -86,6 +87,28 @@ export const EN_MESSAGES = {
   'plugins.filter': 'filter:',
   'plugins.count.one': '{visible}/{total} entry · {active} active',
   'plugins.count.other': '{visible}/{total} entries · {active} active',
+
+  // `/skills`: the catalog panel, one skill's detail view, and the notices the
+  // command and `/skill:<name>` both report absences through.
+  'skills.unavailable': 'Skills are not available in this session.',
+  'skills.loading': 'Loading skills…',
+  'skills.empty': 'This session composes no skills.',
+  'skills.noMatch': 'No skills match the filter.',
+  'skills.filter': 'filter:',
+  'skills.hint': 'type to filter · ↑↓ move · enter details · esc close',
+  'skills.count.one': '{visible}/{total} skill · {invocable} user invocable',
+  'skills.count.other': '{visible}/{total} skills · {invocable} user invocable',
+  // The two halves of a row's invocation fact: the list marks only the skills
+  // `/skill:` refuses, the detail view names either side of it.
+  'skills.modelOnly': 'model only',
+  'skills.userInvocable': 'user invocable',
+  'skills.detailLoading': 'Loading skill…',
+  'skills.detailHint': '↑↓ scroll · esc back',
+  'skills.truncated': '… showing the first {max} of {total} lines.',
+  'skills.truncatedPath': '… showing the first {max} of {total} lines. Full text: {path}',
+  'skills.unknown': 'Unknown skill: {name}',
+  'skills.loadFailed': 'Skill "{name}" failed to load: {error}',
+  'skills.scanFailed': 'Skill scan failed: {error}',
 
   // The rewind picker.
   'rewind.title': 'Rewind',
@@ -266,6 +289,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'command.exit.description': '等当前轮次结束后退出',
   'command.quit.description': '等当前轮次结束后退出',
   'command.lang.description': '查看或切换界面语言',
+  'command.skills.description': '搜索本会话的 skill，并查看某个 skill 的完整正文',
 
   'lang.name.en': 'English',
   'lang.name.zh': '中文',
@@ -302,6 +326,24 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'plugins.filter': '筛选：',
   'plugins.count.one': '{visible}/{total} 个条目 · {active} 个运行中',
   'plugins.count.other': '{visible}/{total} 个条目 · {active} 个运行中',
+
+  'skills.unavailable': '本会话没有可用的 skill。',
+  'skills.loading': '正在加载 skill 列表…',
+  'skills.empty': '本会话没有组合任何 skill。',
+  'skills.noMatch': '没有 skill 匹配当前筛选。',
+  'skills.filter': '筛选：',
+  'skills.hint': '输入以筛选 · ↑↓ 移动 · enter 查看详情 · esc 关闭',
+  'skills.count.one': '{visible}/{total} 个 skill · {invocable} 个用户可调用',
+  'skills.count.other': '{visible}/{total} 个 skill · {invocable} 个用户可调用',
+  'skills.modelOnly': '仅模型可调用',
+  'skills.userInvocable': '用户可调用',
+  'skills.detailLoading': '正在加载 skill 正文…',
+  'skills.detailHint': '↑↓ 滚动 · esc 返回',
+  'skills.truncated': '… 只显示前 {max} 行，共 {total} 行。',
+  'skills.truncatedPath': '… 只显示前 {max} 行，共 {total} 行。完整正文：{path}',
+  'skills.unknown': '找不到名为 {name} 的 skill',
+  'skills.loadFailed': 'skill "{name}" 加载失败：{error}',
+  'skills.scanFailed': 'skill 扫描失败：{error}',
 
   'rewind.title': 'Rewind',
   'rewind.empty': '还没有可以回退到的提问。',

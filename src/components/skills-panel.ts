@@ -30,6 +30,7 @@ import {
 import type { SkillDefinition, SkillSummary } from '@deepseek-ai/dsh-skill'
 import { displayInlineText, displayText } from './text.ts'
 import type { Palette } from './theme.ts'
+import { plural, t } from '../i18n/index.ts'
 
 /** The panel's heading, so the command and its view name the same thing. */
 export const SKILLS_PANEL_TITLE = '/skills'
@@ -38,35 +39,34 @@ export const SKILLS_PANEL_TITLE = '/skills'
  * Reported when no skill registry serves this session, by every surface that
  * would otherwise have to explain the same absence: the panel is not opened at
  * all, because a skill-less deployment has nothing to search.
+ *
+ * These five are the English text of the message keys the panel renders, not a
+ * second source of it: every rendering site looks its key up per frame, so
+ * `/lang` moves the screen, while the constants stay for the tests and parity
+ * fixtures that quote the shipped English wording.
  */
-export const SKILLS_UNAVAILABLE = 'Skills are not available in this session.'
+export const SKILLS_UNAVAILABLE = t('skills.unavailable', undefined, 'en')
 
 /** Shown while the first catalog read is in flight; the panel is already on screen. */
-export const SKILLS_LOADING = 'Loading skills…'
+export const SKILLS_LOADING = t('skills.loading', undefined, 'en')
 
 /** Shown when the registry is mounted but this agent composes no skill. */
-export const SKILLS_EMPTY = 'This session composes no skills.'
+export const SKILLS_EMPTY = t('skills.empty', undefined, 'en')
 
 /** Shown when the filter matches nothing; the skills themselves still exist. */
-export const SKILLS_NO_MATCH = 'No skills match the filter.'
+export const SKILLS_NO_MATCH = t('skills.noMatch', undefined, 'en')
 
 /** Marks a row the user cannot invoke: the model may load it, `/skill:` may not. */
-export const SKILL_MODEL_ONLY = 'model only'
+export const SKILL_MODEL_ONLY = t('skills.modelOnly', undefined, 'en')
 
 /** Shown in the detail view while `ctx.skills.get()` is still reading the body. */
-export const SKILL_DETAIL_LOADING = 'Loading skill…'
+export const SKILL_DETAIL_LOADING = t('skills.detailLoading', undefined, 'en')
 
 /** Terminal rows the list state spends on its own chrome: blank, title, filter, count, footer. */
 const LIST_CHROME_ROWS = 5
 
 /** Terminal rows the detail state spends on its own chrome: blank, title, footer. */
 const DETAIL_CHROME_ROWS = 3
-
-/** The key hints the list state ends with, before its position readout. */
-const LIST_HINT = 'type to filter · ↑↓ move · enter details · esc close'
-
-/** The key hints the detail state ends with; Esc goes back to the list, not out. */
-const DETAIL_HINT = '↑↓ scroll · esc back'
 
 /**
  * Body lines one detail view renders before it stops.
@@ -85,8 +85,10 @@ const SKILL_BODY_MAX_LINES = 400
  * @returns the dim notice appended after the last shown body line.
  */
 export function skillBodyTruncated(total: number, path: string | undefined): string {
-  const shown = `showing the first ${String(SKILL_BODY_MAX_LINES)} of ${String(total)} lines`
-  return path === undefined ? `… ${shown}.` : `… ${shown}. Full text: ${path}`
+  const counts = { max: SKILL_BODY_MAX_LINES, total }
+  return path === undefined
+    ? t('skills.truncated', counts)
+    : t('skills.truncatedPath', { ...counts, path })
 }
 
 /** One skill's detail view, from the moment Enter asks for it. */
@@ -290,7 +292,7 @@ export class SkillsPanel implements Component, Focusable {
 
   /** Body rows for the list state, plus the display-row index of the selection bar. */
   private body(visible: readonly SkillSummary[], width: number): { rows: string[]; selectedRow: number } {
-    if (visible.length === 0) return { rows: [this.palette.dim(SKILLS_NO_MATCH)], selectedRow: 0 }
+    if (visible.length === 0) return { rows: [this.palette.dim(t('skills.noMatch'))], selectedRow: 0 }
     // The name column is sized to the widest visible name, but never past a
     // third of the panel: one outlier name must not push every description off
     // the right edge.
@@ -305,7 +307,7 @@ export class SkillsPanel implements Component, Focusable {
       // The marker rides the description rather than a column of its own:
       // most catalogs are entirely user-invocable, and an empty column in
       // every row buys nothing.
-      const marker = skill.invocation.userInvocable ? '' : `  ${SKILL_MODEL_ONLY}`
+      const marker = skill.invocation.userInvocable ? '' : `  ${t('skills.modelOnly')}`
       const description = displayInlineText(skill.description)
       return truncateToWidth(
         `${bar}${this.palette.text(name)}  ${this.palette.dim(`${description}${marker}`)}`,
@@ -322,7 +324,7 @@ export class SkillsPanel implements Component, Focusable {
       '',
       title,
       ...wrapTextWithAnsi(this.palette.dim(message), width).map(line => ` ${line}`),
-      ` ${this.palette.dim('esc close')}`,
+      ` ${this.palette.dim(t('panel.escClose'))}`,
     ]
   }
 
@@ -333,7 +335,7 @@ export class SkillsPanel implements Component, Focusable {
     const provenance = [
       skill.source,
       skill.provider,
-      skill.invocation.userInvocable ? 'user invocable' : SKILL_MODEL_ONLY,
+      skill.invocation.userInvocable ? t('skills.userInvocable') : t('skills.modelOnly'),
     ].join(' · ')
     const rows = [
       this.palette.accent(displayInlineText(skill.name)),
@@ -358,7 +360,7 @@ export class SkillsPanel implements Component, Focusable {
       ? this.detailBody(state.skill, width)
       : wrapTextWithAnsi(
         state.kind === 'loading'
-          ? this.palette.dim(SKILL_DETAIL_LOADING)
+          ? this.palette.dim(t('skills.detailLoading'))
           : this.palette.error(displayInlineText(state.message)),
         width,
       )
@@ -368,13 +370,17 @@ export class SkillsPanel implements Component, Focusable {
     this.detailOffset = Math.max(0, Math.min(this.detailOffset, Math.max(0, rows.length - viewport)))
     const shown = rows.slice(this.detailOffset, this.detailOffset + viewport)
     const position = rows.length > viewport
-      ? `  ·  ${String(this.detailOffset + 1)}–${String(this.detailOffset + shown.length)} of ${String(rows.length)}`
+      ? `  ·  ${t('panel.position', {
+        first: this.detailOffset + 1,
+        last: this.detailOffset + shown.length,
+        total: rows.length,
+      })}`
       : ''
     return [
       '',
       title,
       ...shown.map(line => ` ${line}`),
-      ` ${truncateToWidth(this.palette.dim(`${DETAIL_HINT}${position}`), width, '')}`,
+      ` ${truncateToWidth(this.palette.dim(`${t('skills.detailHint')}${position}`), width, '')}`,
     ]
   }
 
@@ -382,17 +388,18 @@ export class SkillsPanel implements Component, Focusable {
     const contentWidth = Math.max(1, width - 2)
     const title = ` ${this.palette.dim(SKILLS_PANEL_TITLE)}`
     if (this.detailName !== undefined) return this.renderDetail(title, contentWidth)
-    if (this.skills === undefined) return this.renderMessage(title, SKILLS_LOADING, contentWidth)
-    if (this.skills.length === 0) return this.renderMessage(title, SKILLS_EMPTY, contentWidth)
+    if (this.skills === undefined) return this.renderMessage(title, t('skills.loading'), contentWidth)
+    if (this.skills.length === 0) return this.renderMessage(title, t('skills.empty'), contentWidth)
     const visible = this.filtered()
     this.filter.focused = true
     const filterLine = truncateToWidth(
-      `${this.palette.dim('filter:')} ${this.filter.render(Math.max(1, contentWidth - 8)).join('')}`,
+      `${this.palette.dim(t('skills.filter'))} ${this.filter.render(Math.max(1, contentWidth - 8)).join('')}`,
       contentWidth,
       '',
     )
     const invocable = this.skills.filter(skill => skill.invocation.userInvocable).length
-    const count = `${String(visible.length)}/${String(this.skills.length)} skills · ${String(invocable)} user invocable`
+    const total = this.skills.length
+    const count = plural(total, 'skills.count', { visible: visible.length, total, invocable })
     const { rows, selectedRow } = this.body(visible, contentWidth)
     const viewport = this.viewport()
     // The selection bar stays in view: scrolling follows it, and a resize or a
@@ -402,7 +409,11 @@ export class SkillsPanel implements Component, Focusable {
     if (selectedRow >= this.offset + viewport) this.offset = selectedRow - viewport + 1
     const shown = rows.slice(this.offset, this.offset + viewport)
     const position = rows.length > viewport
-      ? `  ·  ${String(this.offset + 1)}–${String(this.offset + shown.length)} of ${String(rows.length)}`
+      ? `  ·  ${t('panel.position', {
+        first: this.offset + 1,
+        last: this.offset + shown.length,
+        total: rows.length,
+      })}`
       : ''
     return [
       '',
@@ -410,7 +421,7 @@ export class SkillsPanel implements Component, Focusable {
       ` ${filterLine}`,
       ` ${truncateToWidth(this.palette.dim(count), contentWidth, '')}`,
       ...shown.map(line => ` ${line}`),
-      ` ${truncateToWidth(this.palette.dim(`${LIST_HINT}${position}`), contentWidth, '')}`,
+      ` ${truncateToWidth(this.palette.dim(`${t('skills.hint')}${position}`), contentWidth, '')}`,
     ]
   }
 }

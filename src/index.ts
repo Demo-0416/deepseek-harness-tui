@@ -157,10 +157,7 @@ import {
   PluginsPanel,
   type PluginInventoryReader,
 } from './components/plugins-panel.ts'
-import {
-  SkillsPanel,
-  SKILLS_UNAVAILABLE,
-} from './components/skills-panel.ts'
+import { SkillsPanel } from './components/skills-panel.ts'
 import {
   compactTargetLabel,
   CUSTOM_ANSWER_KEYS,
@@ -1982,7 +1979,7 @@ export function createTuiChat(
   const showSkills = (): void => {
     const registry = skillRegistry()
     if (registry === undefined) {
-      appendNotice(SKILLS_UNAVAILABLE, 'warning')
+      appendNotice(t('skills.unavailable'), 'warning')
       return
     }
     void panelOverlay?.close()
@@ -2004,7 +2001,7 @@ export function createTuiChat(
               (skill) => {
                 if (disposed || scan.signal.aborted) return
                 panel?.setDetail(name, skill === undefined
-                  ? { kind: 'failed', message: `Unknown skill: ${name}` }
+                  ? { kind: 'failed', message: t('skills.unknown', { name }) }
                   : { kind: 'ready', skill })
                 requestRender()
               },
@@ -2012,7 +2009,7 @@ export function createTuiChat(
                 if (disposed || scan.signal.aborted) return
                 panel?.setDetail(name, {
                   kind: 'failed',
-                  message: `Skill "${name}" failed to load: ${errorChain(error)}`,
+                  message: t('skills.loadFailed', { name, error: errorChain(error) }),
                 })
                 requestRender()
               },
@@ -2045,7 +2042,7 @@ export function createTuiChat(
       (error: unknown) => {
         if (disposed || scan.signal.aborted) return
         void session.close()
-        appendNotice(`Skill scan failed: ${errorChain(error)}`, 'error')
+        appendNotice(t('skills.scanFailed', { error: errorChain(error) }), 'error')
       },
     )
   }
@@ -2678,20 +2675,20 @@ export function createTuiChat(
     // agent does have.
     const skills = skillRegistry()
     if (skills === undefined) {
-      appendNotice(SKILLS_UNAVAILABLE, 'warning')
+      appendNotice(t('skills.unavailable'), 'warning')
       return Promise.resolve()
     }
     const lookup = { cwd, scope: agent, signal: skillAbort.signal }
     const reportFailure = (error: unknown): void => {
       if (disposed) return
-      appendNotice(`Skill "${name}" failed to load: ${errorChain(error)}`, 'error')
+      appendNotice(t('skills.loadFailed', { name, error: errorChain(error) }), 'error')
     }
     return skills.list(lookup).then(
       (summaries) => {
         if (disposed) return
         const summary = summaries.find(skill => skill.name === name)
         if (summary === undefined) {
-          appendNotice(`Unknown skill: ${name}`, 'warning')
+          appendNotice(t('skills.unknown', { name }), 'warning')
           return
         }
         if (!summary.invocation.userInvocable) {
@@ -2702,7 +2699,7 @@ export function createTuiChat(
           (skill) => {
             if (disposed) return
             if (skill === undefined) {
-              appendNotice(`Unknown skill: ${name}`, 'warning')
+              appendNotice(t('skills.unknown', { name }), 'warning')
               return
             }
             if (!skill.invocation.userInvocable) {
