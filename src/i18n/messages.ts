@@ -47,6 +47,8 @@ export const EN_MESSAGES = {
   'command.quit.description': 'Exit after the active turn reaches idle',
   'command.lang.description': 'Show or switch the interface language',
   'command.skills.description': 'Search this session\'s skills and read one in full',
+  'command.mcp.description': 'Show the MCP servers this agent\'s tools come from',
+  'command.doctor.description': 'Check the runtime, terminal, model route, and mounted services',
 
   // `/lang` itself.
   'lang.name.en': 'English',
@@ -109,6 +111,71 @@ export const EN_MESSAGES = {
   'skills.unknown': 'Unknown skill: {name}',
   'skills.loadFailed': 'Skill "{name}" failed to load: {error}',
   'skills.scanFailed': 'Skill scan failed: {error}',
+
+  // `/mcp`. The counted rows are plural pairs; the "nothing is mounted" block is
+  // three paragraphs, each one key with its own line breaks, so a translation
+  // may rewrap where its own language wants to. The bundle row between them is
+  // YAML a user copies, not prose, and is never translated.
+  'mcp.servers.one': '{count} server',
+  'mcp.servers.other': '{count} servers',
+  'mcp.tools.one': '{count} tool',
+  'mcp.tools.other': '{count} tools',
+  'mcp.summary': '{servers} · {tools}',
+  'mcp.serverRow': '({tools})',
+  'mcp.empty.headline': 'No MCP tools are registered for this agent.',
+  'mcp.empty.howto': 'MCP servers reach the model through @deepseek-ai/dsh-mcp-client, one plugin\n'
+    + 'instance per server. Install it and add a row to this profile\'s bundle:',
+  'mcp.empty.transport': 'transport is "stdio" (command, args, env, cwd) or "streamable-http" (url,\n'
+    + 'headers). Every tool the server advertises is then registered as\n'
+    + 'mcp__<serverName>__<rawName>, and this panel lists it.',
+
+  // `/doctor`: one row per check, each a verdict, an observation, and — when it
+  // is not a pass — the one thing to do about it.
+  'doctor.flash.running': 'Running environment checks…',
+  'doctor.healthy': 'Everything this terminal depends on is in place.',
+  'doctor.summary.failed': '{count} failed',
+  'doctor.summary.warned': '{count} to look at',
+  'doctor.label.node': 'Node',
+  'doctor.label.terminal': 'Terminal',
+  'doctor.label.screen': 'Screen',
+  'doctor.label.color': 'Color',
+  'doctor.label.model': 'Model',
+  'doctor.label.persistence': 'Persistence',
+  'doctor.label.preset': 'Preset',
+  'doctor.node.advice': 'this bundle is published for Node {range}; older runtimes miss APIs it calls unguarded',
+  'doctor.terminal.pass': 'stdin and stdout are both TTYs',
+  'doctor.terminal.failOne': '{end} is not a TTY',
+  'doctor.terminal.failBoth': 'stdin and stdout are not a TTY',
+  'doctor.terminal.advice':
+    'keys and redraws need a terminal on both ends; for pipes use --print, which runs one task with no UI',
+  'doctor.screen.narrowAdvice': 'below {columns} columns tool cards, diffs, and panels wrap; widen the window',
+  'doctor.screen.shortAdvice': 'below {rows} rows a panel leaves no room for the editor; make the window taller',
+  'doctor.color.disabled': 'disabled (theme.color is off)',
+  'doctor.color.disabledAdvice': 'every surface renders as plain text; set theme.color to bring the palette back',
+  'doctor.color.basic': '16-color palette',
+  'doctor.color.truecolor': '16-color palette, truecolor brand art',
+  'doctor.model.noProvider': 'no LLM provider is registered',
+  'doctor.model.noProviderAdvice':
+    'the profile mounts no adapter row, or none of them activated; check the bundle and its credentials',
+  'doctor.model.noRoute': 'no model selected (providers: {providers})',
+  'doctor.model.noRouteAdvice': 'pick one with /model, or pass --model provider/model on the command line',
+  'doctor.model.resolves': '{route} resolves (providers: {providers})',
+  'doctor.model.noAdapter': '{route} has no registered adapter',
+  'doctor.model.noAdapterAdvice':
+    'no adapter answers for "{provider}"; mount its plugin row, or switch with /model',
+  'doctor.model.failed': '{route} did not resolve: {error}',
+  'doctor.model.failedAdvice':
+    'the adapter is registered but rejected the lookup; check the provider\'s credentials and base URL',
+  'doctor.persistence.mounted': 'sessionPersistence is mounted',
+  'doctor.persistence.missing': 'sessionPersistence is not mounted',
+  'doctor.persistence.advice':
+    'this session lives in memory only: it cannot be resumed after exit, and /export re-serializes what is still in RAM',
+  'doctor.preset.noRoster': 'no agent-preset roster is mounted',
+  'doctor.preset.noRosterAdvice':
+    'the shipped bundle patch mounts agentPresets; without it /preset lists nothing and every session runs one fixed agent plane',
+  'doctor.preset.unjoined': 'the roster is mounted but this session names no preset',
+  'doctor.preset.unjoinedAdvice':
+    'the session was opened without joining a preset; start a new one with /new, or select one with /preset',
 
   // The rewind picker.
   'rewind.title': 'Rewind',
@@ -290,6 +357,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'command.quit.description': '等当前轮次结束后退出',
   'command.lang.description': '查看或切换界面语言',
   'command.skills.description': '搜索本会话的 skill，并查看某个 skill 的完整正文',
+  'command.mcp.description': '显示本 agent 的工具分别来自哪些 MCP server',
+  'command.doctor.description': '检查运行时、终端、模型路由与已挂载的服务',
 
   'lang.name.en': 'English',
   'lang.name.zh': '中文',
@@ -344,6 +413,58 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'skills.unknown': '找不到名为 {name} 的 skill',
   'skills.loadFailed': 'skill "{name}" 加载失败：{error}',
   'skills.scanFailed': 'skill 扫描失败：{error}',
+
+  'mcp.servers.one': '{count} 个 server',
+  'mcp.servers.other': '{count} 个 server',
+  'mcp.tools.one': '{count} 个工具',
+  'mcp.tools.other': '{count} 个工具',
+  'mcp.summary': '{servers} · {tools}',
+  'mcp.serverRow': '（{tools}）',
+  'mcp.empty.headline': '本 agent 没有注册任何 MCP 工具。',
+  'mcp.empty.howto': 'MCP server 通过 @deepseek-ai/dsh-mcp-client 接入模型，一个 server 对应一个 plugin\n'
+    + '实例。安装它，并在本 profile 的 bundle 里加一行：',
+  'mcp.empty.transport': 'transport 取 "stdio"（command、args、env、cwd）或 "streamable-http"（url、\n'
+    + 'headers）。server 声明的每个工具都会以 mcp__<serverName>__<rawName> 注册，\n'
+    + '然后出现在这个面板里。',
+
+  'doctor.flash.running': '正在做环境检查…',
+  'doctor.healthy': '本终端依赖的东西都到位了。',
+  'doctor.summary.failed': '{count} 项失败',
+  'doctor.summary.warned': '{count} 项需要留意',
+  'doctor.label.node': 'Node',
+  'doctor.label.terminal': '终端',
+  'doctor.label.screen': '窗口',
+  'doctor.label.color': '配色',
+  'doctor.label.model': '模型',
+  'doctor.label.persistence': '持久化',
+  'doctor.label.preset': 'Preset',
+  'doctor.node.advice': '本 bundle 面向 Node {range} 发布；更老的运行时缺少它直接调用的 API',
+  'doctor.terminal.pass': 'stdin 与 stdout 都是 TTY',
+  'doctor.terminal.failOne': '{end} 不是 TTY',
+  'doctor.terminal.failBoth': 'stdin 与 stdout 都不是 TTY',
+  'doctor.terminal.advice': '按键与重绘要求两端都是终端；走管道请用 --print，它跑一次任务、不启动 UI',
+  'doctor.screen.narrowAdvice': '窄于 {columns} 列时工具卡片、diff 和面板都会折行；把窗口拉宽',
+  'doctor.screen.shortAdvice': '少于 {rows} 行时面板会挤掉输入框；把窗口拉高',
+  'doctor.color.disabled': '已关闭（theme.color 为 off）',
+  'doctor.color.disabledAdvice': '所有界面都会渲染成纯文本；打开 theme.color 才能恢复配色',
+  'doctor.color.basic': '16 色配色',
+  'doctor.color.truecolor': '16 色配色，品牌图形用 truecolor',
+  'doctor.model.noProvider': '没有注册任何 LLM provider',
+  'doctor.model.noProviderAdvice': 'profile 里没有 adapter 行，或者它们都没激活；检查 bundle 与其凭据',
+  'doctor.model.noRoute': '未选择模型（provider：{providers}）',
+  'doctor.model.noRouteAdvice': '用 /model 选一个，或在命令行传 --model provider/model',
+  'doctor.model.resolves': '{route} 可解析（provider：{providers}）',
+  'doctor.model.noAdapter': '{route} 没有对应的 adapter',
+  'doctor.model.noAdapterAdvice': '没有 adapter 负责 "{provider}"；挂上它的 plugin 行，或用 /model 换一个',
+  'doctor.model.failed': '{route} 解析失败：{error}',
+  'doctor.model.failedAdvice': 'adapter 已注册但拒绝了这次查询；检查该 provider 的凭据与 base URL',
+  'doctor.persistence.mounted': '已挂载 sessionPersistence',
+  'doctor.persistence.missing': '未挂载 sessionPersistence',
+  'doctor.persistence.advice': '本会话只存在于内存中：退出后无法 resume，/export 导出的也只是还在内存里的内容',
+  'doctor.preset.noRoster': '未挂载 agent preset 名册',
+  'doctor.preset.noRosterAdvice': '随包的 bundle patch 会挂载 agentPresets；没有它，/preset 列不出任何东西，每个会话都跑同一个固定的 agent plane',
+  'doctor.preset.unjoined': '名册已挂载，但本会话没有指定 preset',
+  'doctor.preset.unjoinedAdvice': '这个会话开启时没有加入任何 preset；用 /new 开一个新会话，或用 /preset 选一个',
 
   'rewind.title': 'Rewind',
   'rewind.empty': '还没有可以回退到的提问。',

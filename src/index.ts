@@ -212,6 +212,8 @@ import {
   goalStatusRows,
 } from './chat/session-summary.ts'
 import { createResumeController } from './chat/resume.ts'
+import { renderMcpPanel } from './chat/mcp.ts'
+import { renderDoctorPanel, runDoctorChecks } from './chat/doctor.ts'
 import type { TuiForkRequest, TuiResumeHost, TuiRuntime } from './runtime.ts'
 import { toolCallTouchesFiles, WorkspaceFileSearch } from './chat/file-autocomplete.ts'
 import { resolveFileSearchCommand } from './chat/fd.ts'
@@ -2047,6 +2049,52 @@ export function createTuiChat(
     )
   }
 
+  /**
+   * The MCP inventory, folded out of the tool names this agent can see.
+   *
+   * The registry view is read directly rather than through the system prompt
+   * assembly `/status` uses: the assembly runs every prompt section to get the
+   * same names, and this panel needs nothing else from it. `schemas` is the
+   * scoped view, so a preset that restricts a server's tools away reports what
+   * this agent may actually call rather than what the process registered.
+   */
+  const showMcp = (): void => {
+    const names = agent.ctx.tools.schemas(agent).map(tool => tool.name)
+    showPanel('/mcp', [...renderMcpPanel(names, palette)])
+  }
+
+  /**
+   * Environment self-check (`/doctor`): what this session is running ON.
+   *
+   * Every input is read here and handed over as a value, so the checks stay a
+   * pure function of the environment they describe. The one asynchronous check
+   * is the route resolution, which is the only thing that proves an adapter
+   * answers for the selected model rather than merely being registered.
+   */
+  const showDoctor = async (): Promise<void> => {
+    // Resolving a route can wait on an adapter that is still coming up; without
+    // the hint the screen looks like `/doctor` never landed.
+    const settleHint = flashPending(t('doctor.flash.running'))
+    const checks = await runDoctorChecks({
+      nodeVersion: process.version,
+      stdinTty: process.stdin.isTTY === true,
+      stdoutTty: process.stdout.isTTY === true,
+      columns: runtime.terminal.columns,
+      rows: runtime.terminal.rows,
+      color: resolved.theme.color,
+      truecolor: resolved.theme.truecolor,
+      providers: ctx.llm.listProviders().map(provider => provider.id),
+      route: target.current,
+      resolveModelInfo: (provider, model) => ctx.llm.resolveModelInfo(provider, model),
+      persistence: ctx.get('sessionPersistence') !== undefined,
+      presets: ctx.get('agentPresets') !== undefined,
+      preset: presetController.currentPreset(),
+    }).finally(settleHint)
+    /* v8 ignore next -- disposal during the awaited resolution is covered by command-owner teardown tests. */
+    if (disposed) return
+    showPanel('/doctor', [...renderDoctorPanel(checks, palette)])
+  }
+
   const showStatus = async (signal: AbortSignal): Promise<void> => {
     // Assembling the system prompt runs every registered section, some of which
     // read files or ask a service; on a cold cache that is long enough for the
@@ -2567,6 +2615,16 @@ export function createTuiChat(
       name: 'status',
       description: 'Show session diagnostics, system prompt, and registered tools',
       handler: async ({ signal }) => { await showStatus(signal); return { kind: 'success' } },
+    })
+    commandCtx.commands.register({
+      name: 'mcp',
+      description: 'Show the MCP servers this agent\'s tools come from',
+      handler: () => { showMcp(); return { kind: 'success' } },
+    })
+    commandCtx.commands.register({
+      name: 'doctor',
+      description: 'Check the runtime, terminal, model route, and mounted services',
+      handler: async () => { await showDoctor(); return { kind: 'success' } },
     })
     const exitHandler = (): CommandResult => {
       requestExit()

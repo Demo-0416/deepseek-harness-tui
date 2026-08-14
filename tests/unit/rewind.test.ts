@@ -72,11 +72,11 @@ async function seededSession(): Promise<Session> {
   session.append('turn/start', { turn: 1 })
   prompt('first prompt')
   answer(1)
-  session.append('turn/end', { turn: 1, reason: 'complete' })
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
   session.append('turn/start', { turn: 2 })
   prompt('second prompt')
   answer(2)
-  session.append('turn/end', { turn: 2, reason: 'complete' })
+  session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
   session.append('turn/start', { turn: 3 })
   prompt('third prompt')
   return session
@@ -94,7 +94,7 @@ describe('rewind targets', () => {
       content: [{ type: 'text', text: 'injected workspace snapshot' }],
       // Producer context is a `user/message` too; offering it as a rewind
       // target would put text in the editor that no human wrote.
-      source: { kind: 'context', name: 'workspace' },
+      source: { kind: 'plugin', plugin: 'workspace', form: 'relay' },
     }), { surfaceOp: 'append' })
 
     assert.deepEqual(
@@ -198,7 +198,7 @@ function seedTwoTurns(session: Session): void {
       source: { kind: 'model', provider: 'mock', model: 'deepseek-v4-flash' },
     }),
   }, { surfaceOp: 'append' })
-  session.append('turn/end', { turn: 1, reason: 'complete' })
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
   session.append('turn/start', { turn: 2 })
   appendUser(session, 'the second thing I asked')
 }

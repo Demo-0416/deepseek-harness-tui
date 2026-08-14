@@ -108,6 +108,8 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/resume [session]` | list this workspace's resumable sessions; an argument fills the picker's search box |
 | `/skills` | search this session's skills and read one in full |
 | `/status` | session diagnostics, system prompt, registered tools |
+| `/mcp` | the MCP servers this agent's tools come from, with each server's tool list; says how to mount one when the profile has none |
+| `/doctor` | check the Node version, the terminal, the model route, and the services this terminal degrades without |
 | `/exit`, `/quit` | exit after the active turn reaches idle |
 | `/skill:<name> [instructions]` | load a skill into the conversation |
 | `/reload` | EXPERIMENTAL (dev): re-read the Loader's config files and apply the diff, idle only. Registered only when `experimentalCommands` is on |
