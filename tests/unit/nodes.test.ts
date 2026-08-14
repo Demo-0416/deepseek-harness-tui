@@ -643,3 +643,82 @@ describe('foldEvents', () => {
     })
   })
 })
+
+/**
+ * The thinking spans the fold measures for the collapsed group row.
+ *
+ * These build the events by hand rather than through a session, because the
+ * quantity under test *is* the log's timestamps: a real session stamps every
+ * append with the wall clock, and a span between two appends of the same
+ * millisecond measures nothing.
+ */
+describe('thinking spans', () => {
+  /** Epoch the fabricated log starts at. */
+  const AT = 1_700_000_000_000
+
+  /** One `assistant/chunk` at an exact offset from {@link AT}. */
+  function chunkAt(
+    seq: number,
+    offsetMs: number,
+    chunk: Extract<SessionEvent, { type: 'assistant/chunk' }>['data']['chunk'],
+  ): SessionEvent {
+    return { type: 'assistant/chunk', seq, time: AT + offsetMs, data: { turn: 1, step: 1, chunk } }
+  }
+
+  it('publishes an open span as its start, and closes it into a total', () => {
+    const nodes: ChatNode[] = []
+    foldEvent(nodes, chunkAt(0, 0, { type: 'reasoning-delta', index: 0, text: 'weighing' }))
+    foldEvent(nodes, chunkAt(1, 1_500, { type: 'reasoning-delta', index: 0, text: ' the options' }))
+    const node = nodeOf(nodes, 0, 'assistant')
+    // The fold reads no clock, so a running span cannot be published as an
+    // elapsed value; the renderer accumulates it against its own.
+    assert.equal(node.thinkingSince, AT)
+    assert.equal(node.thinkingMs, undefined)
+    foldEvent(nodes, chunkAt(2, 4_000, { type: 'text-delta', index: 1, text: 'Here goes' }))
+    assert.equal(node.thinkingMs, 4_000, 'the span ends where the answer starts')
+    assert.equal(node.thinkingSince, undefined)
+  })
+
+  it('sums the spans of a step that thought more than once', () => {
+    const nodes: ChatNode[] = []
+    foldEvent(nodes, chunkAt(0, 0, { type: 'reasoning-delta', index: 0, text: 'first' }))
+    foldEvent(nodes, chunkAt(1, 2_000, {
+      type: 'tool-call-delta',
+      index: 1,
+      id: CallId('call-1'),
+      name: 'grep',
+      argumentsDelta: '{"pattern":"TODO"}',
+    }))
+    foldEvent(nodes, chunkAt(2, 5_000, { type: 'reasoning-delta', index: 2, text: 'second' }))
+    foldEvent(nodes, { type: 'step/end', seq: 3, time: AT + 6_000, data: { turn: 1, step: 1 } })
+    const node = nodeOf(nodes, 0, 'assistant')
+    assert.equal(node.thinkingMs, 3_000, 'two spans of 2s and 1s, with the tool call between them')
+    assert.equal(node.thinkingSince, undefined)
+  })
+
+  it('stops the clock where a turn stopped, mid-thought', () => {
+    const nodes: ChatNode[] = []
+    foldEvent(nodes, chunkAt(0, 0, { type: 'reasoning-delta', index: 0, text: 'weighing' }))
+    const aborted: SessionEvent<'turn/end'> = {
+      type: 'turn/end',
+      seq: 1,
+      time: AT + 7_000,
+      data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } },
+    }
+    foldEvent(nodes, aborted)
+    const node = nodeOf(nodes, 0, 'assistant')
+    assert.equal(node.thinkingMs, 7_000)
+    assert.equal(node.thinkingSince, undefined)
+  })
+
+  it('leaves a step that never reasoned without a span of any kind', async () => {
+    await withSession((session) => {
+      session.append('step/start', { turn: 1, step: 1 })
+      session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'sure' } })
+      session.append('step/end', { turn: 1, step: 1 })
+      const node = nodeOf(foldEvents(session.events), 0, 'assistant')
+      assert.equal(node.thinkingMs, undefined)
+      assert.equal(node.thinkingSince, undefined)
+    })
+  })
+})

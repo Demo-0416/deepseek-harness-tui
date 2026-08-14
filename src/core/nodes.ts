@@ -342,6 +342,36 @@ function openToolCall(nodes: ChatNode[], callId: string, name: string, time: num
   return node
 }
 
+/**
+ * Open the step's thinking span at `time`, unless one is already open.
+ *
+ * The span is the log's own bracket around the reasoning phase: it opens at the
+ * first reasoning delta and closes at whatever ends the thinking
+ * ({@link closeThinking}). Only the start is recorded, because the fold reads no
+ * clock — the renderer accumulates the open span against its own.
+ */
+function openThinking(node: AssistantNode, time: number): void {
+  node.thinkingSince ??= time
+}
+
+/**
+ * Close the step's open thinking span at `time`, adding its wall time to the
+ * step's total.
+ *
+ * A backward wall-clock step contributes zero rather than a negative span, the
+ * same stance the step timing buckets take on the same log. The field is
+ * deleted rather than set to `undefined` so a folded node carries exactly the
+ * shape a replayed one does — "no span is open" is the field's absence.
+ * @returns whether a span was actually closed.
+ */
+function closeThinking(node: AssistantNode, time: number): boolean {
+  const since = node.thinkingSince
+  if (since === undefined) return false
+  node.thinkingMs = (node.thinkingMs ?? 0) + Math.max(0, time - since)
+  delete node.thinkingSince
+  return true
+}
+
 /** Open the assistant node for one step, creating it when the step is new. */
 function openAssistant(nodes: ChatNode[], turn: number, step: number, time: number): AssistantNode {
   const existing = findAssistant(nodes, turn, step)
@@ -432,16 +462,23 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
       switch (chunk.type) {
         case 'text-delta': {
           const node = openAssistant(nodes, turn, step, time)
+          // The answer is where the thinking stopped.
+          closeThinking(node, time)
           node.text += chunk.text
           return touch(node)
         }
         case 'reasoning-delta': {
           const node = openAssistant(nodes, turn, step, time)
+          // Keyed off the delta rather than off `block-start`: a block boundary
+          // opens no node here (see the `default` arm), and the delta that
+          // follows it is at most a stream frame later.
+          openThinking(node, time)
           node.reasoning += chunk.text
           return touch(node)
         }
         case 'tool-call-delta': {
           const node = openAssistant(nodes, turn, step, time)
+          closeThinking(node, time)
           const tool = openToolCall(nodes, chunk.id, chunk.name ?? '', time)
           if (chunk.name !== undefined && tool.name === '') tool.name = chunk.name
           tool.argsRaw += chunk.argumentsDelta
@@ -463,6 +500,9 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
     case 'assistant/message': {
       const { turn, step, message, usage } = event.data
       const node = openAssistant(nodes, turn, step, time)
+      // A settled message ends the phase, including for a provider that streams
+      // nothing and logs the whole message at once.
+      closeThinking(node, time)
       // The settled message replaces the streamed buffer wholesale — except an
       // empty one, which exists only to host usage and would otherwise erase
       // the step's own output.
@@ -481,6 +521,7 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
     case 'step/end': {
       const { turn, step } = event.data
       const node = openAssistant(nodes, turn, step, time)
+      closeThinking(node, time)
       node.completedAt = time
       if (node.status === 'running') node.status = 'complete'
       return touch(node)
@@ -494,9 +535,15 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
       tool.argsComplete = true
       touch(tool)
       const assistant = findAssistant(nodes, turn, step)
-      if (assistant !== undefined && !assistant.toolCalls.includes(callId)) {
-        assistant.toolCalls.push(callId)
-        touch(assistant)
+      if (assistant !== undefined) {
+        // The call is the other end of the thinking bracket, for a provider
+        // whose calls arrive whole rather than as argument deltas.
+        let changed = closeThinking(assistant, time)
+        if (!assistant.toolCalls.includes(callId)) {
+          assistant.toolCalls.push(callId)
+          changed = true
+        }
+        if (changed) touch(assistant)
       }
       return true
     }
@@ -579,6 +626,11 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
       // longer claims; the cards themselves remain the record of what ran.
       const node = findAssistant(nodes, data.turn, data.step)
       let changed = false
+      // The attempt's thinking span is closed, not withdrawn: the wall time was
+      // spent whatever the request did afterwards, and the collapsed row that
+      // reports it answers "how long has this been going", not "how much of the
+      // reasoning on screen survived".
+      if (node !== undefined && closeThinking(node, time)) changed = touch(node)
       if (node !== undefined && (node.text !== '' || node.reasoning !== '' || node.toolCalls.length > 0)) {
         node.text = ''
         node.reasoning = ''
@@ -604,6 +656,8 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
         const node = nodes[index]
         if (node?.kind !== 'assistant' || node.turn !== event.data.turn) continue
         if (node.status !== 'running') break
+        // A turn that ended mid-thought stops the clock where the turn stopped.
+        closeThinking(node, time)
         node.status = reason.kind === 'error' ? 'error'
           : reason.kind === 'completed' ? 'complete' : 'interrupted'
         node.completedAt ??= time

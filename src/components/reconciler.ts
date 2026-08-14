@@ -159,6 +159,12 @@ function groupSignature(group: CollapsedGroup): string {
     group.listCount,
     group.mcpCallCount,
     group.mcpServers.join('|'),
+    // The closed thinking total only: an open span's *start* never moves, so it
+    // says nothing about what the row currently reads. That row is refreshed by
+    // {@link TranscriptReconciler.invalidateOpenStep} instead, on the animation
+    // tick, which is what a signature over node facts cannot do.
+    group.thinkingMs,
+    group.thinkingSince ?? '',
     group.active,
     group.failed,
     group.hint?.kind ?? '',
@@ -238,6 +244,12 @@ export class TranscriptReconciler {
   private thinkingPinned: boolean
   /** The open step's component, so an animation tick refreshes only that step. */
   private openStep: StreamingAssistantComponent | undefined
+  /**
+   * The collapsed row whose thinking is still open, refreshed on the same tick:
+   * its duration counts up against the clock, not against the node list, so no
+   * snapshot is due while the model is thinking between two events.
+   */
+  private openGroup: CollapsedGroupComponent | undefined
   /** Wall time of every turn in the log, for the per-turn completion row. */
   private readonly turnDurations = new TurnDurationTracker()
   /**
@@ -279,6 +291,7 @@ export class TranscriptReconciler {
     const seen = new Set<string>()
     const children: Component[] = []
     let openStep: StreamingAssistantComponent | undefined
+    let openGroup: CollapsedGroupComponent | undefined
     // A step's timing footer waits for the tool cards that step requested, so
     // it renders at the tail of the step's own output.
     let footer: { component: Component; calls: readonly string[] } | undefined
@@ -333,6 +346,7 @@ export class TranscriptReconciler {
           if (group.index !== index) continue
           const row = this.groupView(group)
           seen.add(groupKey(group))
+          if (group.thinkingSince !== undefined) openGroup = row
           if (footer?.calls.includes(node.callId) !== true) flushFooter()
           children.push(row)
           continue
@@ -424,6 +438,7 @@ export class TranscriptReconciler {
       if (!seen.has(key)) this.views.delete(key)
     }
     this.openStep = openStep
+    this.openGroup = openGroup
     this.chat.clear()
     for (const child of children) this.chat.addChild(child)
   }
@@ -527,12 +542,14 @@ export class TranscriptReconciler {
   }
 
   /**
-   * Refresh the open step's live timing footer, for the status animation tick.
-   * Only that component is invalidated, so a long transcript is not re-rendered
-   * 20 times a second.
+   * Refresh the two rows whose text moves with the clock rather than with the
+   * log — the open step's timing footer and the collapsed row of a group that
+   * is still thinking — for the status animation tick. Only those components
+   * are invalidated, so a long transcript is not re-rendered 20 times a second.
    */
   invalidateOpenStep(): void {
     this.openStep?.invalidate()
+    this.openGroup?.invalidate()
   }
 
   /**
@@ -651,6 +668,7 @@ export class TranscriptReconciler {
       this.deps.palette,
       path => displayPath(path, this.deps.cwd),
       this.deps.expandKey,
+      this.deps.now,
     )
     this.views.set(key, { kind: 'group', signature, component })
     return component

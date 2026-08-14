@@ -22,10 +22,32 @@
  * locale-dependent part of collapse: this module stays a pure derivation over
  * the node list, with no message table behind it, exactly like the rest of
  * `src/core`.
+ *
+ * ## Thinking is part of the group
+ *
+ * A run of calls opens with the model thinking about what to look at, so the
+ * group absorbs that thinking and reports it as its own first fragment
+ * (`Thought for 8s, searched for 3 patterns, read 2 files`). The fold measures
+ * the span ({@link ChatNode} → `AssistantNode.thinkingMs`/`thinkingSince`) and
+ * this module attributes it: forward, onto the run the thinking led to.
+ *
+ * That leaves three timing surfaces in the transcript, and they do not overlap:
+ *
+ * - **This row** — the thinking behind one run of read-only calls, on the
+ *   collapsed phase of the Ctrl+O cycle. It is the only place a default
+ *   transcript states a thinking duration at all, which is why the thinking
+ *   *block* itself needs no timer and keeps its own rule: it disappears when
+ *   the step finishes (Ctrl+T pins it, Ctrl+O expanded brings it back).
+ * - **The per-step timing footer** — every bucket of one step, `Thinking` among
+ *   them, on the expanded phase only. It never shares a screen with this row,
+ *   because expanded shows the group's own cards instead of the row.
+ * - **The turn footer** (`✻ Worked for 45s`, over 30 s only) — the whole turn's
+ *   wall time, on every phase. Different quantity, not a second opinion on this
+ *   one: a turn contains the thinking, the calls, and the gaps between them.
  * @module dsh-tui/core/collapse
  */
 
-import type { ChatNode, ToolCallNode } from './types.ts'
+import type { AssistantNode, ChatNode, ToolCallNode } from './types.ts'
 
 /**
  * Cap on a `⎿` hint, in characters (~5 rows of ~60 columns). Generous and
@@ -175,9 +197,27 @@ export type CollapseKind = 'search' | 'read' | 'list' | 'mcp'
 
 /** The last operation in a group, as the `⎿` row wants to show it. */
 export interface CollapseHint {
-  /** A file path (shown relative to the workspace), a pattern, or a command. */
-  readonly kind: 'path' | 'pattern' | 'command'
+  /**
+   * A file path (shown relative to the workspace), a pattern, a command, or —
+   * only until the group's first operation names one of those — the latest line
+   * of the thinking that led to the group.
+   */
+  readonly kind: 'path' | 'pattern' | 'command' | 'thinking'
   readonly value: string
+}
+
+/**
+ * The thinking one step contributes to the group it leads to: what the fold has
+ * already measured, the open span it has not, and the line to show while that
+ * span is the newest thing that happened.
+ */
+interface ThinkingSpan {
+  /** Closed thinking time, in milliseconds. */
+  readonly ms: number
+  /** Log time of the open span, when the step is thinking right now. */
+  readonly since: number | undefined
+  /** Latest line of the thinking text, whitespace squeezed. */
+  readonly line: string | undefined
 }
 
 /** One tool call's read-only classification, or `undefined` when it writes. */
@@ -224,12 +264,54 @@ export interface CollapsedGroup {
   readonly mcpCallCount: number
   /** Distinct MCP servers queried, in first-seen order. */
   readonly mcpServers: readonly string[]
-  /** Whether any member call is still running: the row is present-tense. */
+  /**
+   * Thinking time the group absorbed: every closed reasoning span of the steps
+   * that led to this run of calls, summed.
+   *
+   * A step's thinking belongs to the calls it *leads to*, so it is carried
+   * forward onto the group that follows it rather than back onto the one it
+   * followed. A step that thought inside an open run (thinking again between
+   * two reads, with no prose in between) adds to that same run, because nothing
+   * ended it.
+   *
+   * The open span is not in here — see {@link CollapsedGroup.thinkingSince} —
+   * so a caller that wants the live total asks {@link groupThinkingMs}.
+   */
+  readonly thinkingMs: number
+  /**
+   * Log time of the group's open thinking span, when the model is thinking
+   * right now. Present is what makes the row read as in progress even after
+   * every call it counts has settled.
+   */
+  readonly thinkingSince?: number
+  /**
+   * Whether the group is still in progress: any member call running, or the
+   * thinking it absorbed still open. The row is present-tense while it is, and
+   * only then does it keep its bullet and its `⎿` hint.
+   */
   readonly active: boolean
   /** Whether any member call failed. */
   readonly failed: boolean
   /** The most recent operation, for the `⎿` row under a running group. */
   readonly hint?: CollapseHint
+}
+
+/**
+ * A group's thinking time at render clock `now`: what the fold measured plus
+ * whatever the open span has run since it opened.
+ *
+ * The clock is the caller's because this module holds none — the same reason
+ * the fold publishes a span's start rather than its length. Called without one
+ * (a settled row, a test), it reports the closed total alone.
+ * @param group - The planned group.
+ * @param now - Render clock, in epoch milliseconds.
+ * @returns Thinking time in milliseconds.
+ */
+export function groupThinkingMs(group: CollapsedGroup, now?: number): number {
+  const open = group.thinkingSince === undefined || now === undefined
+    ? 0
+    : Math.max(0, now - group.thinkingSince)
+  return group.thinkingMs + open
 }
 
 /**
@@ -504,6 +586,8 @@ interface GroupDraft {
   listCount: number
   mcpCallCount: number
   mcpServers: string[]
+  thinkingMs: number
+  thinkingSince: number | undefined
   active: boolean
   failed: boolean
   hint: CollapseHint | undefined
@@ -522,9 +606,65 @@ function sealGroup(draft: GroupDraft): CollapsedGroup {
     listCount: draft.listCount,
     mcpCallCount: draft.mcpCallCount,
     mcpServers: draft.mcpServers,
-    active: draft.active,
+    thinkingMs: draft.thinkingMs,
+    // Thinking counts as work in progress: a run whose calls have all settled
+    // is still going somewhere while the model is thinking about what to do
+    // next, and a row that went past-tense there would freeze its own counter
+    // one second into the thought.
+    active: draft.active || draft.thinkingSince !== undefined,
     failed: draft.failed,
+    ...draft.thinkingSince === undefined ? {} : { thinkingSince: draft.thinkingSince },
     ...draft.hint === undefined ? {} : { hint: draft.hint },
+  }
+}
+
+/**
+ * The latest line of one step's thinking, with runs of whitespace squeezed to a
+ * single space so a wrapped paragraph reads as one line.
+ *
+ * The *latest* rather than the first: while the model is thinking, the last
+ * line it wrote is the closest thing there is to "what it is doing right now",
+ * which is exactly what the `⎿` row under a running group answers.
+ * @param reasoning - The step's reasoning text so far.
+ * @returns The line, or `undefined` when the text is blank.
+ */
+function latestThinkingLine(reasoning: string): string | undefined {
+  const lines = reasoning.split('\n')
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = (lines[index] as string).replace(/\s+/gu, ' ').trim()
+    if (line !== '') return line
+  }
+  return undefined
+}
+
+/** One step's thinking, or `undefined` when the step never thought. */
+function stepThinking(node: AssistantNode): ThinkingSpan | undefined {
+  const ms = node.thinkingMs ?? 0
+  const since = node.thinkingSince
+  if (ms === 0 && since === undefined) return undefined
+  return { ms, since, line: latestThinkingLine(node.reasoning) }
+}
+
+/** Add one step's thinking to a group under construction. */
+function absorbThinking(draft: GroupDraft, thinking: ThinkingSpan): void {
+  draft.thinkingMs += thinking.ms
+  if (thinking.since !== undefined) draft.thinkingSince = thinking.since
+  // The thinking's own last line stands in as the `⎿` hint only until the
+  // group's first operation names a file, a pattern or a command, and never
+  // takes the row back afterwards: once there is work to point at, pointing at
+  // the reasoning instead would read as the group going backwards.
+  if (draft.hint === undefined && thinking.line !== undefined) {
+    draft.hint = { kind: 'thinking', value: thinking.line }
+  }
+}
+
+/** Merge two thinking spans that reach the same group, in log order. */
+function mergeThinking(carried: ThinkingSpan | undefined, next: ThinkingSpan): ThinkingSpan {
+  if (carried === undefined) return next
+  return {
+    ms: carried.ms + next.ms,
+    since: next.since ?? carried.since,
+    line: next.line ?? carried.line,
   }
 }
 
@@ -569,6 +709,10 @@ export interface CollapseOptions {
  * only shows while the group is running), and "Read 1 file" is strictly less
  * than the `Read(src/a.ts)` card it replaced. The row earns its place from two
  * members up, which is where it starts saving rows instead of spending them.
+ * Absorbed thinking does not lower that threshold — `Thought for 8s, read 1
+ * file` still drops the path the card names — so a group's thinking is only
+ * ever reported next to two or more calls, and its thinking hint stands only
+ * until the first of those calls names something of its own.
  *
  * @param nodes - The snapshot's nodes, in log order.
  * @param options - Range and per-call exclusions.
@@ -585,6 +729,12 @@ export function collapseToolGroups(
   const from = options.from ?? 0
   let draft: GroupDraft | undefined
   let members: number[] = []
+  /**
+   * Thinking seen with no group open yet. A step thinks *before* it calls
+   * anything, so its reasoning reaches the run it opens by being carried here
+   * until that run's first member arrives.
+   */
+  let carried: ThinkingSpan | undefined
   const flush = (): void => {
     // One member is not a run: leaving it out of the map is what sends it back
     // to its own tool card, which names the file the summary row would not.
@@ -594,6 +744,9 @@ export function collapseToolGroups(
     }
     draft = undefined
     members = []
+    // Thinking that reached no group dies with it: the run it led to is over,
+    // and the next run has its own thinking to report.
+    carried = undefined
   }
   for (let index = Math.max(0, from); index < nodes.length; index += 1) {
     const node = nodes[index]
@@ -609,24 +762,44 @@ export function collapseToolGroups(
         flush()
         continue
       }
-      draft ??= {
-        index,
-        keys: [],
-        searchCount: 0,
-        readPaths: new Set(),
-        readOperations: 0,
-        listCount: 0,
-        mcpCallCount: 0,
-        mcpServers: [],
-        active: false,
-        failed: false,
-        hint: undefined,
+      if (draft === undefined) {
+        draft = {
+          index,
+          keys: [],
+          searchCount: 0,
+          readPaths: new Set(),
+          readOperations: 0,
+          listCount: 0,
+          mcpCallCount: 0,
+          mcpServers: [],
+          thinkingMs: 0,
+          thinkingSince: undefined,
+          active: false,
+          failed: false,
+          hint: undefined,
+        }
+        // Whatever the model thought on its way here belongs to this run.
+        if (carried !== undefined) absorbThinking(draft, carried)
+        carried = undefined
       }
       absorb(draft, node, classification)
       // The summary row renders at the member that arrived last; see
       // `CollapsedGroup.index`.
       draft.index = index
       members.push(index)
+      continue
+    }
+    if (node.kind === 'assistant') {
+      // Prose ends the run above this step; the thinking that produced the
+      // prose is picked up *after* that flush, because it leads to whatever the
+      // model does next rather than back to the calls it already made.
+      if (breaksGroup(node)) flush()
+      const thinking = stepThinking(node)
+      if (thinking === undefined) continue
+      if (draft === undefined) carried = mergeThinking(carried, thinking)
+      // A step that thought inside an open run (no prose between two reads)
+      // extends that run's thinking instead of starting a new claim.
+      else absorbThinking(draft, thinking)
       continue
     }
     if (breaksGroup(node)) flush()
@@ -666,7 +839,8 @@ function absorb(draft: GroupDraft, node: ToolCallNode, classification: CollapseC
 
 /**
  * Render a group's `⎿` hint: the file's workspace-relative path, the quoted
- * pattern, or the `$ `-prefixed command, capped at {@link MAX_HINT_CHARS}.
+ * pattern, the `$ `-prefixed command, or — before the group's first operation —
+ * the bare line of thinking, all capped at {@link MAX_HINT_CHARS}.
  * @param hint - The group's latest operation.
  * @param displayPath - Shortens an absolute path for display.
  * @returns The hint row's text.
@@ -674,6 +848,9 @@ function absorb(draft: GroupDraft, node: ToolCallNode, classification: CollapseC
 export function formatCollapseHint(hint: CollapseHint, displayPath: (path: string) => string): string {
   const text = hint.kind === 'path'
     ? displayPath(hint.value)
-    : hint.kind === 'pattern' ? `"${hint.value}"` : `$ ${hint.value}`
+    // Thinking is prose: it takes neither the quotes a pattern gets nor the
+    // prompt a command gets, because it is not something the user could run.
+    : hint.kind === 'thinking' ? hint.value
+      : hint.kind === 'pattern' ? `"${hint.value}"` : `$ ${hint.value}`
   return text.length > MAX_HINT_CHARS ? `${text.slice(0, MAX_HINT_CHARS - 1)}…` : text
 }

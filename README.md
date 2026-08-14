@@ -174,9 +174,13 @@ its four values, and `/resume` this workspace's recent sessions.
 - **Chat** — the main view: streaming messages, tool cards, the plan, the status
   row, and the prompt with its context line. A run of consecutive read-only
   calls — reads, greps, globs, `ls`/`cat`-shaped shell commands, MCP queries —
-  reports as one row (`Searched for 3 patterns, read 2 files`) instead of one
-  card each, and the row counts up while the run is still going before it
-  settles into the past tense; Ctrl+O opens the run back into its cards. A call
+  reports as one row (`Thought for 8s, searched for 3 patterns, read 2 files`)
+  instead of one card each, and the row counts up while the run is still going
+  before it settles into the past tense; Ctrl+O opens the run back into its
+  cards. The thinking that led to the run opens the row and keeps counting while
+  the model is still thinking — the only thinking duration the default
+  transcript states, since the thinking block itself still goes with its step.
+  A call
   that writes never joins one — `cat a > b` writes `b`, whatever its verb says —
   while a call that fails stays in the run and turns its bullet red, because a
   failure the reader cannot see is worse than a row that admits one. Each
