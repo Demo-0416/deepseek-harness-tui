@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-tui",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "description": "Interactive terminal UI for deepseek-harness, installed as a dsh profile bundle",
   "license": "MIT",
   "type": "module",
@@ -57,14 +57,13 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.84.1",
     "@deepseek-ai/cordis-plugin-include": "^1.0.6",
     "@deepseek-ai/cordis-plugin-loader": "^1.0.2",
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-agent-loop": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-attachment": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-attachment": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-brand": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-cmdline": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-code-runtime": "^0.1.0-rc.6",
@@ -98,6 +97,7 @@
     "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.18.1",
+    "@earendil-works/pi-tui": "^0.84.1",
     "commander": "^15.0.0",
     "diff": "^9.0.0",
     "marked": "^18.0.9",
