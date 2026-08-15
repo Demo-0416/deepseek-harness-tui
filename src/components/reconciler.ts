@@ -34,6 +34,7 @@ import { t } from '../i18n/index.ts'
 import { withTuiPresenters } from './tool-presenters.ts'
 import {
   CollapsedGroupComponent,
+  CompactionSummaryComponent,
   ContextCardComponent,
   StreamingAssistantComponent,
   ToolCardComponent,
@@ -395,12 +396,32 @@ export class TranscriptReconciler {
           // not a transcript row.
           seen.add(node.key)
           break
-        case 'compaction':
+        case 'compaction': {
           if (!node.landed) break
-          seen.add(node.key)
-          children.push(this.plainView(node.key, node.version, () =>
-            block(new Text(this.deps.palette.dim(t('transcript.compactionMarker')), 0, 0))))
+          // The summary is the whole point of a compaction and used to have
+          // nowhere to render: the marker says WHERE the model stopped seeing
+          // history, the card says WHAT it kept instead. Claude Code puts the
+          // same body behind the same key, and the collapsed marker names it.
+          const opened = this.visibility === 'expanded' && node.summary !== ''
+          // The phase is part of the cache KEY, not of the body: `plainView`
+          // reuses a component while key and version both hold, so a row whose
+          // text moves with Ctrl+O needs a key that moves with it. The phase
+          // that is not current falls out of `seen` and is pruned below.
+          const markerKey = `${node.key}:${opened ? 'open' : 'closed'}`
+          seen.add(markerKey)
+          const hint = node.summary === '' || opened
+            ? ''
+            : ` ${t('collapse.expandHint', { key: this.deps.expandKey().toLowerCase() })}`
+          children.push(this.plainView(markerKey, node.version, () =>
+            block(new Text(this.deps.palette.dim(t('transcript.compactionMarker') + hint), 0, 0))))
+          if (opened) {
+            const summaryKey = `${node.key}:summary`
+            seen.add(summaryKey)
+            children.push(this.plainView(summaryKey, node.version, () =>
+              block(new CompactionSummaryComponent(node.summary, this.deps.palette))))
+          }
           break
+        }
         case 'context':
           // Injected context is traffic between the harness and the model, not
           // part of the conversation, so it is off the transcript in both

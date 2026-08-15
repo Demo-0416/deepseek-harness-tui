@@ -2011,6 +2011,37 @@ export class ContextCardComponent extends CachedCardComponent {
   }
 }
 
+/**
+ * The summary one compaction wrote, rendered on the expanded Ctrl+O phase.
+ *
+ * Same placement rule as a context card: it is what the model was left holding
+ * rather than something anyone said, so the two default phases keep it off the
+ * transcript and the expanded phase — where a user goes to see what the model
+ * was actually sent — opens it in the conversation's own order, right under the
+ * marker that says where the history stopped.
+ *
+ * Not capped, for the same reason a context card is not: the point of the card
+ * is that the summary is now the whole of that history, and a summary clipped
+ * mid-sentence would answer the question with another one.
+ */
+export class CompactionSummaryComponent extends CachedCardComponent {
+  constructor(
+    private readonly summary: string,
+    private readonly palette: Palette,
+  ) {
+    super()
+  }
+
+  protected renderLines(width: number): string[] {
+    const header = this.palette.dim(t('transcript.compactionSummaryHeader'))
+    // Blank lines stay blank: styling one would leave an escape-only row, which
+    // reads as a stray gap rather than the paragraph break it is.
+    const body = this.summary.split('\n')
+      .map(line => line === '' ? line : this.palette.dim(displayText(line)))
+    return [header, ...new Text(body.join('\n'), 0, 0).render(width)]
+  }
+}
+
 /** Terminal rows the plan panel never grows past, matching Claude Code's own cap. */
 const TODO_MAX_ROWS = 10
 

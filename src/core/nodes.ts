@@ -37,6 +37,9 @@ import type {} from '@deepseek-ai/dsh-plan-mode'
 import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { contentText, parseArguments } from '../components/content.ts'
+// The fold stays a pure function of `(nodes, event)`; `t` is a lookup in the
+// message table under the locale already chosen at startup, not a service.
+import { t } from '../i18n/index.ts'
 import type {
   AssistantNode,
   ChatNode,
@@ -612,7 +615,16 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
     case 'compaction/end': {
       const failure = event.data.error
       if (failure === undefined) return false
-      return pushNotice(nodes, seq, time, `Compaction failed: ${failure}`, 'warning')
+      // A manual compaction reports its own outcome: `/compact` classifies the
+      // failure and answers in the user's language (`chat/compact.ts`), so a
+      // second line here would only restate it in English — and on Esc the two
+      // lines contradicted each other outright, "the conversation is unchanged"
+      // next to a warning that it failed. `sourceCommandId` is present exactly
+      // when a command owns this compaction, which is exactly when someone else
+      // is already saying what happened.
+      if (event.data.sourceCommandId !== undefined) return false
+      // Everything left is background compaction, which nobody else narrates.
+      return pushNotice(nodes, seq, time, t('compact.failed', { error: failure }), 'warning')
     }
     case 'llm/retry': {
       const data = event.data

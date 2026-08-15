@@ -22,6 +22,7 @@ import {
   type UserMessage,
 } from '@deepseek-ai/dsh-llm'
 import { compactCheckpointSource, CompactionId } from '@deepseek-ai/dsh-compaction'
+import { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import { RetryId } from '@deepseek-ai/dsh-llm-retry'
 // Type imports load the session-event and message-source declaration merges the
 // fixtures below use (`llm/retry`, `compaction/*`, `session-reference`).
@@ -33,6 +34,7 @@ import {
   withdrawOptimisticUserMessage,
 } from '../../src/core/nodes.ts'
 import type { ChatNode } from '../../src/core/types.ts'
+import { setLocale, t } from '../../src/i18n/index.ts'
 
 let sessionCounter = 0
 
@@ -376,6 +378,42 @@ describe('foldEvent', () => {
       assert.deepEqual(kinds(nodes), ['compaction', 'notice'])
       assert.equal(nodeOf(nodes, 0, 'compaction').landed, false)
       assert.equal(nodeOf(nodes, 1, 'notice').text, 'Compaction failed: summary request failed')
+    })
+  })
+
+  it('says it in the language the terminal is running in', async () => {
+    await withSession((session) => {
+      const compactionId = CompactionId('compact-2-zh')
+      session.append('compaction/start', { compactionId, turn: null })
+      session.append('compaction/end', { compactionId, turn: null, error: '摘要请求失败' })
+      setLocale('zh')
+      try {
+        assert.equal(
+          nodeOf(foldEvents(session.events), 1, 'notice').text,
+          t('compact.failed', { error: '摘要请求失败' }, 'zh'),
+        )
+      } finally {
+        setLocale('en')
+      }
+    })
+  })
+
+  it('leaves a manual compaction to report its own failure', async () => {
+    // `/compact` classifies the failure and answers in the user's language, so
+    // a raw diagnostic here would only restate it — and on Esc the two lines
+    // contradicted each other: "the conversation is unchanged", then "failed".
+    await withSession((session) => {
+      const compactionId = CompactionId('compact-3')
+      const sourceCommandId = CommandId('compact-command-1')
+      session.append('compaction/start', { compactionId, sourceCommandId, turn: null })
+      session.append('compaction/end', {
+        compactionId,
+        sourceCommandId,
+        turn: null,
+        error: 'compaction cancelled by the user',
+      })
+      const nodes = foldEvents(session.events)
+      assert.deepEqual(kinds(nodes), ['compaction'])
     })
   })
 

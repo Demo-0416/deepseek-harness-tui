@@ -11,6 +11,7 @@ import {
   DEFAULT_FILE_SEARCH_MAX_ENTRIES,
   DEFAULT_FILE_SEARCH_MAX_RESULTS,
 } from './chat/file-autocomplete.ts'
+import { DEFAULT_MAX_PROMPT_CHARS } from './chat/prompt-truncation.ts'
 
 /** Theme and prompt-template settings for the pi-tui terminal mode. */
 export interface TuiThemeConfig {
@@ -49,6 +50,11 @@ export interface TuiConfig {
   maxToolOutputLines?: number
   /** Maximum added and removed lines explored while deriving an exact line diff. */
   maxDiffEditLength?: number
+  /**
+   * Characters one submitted prompt may carry before its middle is dropped.
+   * `0` sends every prompt whole, however long.
+   */
+  maxPromptChars?: number
   /** Maximum options visible at once in a user-question panel. */
   maxQuestionOptions?: number
   /** Maximum models visible at once in the model selector. */
@@ -84,6 +90,14 @@ export interface TuiConfig {
    * excludes {@link fileSearchExcludedDirectories} by name instead.
    */
   fileSearchCommand?: string
+  /**
+   * Path or command line of the editor `Alt+E` and `/editor` hand the draft to.
+   * Unset reads `$VISUAL`, then `$EDITOR`, then discovers a terminal editor on
+   * `PATH`; the empty string turns the feature off, and the key says so instead
+   * of spawning anything. A GUI editor needs its own wait flag (`code -w`); the
+   * known ones get it added for them.
+   */
+  externalEditor?: string
   /** Show the terminal's hardware cursor at the pi editor's IME marker. */
   showHardwareCursor?: boolean
   /** Color and prompt-template settings. */
@@ -103,6 +117,10 @@ const showReasoningSchema = z.boolean().default(true)
 const markdownRendererSchema: z<MarkdownRendererId> = z.union(['claude', 'pi'] as const).default('claude')
 const maxToolOutputLinesSchema = z.number().step(1).min(1).default(6)
 const maxDiffEditLengthSchema = z.number().step(1).min(1).default(1000)
+// `min(0)` rather than the `min(1)` every other maximum here takes: zero is not
+// a degenerate budget but the deployment turning the rule off, and a schema that
+// refused it would leave no way to say "send every prompt whole".
+const maxPromptCharsSchema = z.number().step(1).min(0).default(DEFAULT_MAX_PROMPT_CHARS)
 const maxQuestionOptionsSchema = z.number().step(1).min(1).default(8)
 const maxModelOptionsSchema = z.number().step(1).min(1).default(8)
 const maxResumeOptionsSchema = z.number().step(1).min(1).default(8)
@@ -119,6 +137,9 @@ const fileSearchExcludedDirectoriesSchema = z.array(z.string()).default([...DEFA
 // string is the deployment saying "do not spawn it", and the two must not
 // collapse into one value.
 const fileSearchCommandSchema = z.string()
+// No default, and for the same reason `fileSearchCommand` has none: unset
+// discovers an editor, `""` forbids one, and the two must not collapse.
+const externalEditorSchema = z.string()
 const showHardwareCursorSchema = z.boolean().default(false)
 const colorSchema = z.boolean().default(true)
 // No default: an unset value auto-detects truecolor from COLORTERM in `apply`.
@@ -150,6 +171,7 @@ const tuiConfigSchemaFields = {
   markdownRenderer: markdownRendererSchema,
   maxToolOutputLines: maxToolOutputLinesSchema,
   maxDiffEditLength: maxDiffEditLengthSchema,
+  maxPromptChars: maxPromptCharsSchema,
   maxQuestionOptions: maxQuestionOptionsSchema,
   maxModelOptions: maxModelOptionsSchema,
   maxResumeOptions: maxResumeOptionsSchema,
@@ -163,6 +185,7 @@ const tuiConfigSchemaFields = {
   fileSearchMaxEntries: fileSearchMaxEntriesSchema,
   fileSearchExcludedDirectories: fileSearchExcludedDirectoriesSchema,
   fileSearchCommand: fileSearchCommandSchema,
+  externalEditor: externalEditorSchema,
   showHardwareCursor: showHardwareCursorSchema,
   theme: TuiThemeConfigSchema,
   title: titleSchema,
@@ -228,6 +251,7 @@ export const Config: z<Config> = z.object({
   markdownRenderer: tuiConfigSchemaFields.markdownRenderer,
   maxToolOutputLines: tuiConfigSchemaFields.maxToolOutputLines,
   maxDiffEditLength: tuiConfigSchemaFields.maxDiffEditLength,
+  maxPromptChars: tuiConfigSchemaFields.maxPromptChars,
   maxQuestionOptions: tuiConfigSchemaFields.maxQuestionOptions,
   maxModelOptions: tuiConfigSchemaFields.maxModelOptions,
   maxResumeOptions: tuiConfigSchemaFields.maxResumeOptions,
@@ -241,6 +265,7 @@ export const Config: z<Config> = z.object({
   fileSearchMaxEntries: tuiConfigSchemaFields.fileSearchMaxEntries,
   fileSearchExcludedDirectories: tuiConfigSchemaFields.fileSearchExcludedDirectories,
   fileSearchCommand: tuiConfigSchemaFields.fileSearchCommand,
+  externalEditor: tuiConfigSchemaFields.externalEditor,
   showHardwareCursor: tuiConfigSchemaFields.showHardwareCursor,
   theme: tuiConfigSchemaFields.theme,
   title: tuiConfigSchemaFields.title,
@@ -263,6 +288,7 @@ export interface ResolvedTuiConfig {
   markdownRenderer: MarkdownRendererId
   maxToolOutputLines: number
   maxDiffEditLength: number
+  maxPromptChars: number
   maxQuestionOptions: number
   maxModelOptions: number
   maxResumeOptions: number
@@ -277,6 +303,8 @@ export interface ResolvedTuiConfig {
   fileSearchExcludedDirectories: string[]
   /** Configured `fd` path or name; `undefined` leaves discovery to `PATH`. */
   fileSearchCommand: string | undefined
+  /** Configured editor path or command line; `undefined` leaves discovery to `$VISUAL`/`$EDITOR`/`PATH`. */
+  externalEditor: string | undefined
   showHardwareCursor: boolean
   theme: ResolvedTuiThemeConfig
   title: string
@@ -296,6 +324,7 @@ export function resolveTuiConfig(config: TuiConfig | undefined): ResolvedTuiConf
     markdownRenderer: config?.markdownRenderer ?? 'claude',
     maxToolOutputLines: config?.maxToolOutputLines ?? 6,
     maxDiffEditLength: config?.maxDiffEditLength ?? 1000,
+    maxPromptChars: config?.maxPromptChars ?? DEFAULT_MAX_PROMPT_CHARS,
     maxQuestionOptions: config?.maxQuestionOptions ?? 8,
     maxModelOptions: config?.maxModelOptions ?? 8,
     maxResumeOptions: config?.maxResumeOptions ?? 8,
@@ -309,6 +338,7 @@ export function resolveTuiConfig(config: TuiConfig | undefined): ResolvedTuiConf
     fileSearchMaxEntries: config?.fileSearchMaxEntries ?? DEFAULT_FILE_SEARCH_MAX_ENTRIES,
     fileSearchExcludedDirectories: [...(config?.fileSearchExcludedDirectories ?? DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES)],
     fileSearchCommand: config?.fileSearchCommand,
+    externalEditor: config?.externalEditor,
     showHardwareCursor: config?.showHardwareCursor ?? false,
     theme: {
       color: config?.theme?.color ?? true,
