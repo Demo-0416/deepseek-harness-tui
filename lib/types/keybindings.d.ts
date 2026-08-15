@@ -25,6 +25,7 @@ export interface AppKeybindings {
     'app.message.copy': true;
     'app.draft.edit': true;
     'app.screen.redraw': true;
+    'app.submit.opposite': true;
     'app.cancel': true;
     'app.exit': true;
 }
@@ -76,6 +77,10 @@ export declare const APP_KEYBINDINGS: {
     readonly 'app.screen.redraw': {
         readonly defaultKeys: "ctrl+l";
         readonly description: "Redraw the screen";
+    };
+    readonly 'app.submit.opposite': {
+        readonly defaultKeys: "ctrl+enter";
+        readonly description: "Send with the opposite busy-Enter behavior";
     };
     readonly 'app.cancel': {
         readonly defaultKeys: "escape";

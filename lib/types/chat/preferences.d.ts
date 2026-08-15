@@ -21,6 +21,24 @@ import type { ToolCardVisibility } from '../components/transcript.ts';
  * `llm-deepseek`).
  */
 export declare const TUI_SETTINGS_NAMESPACE = "tui";
+/**
+ * How many times the empty input row may teach the Up key before it stops.
+ *
+ * Claude Code shows its own version of this hint three times; here the count is
+ * really written, so a user who has seen the lesson (or used the key) gets the
+ * running placeholder back instead of being taught forever.
+ */
+export declare const QUEUE_UP_HINT_LIMIT = 3;
+/**
+ * What Enter does with a prompt typed while a turn is running.
+ *
+ * `steer` hands it to the running driver, which reads it at its next step
+ * boundary — the interruption this terminal has always performed. `queue` parks
+ * it for a turn of its own, so the answer in flight is left alone.
+ */
+export declare const BUSY_ENTER_BEHAVIORS: readonly ["steer", "queue"];
+/** One of {@link BUSY_ENTER_BEHAVIORS}. */
+export type BusyEnterBehavior = typeof BUSY_ENTER_BEHAVIORS[number];
 /** Everything `/config` writes, resolved over config and schema defaults. */
 export interface TuiPreferences {
     /**
@@ -34,6 +52,26 @@ export interface TuiPreferences {
     toolCards: ToolCardVisibility;
     /** The palette this terminal paints with; `auto` follows the terminal's report. */
     theme: ThemePreferenceId;
+    /**
+     * How many times this user has been shown that Up edits a queued prompt,
+     * capped at {@link QUEUE_UP_HINT_LIMIT}. A teaching counter rather than a
+     * switch: it is written by the terminal, not by `/config`, and it is stored
+     * because a lesson repeated in every new session is not a lesson.
+     */
+    queueUpHintSeen: number;
+    /**
+     * What Enter means while a turn runs: `steer` interrupts it, `queue` waits
+     * for it.
+     *
+     * `steer` by default, which is what this terminal has always done and what
+     * its running placeholder, its steering badge and its cancel-hands-the-text-
+     * back behaviour were all built around. The harness's web chat calls the same
+     * choice `busyEnter` in its own `ui-conversation` section and defaults it the
+     * other way; the two are deliberately separate documents — a browser tab with
+     * a visible queue dock and a terminal are not the same room — but the name is
+     * shared so a future unification has something to join on.
+     */
+    busyEnter: BusyEnterBehavior;
 }
 /**
  * Schema of the `tui` settings section.
