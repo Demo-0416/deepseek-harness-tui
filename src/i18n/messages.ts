@@ -50,6 +50,8 @@ export const EN_MESSAGES = {
   'command.quit.description': 'Exit after the active turn reaches idle',
   'command.lang.description': 'Show or switch the interface language',
   'command.skills.description': 'Search this session\'s skills and read one in full',
+  'command.subagents.description': 'Show the subagent tree below this session',
+  'command.jobs.description': 'Show this session\'s background jobs and their state',
   'command.mcp.description': 'Show the MCP servers this agent\'s tools come from',
   'command.doctor.description': 'Check the runtime, terminal, model route, and mounted services',
   'command.search.description': 'Search this session\'s messages',
@@ -123,6 +125,42 @@ export const EN_MESSAGES = {
   'skills.loadFailed': 'Skill "{name}" failed to load: {error}',
   'skills.scanFailed': 'Skill scan failed: {error}',
 
+  // `/subagents`: the delegation tree panel, and the notices the command
+  // reports an absent or unreadable registry through.
+  'subagents.unavailable': 'The subagent registry is not mounted in this profile.',
+  'subagents.loading': 'Reading the subagent directory…',
+  'subagents.empty': 'This session has delegated to no subagent.',
+  'subagents.loadFailed': 'The subagent directory could not be read: {error}',
+  'subagents.count.one': '{total} subagent · {running} running',
+  'subagents.count.other': '{total} subagents · {running} running',
+  // A child's mode is what it can be asked next: a one-shot delegation is
+  // finished with, a continuable child is a conversation `/resume` can rejoin.
+  'subagents.mode.oneShot': 'one-shot',
+  'subagents.mode.continuable': 'continuable',
+  // Activity is a store fact, never an outcome: `running` says the child's
+  // record is live, `inactive` that it exists only in persistence.
+  'subagents.activity.running': 'running',
+  'subagents.activity.inactive': 'inactive',
+  // A candidate the directory could not interpret is still listed: a session
+  // that exists but cannot be read is a fact about this tree.
+  'subagents.diagnostic.corrupt': 'unreadable entry',
+  'subagents.diagnostic.unsupported': 'unsupported version',
+  'subagents.diagnostic.unavailable': 'could not be read',
+
+  // `/jobs`: the background-work list, and the notice the command reports an
+  // absent registry through.
+  'jobs.unavailable': 'The job registry is not mounted in this profile.',
+  'jobs.empty': 'Nothing is running in the background.',
+  'jobs.count.one': '{total} job · {live} running',
+  'jobs.count.other': '{total} jobs · {live} running',
+  // The registry's five lifecycle states. `stopping` is a live state: a kill
+  // has been asked for and the producer has not let go of its resources yet.
+  'jobs.status.running': 'running',
+  'jobs.status.stopping': 'stopping',
+  'jobs.status.completed': 'completed',
+  'jobs.status.killed': 'killed',
+  'jobs.status.failed': 'failed',
+
   // `/search`: the panel over this session's own messages, plus the row labels
   // the flattened entries carry. The labels are the transcript's own vocabulary,
   // so they read the same here as they do on the surface they were folded from.
@@ -144,6 +182,7 @@ export const EN_MESSAGES = {
   // named after the thing it carries, exactly like `notice.referencedSessions`.
   'search.role.reference': 'Sessions',
   'search.role.compaction': 'Compacted',
+  'search.role.workflow': 'Workflow',
 
   // `/mcp`. The counted rows are plural pairs; the "nothing is mounted" block is
   // three paragraphs, each one key with its own line breaks, so a translation
@@ -373,6 +412,12 @@ export const EN_MESSAGES = {
   // under it would never be seen.
   'prompt.compactingCancelling': 'Cancelling the compaction… {duration}',
   'prompt.queued': '{count} queued',
+  // The background-work badge: a count and nothing else. A job outlives the
+  // tool call that started it, so without this the row a user watches says
+  // nothing about work that is still going on; the stopwatch stays in `/jobs`,
+  // because a badge that ticked would redraw the prompt once a second forever.
+  'prompt.jobs.one': '{count} job running',
+  'prompt.jobs.other': '{count} jobs running',
 
   // The one row a run of read-only calls collapses into. Each fragment is a
   // whole clause rather than a verb and a noun the caller concatenates: word
@@ -412,6 +457,35 @@ export const EN_MESSAGES = {
   // rebindable, and a hint on every collapsed row naming a key that does
   // nothing is exactly what `/hotkeys` reads from the manager to avoid.
   'collapse.expandHint': '({key} to expand)',
+
+  // Workflow runs: the block one `workflow` tool call folds into. The rows read
+  // run, phase, member from the outside in, and every fragment below is joined
+  // with `workflow.separator` rather than a literal, for the same reason the
+  // collapsed rows above are.
+  'workflow.run': 'workflow {name}',
+  'workflow.members.one': '{count} member',
+  'workflow.members.other': '{count} members',
+  'workflow.separator': ' · ',
+  // A phase is a member field, not an event: a member can carry no phase at all,
+  // and it can carry an empty name. Those are two different groups, so they get
+  // two different labels instead of collapsing into one.
+  'workflow.phase.none': '(no phase)',
+  'workflow.phase.unnamed': '(unnamed phase)',
+  'workflow.member.unnamed': '(unnamed member)',
+  // `interrupted` is a reading, not a logged outcome: the run's turn ended
+  // without anything settling it, so no result will ever arrive.
+  'workflow.status.running': 'running',
+  'workflow.status.completed': 'completed',
+  'workflow.status.failed': 'failed',
+  'workflow.status.cancelled': 'cancelled',
+  'workflow.status.interrupted': 'interrupted',
+  // A phase header counts only the statuses that want attention, and falls back
+  // to the completed count when there are none.
+  'workflow.count.running': 'running {count}',
+  'workflow.count.completed': 'completed {count}',
+  'workflow.count.failed': 'failed {count}',
+  'workflow.count.cancelled': 'cancelled {count}',
+  'workflow.count.interrupted': 'interrupted {count}',
 
   // Transient status-row confirmations.
   'status.flash.cardsHidden': 'Tool cards hidden.',
@@ -474,6 +548,8 @@ export const EN_MESSAGES = {
   'status.row.goal': 'Goal',
   'status.row.goalState': 'Goal state',
   'status.row.sessionTotals': 'Session totals',
+  'status.row.subagents': 'Subagents',
+  'status.row.jobs': 'Background jobs',
   'status.row.tokens': 'Tokens',
   'status.row.kvCache': 'KV cache',
   'status.row.context': 'Context',
@@ -482,6 +558,10 @@ export const EN_MESSAGES = {
   'status.untitled': 'untitled · /rename to name it',
   'status.modelDetail': '(effort {effort}; thinking blocks {thinking})',
   'status.tokensValue': '{input} input + {output} output',
+  // The delegation tree in one line; `/subagents` is where the branches are.
+  'status.subagentsValue': '{running} running · {total} total · /subagents for the tree',
+  // Background work in one line; `/jobs` is where the labels are.
+  'status.jobsValue': '{live} running · {total} total · /jobs for the list',
   'status.cacheValue': '{meter} {rate}% hit ({read} read + {write} write)',
   'status.cacheUnavailable': 'n/a ({read} read + {write} write)',
   'status.contextValue': '{meter} {percent}% used ({used} / {capacity})',
@@ -825,6 +905,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'command.quit.description': '等当前轮次结束后退出',
   'command.lang.description': '查看或切换界面语言',
   'command.skills.description': '搜索本会话的 skill，并查看某个 skill 的完整正文',
+  'command.subagents.description': '查看本会话下的子代理树',
+  'command.jobs.description': '查看本会话的后台任务及其状态',
   'command.mcp.description': '显示本 agent 的工具分别来自哪些 MCP server',
   'command.doctor.description': '检查运行时、终端、模型路由与已挂载的服务',
   'command.search.description': '搜索本会话的消息',
@@ -888,6 +970,30 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'skills.loadFailed': 'skill "{name}" 加载失败：{error}',
   'skills.scanFailed': 'skill 扫描失败：{error}',
 
+  'subagents.unavailable': '当前配置没有挂载子代理注册表。',
+  'subagents.loading': '正在读取子代理目录…',
+  'subagents.empty': '本会话没有委派过子代理。',
+  'subagents.loadFailed': '读取子代理目录失败：{error}',
+  'subagents.count.one': '{total} 个子代理 · {running} 个运行中',
+  'subagents.count.other': '{total} 个子代理 · {running} 个运行中',
+  'subagents.mode.oneShot': '一次性',
+  'subagents.mode.continuable': '可继续',
+  'subagents.activity.running': '运行中',
+  'subagents.activity.inactive': '未运行',
+  'subagents.diagnostic.corrupt': '条目无法解析',
+  'subagents.diagnostic.unsupported': '版本不支持',
+  'subagents.diagnostic.unavailable': '读取失败',
+
+  'jobs.unavailable': '当前配置没有挂载后台任务注册表。',
+  'jobs.empty': '后台没有任务在跑。',
+  'jobs.count.one': '{total} 个任务 · {live} 个运行中',
+  'jobs.count.other': '{total} 个任务 · {live} 个运行中',
+  'jobs.status.running': '运行中',
+  'jobs.status.stopping': '正在停止',
+  'jobs.status.completed': '已完成',
+  'jobs.status.killed': '已终止',
+  'jobs.status.failed': '失败',
+
   'search.empty': '本会话还没有可搜索的消息。',
   'search.noMatch': '没有消息匹配这次搜索。',
   'search.query': '搜索',
@@ -904,6 +1010,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'search.role.context': '上下文',
   'search.role.reference': '引用的会话',
   'search.role.compaction': '已压缩',
+  'search.role.workflow': '工作流',
 
   'mcp.servers.one': '{count} 个 server',
   'mcp.servers.other': '{count} 个 server',
@@ -1081,6 +1188,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'prompt.compacting': '正在压缩上下文 {duration}',
   'prompt.compactingCancelling': '正在取消压缩… {duration}',
   'prompt.queued': '{count} 条排队中',
+  'prompt.jobs.one': '{count} 个后台任务运行中',
+  'prompt.jobs.other': '{count} 个后台任务运行中',
 
   // 折叠行。中文没有单复数之分，所以 .one 与 .other 填同一句；只有 MCP 那两对
   // 例外——它们的区别不是复数，而是「只报服务名」还是「连调用次数一起报」。
@@ -1104,6 +1213,24 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'collapse.mcp.settled.other': '查询了 {server} {count} 次',
   'collapse.separator': '，',
   'collapse.expandHint': '({key} 展开)',
+
+  'workflow.run': '工作流 {name}',
+  'workflow.members.one': '{count} 个成员',
+  'workflow.members.other': '{count} 个成员',
+  'workflow.separator': ' · ',
+  'workflow.phase.none': '（未分阶段）',
+  'workflow.phase.unnamed': '（阶段名为空）',
+  'workflow.member.unnamed': '（成员名为空）',
+  'workflow.status.running': '运行中',
+  'workflow.status.completed': '已完成',
+  'workflow.status.failed': '失败',
+  'workflow.status.cancelled': '已取消',
+  'workflow.status.interrupted': '已中断',
+  'workflow.count.running': '运行中 {count}',
+  'workflow.count.completed': '已完成 {count}',
+  'workflow.count.failed': '失败 {count}',
+  'workflow.count.cancelled': '已取消 {count}',
+  'workflow.count.interrupted': '已中断 {count}',
 
   'status.flash.cardsHidden': '已隐藏工具卡片。',
   'status.flash.cardsExpanded': '已展开工具与上下文卡片。',
@@ -1150,6 +1277,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.row.goal': '目标',
   'status.row.goalState': '目标状态',
   'status.row.sessionTotals': '会话累计',
+  'status.row.subagents': '子代理',
+  'status.row.jobs': '后台任务',
   'status.row.tokens': 'Token',
   'status.row.kvCache': 'KV 缓存',
   'status.row.context': '上下文',
@@ -1158,6 +1287,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.untitled': '未命名 · 用 /rename 起个名字',
   'status.modelDetail': '（推理强度 {effort}；思考块 {thinking}）',
   'status.tokensValue': '输入 {input} + 输出 {output}',
+  'status.subagentsValue': '{running} 个运行中 · 共 {total} 个 · 用 /subagents 看整棵树',
+  'status.jobsValue': '{live} 个运行中 · 共 {total} 个 · 用 /jobs 看列表',
   'status.cacheValue': '{meter} 命中 {rate}%（读 {read} + 写 {write}）',
   'status.cacheUnavailable': '无数据（读 {read} + 写 {write}）',
   'status.contextValue': '{meter} 已用 {percent}%（{used} / {capacity}）',

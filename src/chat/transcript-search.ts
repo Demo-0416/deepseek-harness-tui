@@ -24,6 +24,7 @@ export type TranscriptEntryRole =
   | 'context'
   | 'reference'
   | 'compaction'
+  | 'workflow'
 
 /** One searchable message: everything one node contributes, as plain text. */
 export interface TranscriptEntry {
@@ -135,6 +136,15 @@ function entryOf(node: ChatNode): Pick<TranscriptEntry, 'role' | 'label' | 'text
       return { role: 'reference', label: roleLabel('reference'), text: node.labels.join('\n') }
     case 'compaction':
       return node.landed ? { role: 'compaction', label: roleLabel('compaction'), text: node.summary } : undefined
+    case 'workflow-run':
+      // The run's name and its members' labels are the whole of what its rows
+      // say in words; the statuses and durations are derived at render time and
+      // change while the search panel is open, so they are not searchable text.
+      return {
+        role: 'workflow',
+        label: roleLabel('workflow'),
+        text: [node.name, ...node.members.map(member => member.label)].join('\n'),
+      }
     default:
       // The plan snapshot is a node the transcript never places a row for.
       return undefined

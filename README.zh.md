@@ -111,7 +111,7 @@ stdin 和 stdout 都必须是 TTY，否则拒绝启动。`--print` 是唯一例�
 
 | 界面 | 按键 |
 |---|---|
-| 面板（`/help`、`/hotkeys`、`/palette`、`/status`、`/mcp`、`/doctor`） | Up/Down 滚动 · PgUp/PgDn 翻页 · g/G 或 Home/End 到顶/到底 · Esc 或 Ctrl+C 关闭 |
+| 面板（`/help`、`/hotkeys`、`/palette`、`/status`、`/mcp`、`/doctor`、`/subagents`、`/jobs`） | Up/Down 滚动 · PgUp/PgDn 翻页 · g/G 或 Home/End 到顶/到底 · Esc 或 Ctrl+C 关闭 |
 | 提问 | Up/Down 移动 · 1-9 直接作答 · Space 勾选（多选）· "Type something." 行输入自定义答案 · PgUp/PgDn 翻长详情 · Enter 提交 · Esc 或 Ctrl+C 取消 |
 | 权限审批 | Up/Down 移动 · 数字键直接作答该行 · Enter 确认 · Esc 或 Ctrl+C 拒绝。只有能被记住的授权才会多出第 5 行（命令行工具则打开规则供编辑） |
 | 历史搜索（Ctrl+R） | 输入即匹配 · Ctrl+R 跳上一条更旧的匹配 · Tab 或 Esc 取回编辑器 · Enter 直接发送 · Ctrl+C 或清空查询恢复草稿 |
@@ -154,6 +154,8 @@ Ctrl+C 是唯一永不可重绑的键：它是离开终端的最后手段。其�
 | `/rewind` | 回到本会话更早的 prompt |
 | `/resume [session]` | 列出本工作区可恢复的会话；参数会预填选择器搜索框 |
 | `/skills` | 搜索本会话的技能并完整阅读 |
+| `/subagents` | 本会话下的子代理树：标签、一次性还是可继续、运行中还是未运行，以及 `/resume` 要用的子会话 id。面板开着时会自动刷新；profile 没挂子代理注册表时会明说 |
+| `/jobs` | 后台任务：类型、标签、状态、生产方给的细节，以及各自跑了多久。面板开着时跟随注册表刷新；profile 没挂后台任务注册表时会明说 |
 | `/status` | 会话诊断、系统提示词、已注册工具 |
 | `/mcp` | 本 agent 各工具来自哪个 MCP 服务器及其工具列表；profile 没挂 MCP 时告诉你怎么挂 |
 | `/doctor` | 检查 Node 版本、终端、模型路由，以及缺了会静默降级的服务 |
@@ -176,9 +178,9 @@ Ctrl+C 是唯一永不可重绑的键：它是离开终端的最后手段。其�
 工具卡片行会跟着动。宿主没挂该服务时，所有开关本会话内照常工作，只是退出即忘。
 
 `/lang` 切换的是本终端自己的界面元素——命令列表、各面板（`/help`、`/status`、
-`/config`、`/search`、`/skills`、`/mcp`、`/doctor`、`/plugins`）、提示行与状态行、
-对话框及其按钮、这些界面写出的通知——在英文（默认）与中文之间切换；对话内容
-永远不会被翻译。少数命令回执无论语言如何仍是英文：`/model`、`/preset`、
+`/config`、`/search`、`/skills`、`/subagents`、`/jobs`、`/mcp`、`/doctor`、
+`/plugins`）、提示行与状态行、对话框及其按钮、这些界面写出的通知——在英文
+（默认）与中文之间切换；对话内容永远不会被翻译。少数命令回执无论语言如何仍是英文：`/model`、`/preset`、
 `/resume` 打印它们自己的报告文本，对话视图折叠的 turn 结局通知（"Turn
 cancelled."、"The model reached its output-token limit."）来自会话日志而非
 消息表。
@@ -298,6 +300,13 @@ roster 里的 preset 和 `copy` 动词，`/theme` 提供四个取值，`/resume`
   思考会原地落定，而不是从屏幕上消失。在这一段的第一个调用报出文件、模式或命令
   之前，行下的 `⎿` 行显示思考的最新一行；`showReasoning: false` 和其他地方一样
   不让这行出现，而时长——不引用任何内容——保留。
+- **工作流运行**——一次 `workflow` 工具调用折叠成「运行 / 阶段 / 成员」三级：
+  运行行给出名称与成员数，每个阶段一行表头，每个成员一行状态与耗时。展开到哪一
+  级由运行状态决定而不是开关——只要某个阶段里还有成员不是「已完成」，这个阶段就
+  保留成员行；成员全部完成的运行收成一行，Ctrl+O 再展开。没有阶段的成员和阶段名
+  为空的成员是两个不同的组，因为它们在日志里本来就是两回事。turn 结束时仍未收到
+  结果的运行读作「已中断」，未结算的成员一同中断：它们不会再有结果，而一行还在
+  说「运行中」就是在说反话。
 - **Rewind**——`/rewind`，或空输入框连按 Esc：回到更早的 prompt。宿主能 fork
   会话时对话随之移动、原会话仍可恢复；否则只是把那条 prompt 放回编辑器。文件
   永远不会被恢复——dsh 不做文件快照。
@@ -326,7 +335,21 @@ roster 里的 preset 和 `copy` 动词，`/theme` 提供四个取值，`/resume`
   可用。密钥进凭据存储自己的文件；settings 只记录变量名。`/provider` 列出同样
   两组，`/provider add` 引导一条适配器没听说过的路由走完名称、端点、协议、凭据
   变量、key 和端点报告的模型。
+- **子代理**——`/subagents`：本会话下的委派树，每个子代理一行——标签、是一次性
+  委派还是可继续的会话、记录是活着还是只在持久化里，以及 `/resume` 要用的子会话
+  id。这些行来自子代理目录而不是对话视图，所以上一个进程里委派出去的子代理同样
+  在树里；`subagent/start` 与 `subagent/end` 只负责告诉打开着的面板「该重读目录
+  了」。刚刚 spawn 的子代理可能晚一次刷新才出现：目录从子代理写下自己的
+  descriptor 那一刻起才列出它。`/status` 用一行给出同一棵树。
 - **状态**——`/status`：会话诊断、系统提示词、已注册工具。
+- **后台任务**——`/jobs`：本会话丢到后台还在跑的活。带 `run_in_background` 的
+  `bash` 调用，或者发出去就不等的委派，都会立刻把控制权还给模型然后继续跑；它们
+  当前的状态只存在于后台任务注册表里，所以这些行就来自那里。每一行给出生产方
+  类型、生产方起的标签（命令本身、委派描述）、生命周期状态与随之而来的细节
+  （`失败 · exit code: 1`），以及已经跑了多久——运行中的排在前面且最早的在最上，
+  然后是已结束的，最近结束的在前。面板开着且确实有任务在跑时，运行中那行的秒表
+  才走；都结束了就停。提示行只带一个计数（`2 个后台任务运行中`），让后台有活这件
+  事一眼可见，而不用在屏幕上多放一块秒表；`/status` 用一行给出同样两个数。
 - **MCP**——`/mcp`：本会话每个工具来自哪个 MCP 服务器，从工具注册名
   `mcp__<server>__<tool>` 反推出来，因为 harness 没有可查询的注册表。它天生
   只读——终端没有连接、重启或认证服务器的句柄——profile 没有 MCP 行时告诉你
@@ -372,14 +395,14 @@ bundle 行（`tui-runner`）上的值，全部可选。
 | `theme.color` | `true` | 应用内置 ANSI 配色 |
 | `theme.truecolor` | 自动检测 | banner 的 24 位品牌渐变；不设时读 `COLORTERM` |
 | `theme.leftPrompt` | `${cwd}${git/worktree}${model}${token_meter/cache_hit_rate}${context}` | 编辑器上方左对齐模板 |
-| `theme.rightPrompt` | `${queued}` | 编辑器上方右对齐模板 |
+| `theme.rightPrompt` | `${queued}${jobs}` | 编辑器上方右对齐模板 |
 | `theme.inputPrompt` | `❯ ` | 编辑器首行前缀 |
 | `theme.inputPlaceholder` | `press enter to steer and esc to cancel` | agent 运行时空编辑器的占位文本 |
 | `keybindings` | — | 按键覆盖，按 action id 键入 |
 
 提示行模板以 `${name}` 插值本 bundle 注册的值——`cwd`、`git/worktree`、
-`model`、`context`、`token_meter/cache_hit_rate`、`goal`、`queued`、`symbol`、
-`indicator`——某个值当前不可用时，挨着它的分隔符一并省去。`context` 报的是"已用"
+`model`、`context`、`token_meter/cache_hit_rate`、`goal`、`queued`、`jobs`、
+`symbol`、`indicator`——某个值当前不可用时，挨着它的分隔符一并省去。`context` 报的是"已用"
 还是"剩余"取决于窗口有多满，见[上下文压力](#上下文压力)。
 
 除 Ctrl+C 外的绑定均可配置：在 bundle 行上设 `keybindings`

@@ -28,13 +28,15 @@ import { isReplacementSurfaceEvent } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { isCompactCheckpointSource } from '@deepseek-ai/dsh-compaction'
 // Type imports load the SessionEventMap declaration merges, so the switch below
-// sees `compaction/*`, `llm/retry`, `plan/mode`, and `session/title`.
+// sees `compaction/*`, `llm/retry`, `plan/mode`, `session/title`, and
+// `tool-workflow/*`.
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-compaction'
 import type {} from '@deepseek-ai/dsh-llm-retry'
 import type {} from '@deepseek-ai/dsh-plan-mode'
 import type {} from '@deepseek-ai/dsh-session-title'
+import type {} from '@deepseek-ai/dsh-tool-workflow/types'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { contentText, parseArguments } from '../components/content.ts'
 // The fold stays a pure function of `(nodes, event)`; `t` is a lookup in the
@@ -50,6 +52,7 @@ import type {
   TodoNode,
   ToolCallNode,
   UserMessageNode,
+  WorkflowRunNode,
 } from './types.ts'
 
 /** Key prefixes keep one kind's ids from ever colliding with another's. */
@@ -62,6 +65,8 @@ const KEY = {
   reference: (seq: number): string => `reference:${seq}`,
   notice: (seq: number): string => `notice:${seq}`,
   compaction: (seq: number): string => `compaction:${seq}`,
+  /** One workflow run, keyed by the run id every `tool-workflow/*` event carries. */
+  workflow: (runId: string): string => `workflow:${runId}`,
   todo: 'todo',
 } as const
 
@@ -228,6 +233,40 @@ function findTodo(nodes: readonly ChatNode[]): TodoNode | undefined {
     if (node?.kind === 'todo') return node
   }
   return undefined
+}
+
+/** The workflow node for one run id, or undefined when the run folded none yet. */
+function findWorkflowRun(nodes: readonly ChatNode[], runId: string): WorkflowRunNode | undefined {
+  const key = KEY.workflow(runId)
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index]
+    if (node?.kind === 'workflow-run' && node.key === key) return node
+  }
+  return undefined
+}
+
+/**
+ * Close every run the log can no longer settle.
+ *
+ * A run lives inside the step that called the workflow tool: `run-end` is
+ * written before the tool returns, so a `step/end` or `turn/end` arriving while
+ * `stopReason` is still absent proves none is coming. Recording the closing
+ * event's own time (never a clock) is what lets a replay reach the same reading
+ * — this is the whole of the interrupted state, derived in `workflow.ts` from
+ * "ended but never settled".
+ * @param nodes - the draft node list.
+ * @param time - the closing event's log time.
+ * @returns true when a run was closed.
+ */
+function closeOpenWorkflowRuns(nodes: readonly ChatNode[], time: number): boolean {
+  let changed = false
+  for (const node of nodes) {
+    if (node.kind !== 'workflow-run') continue
+    if (node.stopReason !== undefined || node.endedAt !== undefined) continue
+    node.endedAt = time
+    changed = touch(node)
+  }
+  return changed
 }
 
 /**
@@ -529,7 +568,10 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
       closeThinking(node, time)
       node.completedAt = time
       if (node.status === 'running') node.status = 'complete'
-      return touch(node)
+      // The workflow tool returns inside the step that called it, so a step that
+      // ends over an unsettled run ends it too.
+      const swept = closeOpenWorkflowRuns(nodes, time)
+      return touch(node) || swept
     }
     case 'tool/call': {
       const { callId, name, arguments: argsRaw, turn, step } = event.data
@@ -582,12 +624,64 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
       return touch(existing)
     }
     case 'turn/start': {
+      // Belt and braces for a run left open by a process that died without
+      // logging its `turn/end`: a new turn opening is proof enough that nothing
+      // will settle it. On the normal path persistence writes the interrupted
+      // `turn/end` on reload, so this sweep finds nothing.
+      const changed = closeOpenWorkflowRuns(nodes, time)
       // The plan strip is turn-scoped: it stays readable after the turn ends
       // and clears when the next one opens.
       const existing = findTodo(nodes)
-      if (existing === undefined || existing.todos.length === 0) return false
+      if (existing === undefined || existing.todos.length === 0) return changed
       existing.todos = []
       return touch(existing)
+    }
+    case 'tool-workflow/run-start': {
+      const { runId, name } = event.data
+      const node: WorkflowRunNode = {
+        kind: 'workflow-run',
+        key: KEY.workflow(runId),
+        version: 0,
+        time,
+        runId,
+        name,
+        members: [],
+        startedAt: time,
+      }
+      return push(nodes, node)
+    }
+    case 'tool-workflow/agent-start': {
+      const { runId, seq: member, label, phase, childId } = event.data
+      // A member whose run never opened (a compaction cut the start away, or the
+      // log is truncated) opens no run of its own: the row would claim a run it
+      // knows neither the name nor the outcome of.
+      const node = findWorkflowRun(nodes, runId)
+      if (node === undefined) return false
+      node.members.push({
+        seq: member,
+        label,
+        ...phase === undefined ? {} : { phase },
+        childId,
+        startedAt: time,
+      })
+      return touch(node)
+    }
+    case 'tool-workflow/agent-end': {
+      const { runId, seq: member, outcome } = event.data
+      const node = findWorkflowRun(nodes, runId)
+      const entry = node?.members.find((candidate) => candidate.seq === member)
+      if (node === undefined || entry === undefined) return false
+      entry.outcome = outcome
+      entry.endedAt = time
+      return touch(node)
+    }
+    case 'tool-workflow/run-end': {
+      const { runId, stopReason } = event.data
+      const node = findWorkflowRun(nodes, runId)
+      if (node === undefined) return false
+      node.stopReason = stopReason
+      node.endedAt = time
+      return touch(node)
     }
     case 'compaction/start': {
       const node: CompactionNode = {
@@ -663,7 +757,10 @@ export function foldEvent(nodes: ChatNode[], event: SessionEvent): boolean {
     }
     case 'turn/end': {
       const reason = event.data.reason
-      let changed = false
+      // Before the branches below, each of which returns: a turn that ended
+      // holds no more workflow runs, whether or not the step that owned them
+      // logged an end of its own.
+      let changed = closeOpenWorkflowRuns(nodes, time)
       // Close the turn's open step: its footer pins at the turn's end time, and
       // its status names why the output stops where it does.
       for (let index = nodes.length - 1; index >= 0; index -= 1) {

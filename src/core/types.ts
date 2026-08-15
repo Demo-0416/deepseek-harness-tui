@@ -172,6 +172,53 @@ export interface TodoNode extends NodeBase {
   todos: TodoItem[]
 }
 
+/**
+ * One member agent of a workflow run: the facts `tool-workflow/agent-start` and
+ * `tool-workflow/agent-end` record about it, and nothing else.
+ */
+export interface WorkflowMemberEntry {
+  /** The ordinal the workflow tool assigned; the stable per-run identity. */
+  readonly seq: number
+  readonly label: string
+  /**
+   * The phase the member was published under. An absent phase and an empty one
+   * are two different identities, so this stays optional rather than defaulted.
+   */
+  readonly phase?: string
+  /** The member's child session id — where its own transcript lives. */
+  readonly childId: string
+  /** Log time of `agent-start`; the renderer's clock derives the elapsed time. */
+  readonly startedAt: number
+  outcome?: 'completed' | 'failed' | 'cancelled'
+  /** Log time of `agent-end`. Absent while the member is unsettled. */
+  endedAt?: number
+}
+
+/**
+ * One `workflow` tool run, folded from the four durable `tool-workflow/*`
+ * events the tool writes into its calling session.
+ *
+ * The node stores only what the log states. Run status, phase grouping, and the
+ * interrupted reading are derived in `workflow.ts`, so a live fold and a replay
+ * of the same log cannot disagree about them.
+ */
+export interface WorkflowRunNode extends NodeBase {
+  kind: 'workflow-run'
+  readonly runId: string
+  readonly name: string
+  members: WorkflowMemberEntry[]
+  /** Log time of `run-start`. */
+  readonly startedAt: number
+  /** `run-end`'s stop reason. Absent when the run never settled itself. */
+  stopReason?: 'completed' | 'cancelled' | 'error'
+  /**
+   * When the run stopped being live: `run-end`'s time, or the time of the
+   * `step/end` / `turn/end` that closed over a run still waiting for one. An
+   * `endedAt` without a `stopReason` is exactly the interrupted state.
+   */
+  endedAt?: number
+}
+
 /** Everything the chat surface folds, in log order. */
 export type ChatNode =
   | UserMessageNode
@@ -182,6 +229,7 @@ export type ChatNode =
   | NoticeNode
   | CompactionNode
   | TodoNode
+  | WorkflowRunNode
 
 /** Agent lifecycle state mirrored from agent/status events. */
 export type AgentStatus = 'idle' | 'running'

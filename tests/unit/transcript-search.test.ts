@@ -129,6 +129,27 @@ describe('transcriptEntries', () => {
     assert.equal(entry?.text, 'the answer')
   })
 
+  it('reads a workflow run by its name and its members\' labels', () => {
+    // Not its statuses or durations: those are derived at render time and move
+    // while the panel is open, so a hit on one would point at nothing stable.
+    const [entry] = transcriptEntries([{
+      kind: 'workflow-run',
+      key: 'workflow:wf-1',
+      version: 1,
+      time: 7,
+      runId: 'wf-1',
+      name: 'release-check',
+      startedAt: 7,
+      members: [
+        { seq: 1, label: 'lint', phase: 'checks', childId: 'child-1', startedAt: 7, outcome: 'completed' },
+        { seq: 2, label: 'tests', phase: 'checks', childId: 'child-2', startedAt: 7 },
+      ],
+    }])
+    assert.equal(entry?.role, 'workflow')
+    assert.equal(entry?.label, 'Workflow')
+    assert.equal(entry?.text, 'release-check\nlint\ntests')
+  })
+
   it('drops what the transcript itself renders nothing for', () => {
     const nodes: ChatNode[] = [
       userNode('withdrawn', 'discarded prompt', { withdrawn: true }),
