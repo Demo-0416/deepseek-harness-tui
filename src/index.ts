@@ -111,6 +111,7 @@ import type {
   TuiOverlaySession,
   TuiTheme,
 } from './extension/types.ts'
+import type { FileDiff } from '@deepseek-ai/dsh-tools'
 import { ApprovalDialog } from './components/approval.ts'
 import { displayInlineText, displayText } from './components/text.ts'
 import { contentText } from './components/content.ts'
@@ -232,6 +233,13 @@ import {
   resumeCommandLine,
   shortSessionId,
 } from './chat/helpers.ts'
+import {
+  APPROVAL_RULES_FLUSH_TIMEOUT_MS,
+  escalationAccess,
+  isInsideProject,
+  openApprovalRules,
+  serializeApprovalRule,
+} from './chat/approval-rules.ts'
 import {
   openPromptHistory,
   PROMPT_HISTORY_FLUSH_TIMEOUT_MS,
@@ -987,6 +995,19 @@ export function createTuiChat(
     reportError: (message) => { ctx.logger.warn(`dsh-tui: ${message}`) },
   })
   editor.onHistoryAdd = (text) => { promptHistory.append(text) }
+  /**
+   * The permission grants this workspace already gave, across sessions
+   * (`$DSH_HOME/approvals.json`).
+   *
+   * Read once at mount and consulted before any prompt is drawn, so a "don't
+   * ask again in this project" answered last week costs nothing today. Failures
+   * take the history's route — the log and no further: an unwritable home
+   * degrades the grant to this process instead of interrupting the session.
+   */
+  const approvalRules = openApprovalRules({
+    cwd,
+    reportError: (message) => { ctx.logger.warn(`dsh-tui: ${message}`) },
+  })
   /**
    * `fd` if this host has it, which is what makes `@` respect `.gitignore`:
    * pi's own provider shells out to it, and `fd` reads the ignore files the
@@ -2084,10 +2105,71 @@ export function createTuiChat(
    * user answered each prompt by hand.
    *
    * Process-lifetime and this-agent only: it is not logged, so resuming the
-   * session or opening it in another client starts from asking again. That is
-   * the honest scope for a grant no durable layer can revoke.
+   * session or opening it in another client starts from asking again — which
+   * is what the row that fills it promises. The answer that outlives the
+   * window is the row beneath it, and that one lands in {@link approvalRules}.
    */
   const sessionApprovals = new Set<string>()
+
+  /**
+   * Calls a stored command rule has already answered for, by call id.
+   *
+   * A tool that asks twice about ONE call is asking for more than it had, so
+   * the second ask belongs to the user: the rule is already spent and the
+   * dialog is drawn. This is the narrow half of the escalation defence — the
+   * hosts this terminal drives retry a sandbox refusal as a NEW call, and what
+   * stops a rule from answering that one is the access recorded in the rule
+   * itself (`chat/approval-rules.ts`). Emptied with {@link inFlightToolCalls}
+   * when the turn ends.
+   */
+  const prefixGrantedCallIds = new Set<CallId>()
+
+  /**
+   * What one pending call would do, taken from the call the session already
+   * logged rather than from the approval request — which carries a tool name
+   * and nothing else.
+   *
+   * The tool's own `presentCall` is the classifier: it is a pure function of
+   * the arguments (the same property `toolCallTouchesFiles` relies on), so it
+   * can be asked without running anything, a terminal card's title IS the
+   * command line, and a diff card's entries ARE the pending edit — derived from
+   * the arguments, so nothing here reads the disk. Reading a `command` field
+   * off the arguments instead would be wrong on any tool that happens to have
+   * one — `str_replace_editor` takes a `command` that is an edit verb.
+   *
+   * Every way this can fail — no call id, a call this terminal never saw,
+   * arguments that will not parse, a tool that is gone, a presenter that
+   * throws — returns nothing, and the prompt is the plain one it has always
+   * been.
+   * @param callId - the call being decided, when the asker named one.
+   * @returns the command this call runs or the files it edits, or nothing when it is neither.
+   */
+  const presentApprovalCall = (
+    callId: CallId | undefined,
+  ): { command?: string; cwd?: string; diffs?: readonly FileDiff[] } | undefined => {
+    if (callId === undefined) return undefined
+    const call = inFlightToolCalls.get(callId)
+    if (call === undefined) return undefined
+    let args: unknown
+    try {
+      args = JSON.parse(call.arguments)
+    } catch (_unparsableArguments: unknown) {
+      return undefined
+    }
+    const definition = ctx.tools.get(call.name, agent)
+    if (definition?.presentCall === undefined) return undefined
+    try {
+      const view = definition.presentCall(args)
+      // The directory travels with the command. It is an argument the model
+      // chose, and a rule granted here must not answer for the same words run
+      // somewhere the user never opened.
+      if (view?.card === 'terminal') return { command: view.title, ...view.cwd === undefined ? {} : { cwd: view.cwd } }
+      if (view?.card === 'diff' && view.diffs.length > 0) return { diffs: view.diffs }
+      return undefined
+    } catch (_presenterFailed: unknown) {
+      return undefined
+    }
+  }
 
   /**
    * Interactive answerer for this agent's permission questions. The dialog goes
@@ -2108,10 +2190,35 @@ export function createTuiChat(
     // A shutting-down TUI can no longer show anything; the rest of the chain
     // (finally the fail-closed default) owns the answer.
     if (disposed) return next()
-    // A grant the user already gave answers without redrawing the prompt. The
-    // tool card still reports the call, so the run stays visible; what is gone
-    // is the question the user already answered.
-    if (sessionApprovals.has(req.toolName)) return Promise.resolve<ApprovalOutcome>('allowed-once')
+    // What this ask wants beyond the tool's name: a host widens a sandbox by
+    // asking again with a reason that names the mode, and a grant only ever
+    // answers asks of its own kind — a rule stored while widening to
+    // `workspace-write` is not an answer to a later `danger-full-access`.
+    const access = escalationAccess(req.reason)
+    const presented = presentApprovalCall(req.callId)
+    const matchContext = {
+      ...access === undefined ? {} : { access },
+      ...presented?.cwd === undefined ? {} : { cwd: presented.cwd },
+    }
+    // A grant the user already gave answers without redrawing the prompt —
+    // whether it was given a minute ago in this process or once before in this
+    // project. The tool card still reports the call, so the run stays visible;
+    // what is gone is the question the user already answered.
+    if (sessionApprovals.has(req.toolName) || approvalRules.matchesTool(req.toolName, matchContext)) {
+      return Promise.resolve<ApprovalOutcome>('allowed-once')
+    }
+    // A command rule answers the same way, for the one call it covers: matched
+    // against what this call actually runs, where it would run it, and never
+    // twice for the same call (see prefixGrantedCallIds).
+    if (
+      presented?.command !== undefined
+      && req.callId !== undefined
+      && !prefixGrantedCallIds.has(req.callId)
+      && approvalRules.matchesCommand(req.toolName, presented.command, matchContext)
+    ) {
+      prefixGrantedCallIds.add(req.callId)
+      return Promise.resolve<ApprovalOutcome>('allowed-once')
+    }
     return new Promise<ApprovalOutcome>((resolveOutcome) => {
       let settled = false
       let overlay: TuiOverlaySession | undefined
@@ -2128,20 +2235,52 @@ export function createTuiChat(
             toolName: req.toolName,
             ...req.callId === undefined ? {} : { callId: req.callId },
             ...req.reason === undefined ? {} : { reason: req.reason },
+            ...presented?.command === undefined ? {} : { command: presented.command },
+            // Named only when it is somewhere else: the working directory is
+            // noise on the calls that run where the session does, and the whole
+            // question on the calls that do not.
+            ...presented?.cwd === undefined || isInsideProject(presented.cwd, cwd)
+              ? {}
+              : { commandCwd: presented.cwd },
+            ...presented?.diffs === undefined ? {} : { diffs: presented.diffs },
+            ...access === undefined ? {} : { access },
           },
           palette,
           (decision) => {
             settle(decision.outcome)
             if (decision.outcome === 'allowed-once') {
-              if (!decision.remember) return
-              sessionApprovals.add(req.toolName)
+              const grant = decision.remember
+              if (grant === undefined) return
+              const tool = displayText(req.toolName)
               // Said once, where the grant was made: a permission that stops
               // asking must announce its own scope, or the silence afterwards
-              // reads as the tool never having needed approval at all.
-              appendNotice(
-                `Allowing ${displayText(req.toolName)} for the rest of this session in this terminal. `
-                + 'Restarting or resuming asks again.',
-              )
+              // reads as the tool never having needed approval at all. A
+              // durable grant owes the user one thing more — the file it went
+              // into, because a rule nobody can find is a rule nobody can take
+              // back.
+              if (grant.scope === 'session') {
+                sessionApprovals.add(req.toolName)
+                appendNotice(t('approval.grantedSession', { tool }))
+                return
+              }
+              const path = approvalRules.displayPath
+              // The sandbox this ask was widening to is part of the grant: it
+              // is stored with the rule and said in the notice, so "don't ask
+              // again" never turns out to have meant more of the machine than
+              // the user was looking at.
+              const scope = { tool: req.toolName, ...access === undefined ? {} : { access } }
+              if (grant.prefix === undefined) {
+                approvalRules.allow(scope)
+                appendNotice(access === undefined
+                  ? t('approval.grantedProject', { tool, path })
+                  : t('approval.grantedProjectAccess', { tool, access: displayText(access), path }))
+                return
+              }
+              approvalRules.allow({ ...scope, content: grant.prefix })
+              appendNotice(t('approval.grantedPrefix', {
+                rule: serializeApprovalRule({ ...scope, content: grant.prefix }),
+                path,
+              }))
               return
             }
             // The refusal itself carries no user text — `approval/decided` has
@@ -2152,6 +2291,13 @@ export function createTuiChat(
             // beside the denial rather than a turn later.
             if (decision.feedback === undefined) return
             dispatchMessage([{ type: 'text', text: decision.feedback }])
+          },
+          // The same budgets the overlay itself is opened with: the preview
+          // compares no more than the transcript's diff cards do, and stays
+          // short enough that the height below cannot clip the answers away.
+          {
+            maxDiffEditLength: resolved.maxDiffEditLength,
+            maxHeight: resolved.questionDialogMaxHeight,
           },
         ),
         options: {
@@ -2210,6 +2356,10 @@ export function createTuiChat(
       // The last prompt may still be in the history's write queue; wait for it,
       // but never let one stuck disk write hold the exit.
       await whenIdleOrTimeout(promptHistory.flush(), PROMPT_HISTORY_FLUSH_TIMEOUT_MS)
+      // Same bargain for a permission the user just granted: the notice already
+      // told them where it was stored, and another terminal holding the file's
+      // lock is exactly when leaving would lose it.
+      await whenIdleOrTimeout(approvalRules.flush(), APPROVAL_RULES_FLUSH_TIMEOUT_MS)
       ui.stop()
       if (exitProcess) {
         if (runtime.goodbyeMessage !== undefined) {
@@ -4504,7 +4654,12 @@ export function createTuiChat(
     if (event.type === 'tool/call') {
       inFlightToolCalls.set(event.data.callId, { name: event.data.name, arguments: event.data.arguments })
     }
-    if (event.type === 'turn/end') inFlightToolCalls.clear()
+    // The call ids a stored rule already answered for go with them: a turn that
+    // is over has no call left to escalate, and the next turn's ids are its own.
+    if (event.type === 'turn/end') {
+      inFlightToolCalls.clear()
+      prefixGrantedCallIds.clear()
+    }
     if (event.type === 'tool/result') {
       const callId = event.data.message.content[0].toolCallId
       const call = inFlightToolCalls.get(callId)
