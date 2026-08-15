@@ -121,7 +121,7 @@ all three.
 |---|---|
 | Panel (`/help`, `/hotkeys`, `/palette`, `/status`, `/mcp`, `/doctor`) | Up/Down scroll · PgUp/PgDn page · g/G or Home/End top or bottom · Esc or Ctrl+C close |
 | Question | Up/Down move · 1-9 answer straight away · Space toggle (multi-select) · "Type something." row for a custom answer · PgUp/PgDn page long detail · Enter submit · Esc or Ctrl+C cancel |
-| Permission prompt | Up/Down move · 1-4 answer straight away · Enter confirm · Esc or Ctrl+C deny |
+| Permission prompt | Up/Down move · a digit answers the row it numbers · Enter confirm · Esc or Ctrl+C deny. A fifth row appears only when the grant can be remembered (for a shell it opens the command rule to edit) |
 | History search (Ctrl+R) | type to match · Ctrl+R steps to an older match · Tab or Esc accepts into the editor · Enter sends it · Ctrl+C or an emptied query restores the draft |
 | Session search (`/search`, Ctrl+G) | type to filter · Up/Down move · PgUp/PgDn page · Enter opens the message · Esc leaves the message, then clears the query, then closes |
 | Model picker (`/model`) | type to filter · Up/Down move · Left/Right or Shift+Tab adjust reasoning effort · Enter save as default · Ctrl+S use for this session only · Esc clears the filter, then closes |
@@ -243,6 +243,67 @@ Both thresholds are constants, not configuration: 25% is deliberately above the
 20% at which `@deepseek-ai/dsh-compaction-basic` compacts on its own under its
 shipped defaults, so the yellow row is the last moment to choose `/compact`
 yourself, and red means the automatic path is absent, disabled, or failing.
+
+### Permission grants
+
+Row 2 of the permission prompt ("don't ask again … this session") is remembered
+in memory and forgotten when the window closes. Row 5 ("don't ask again … in
+this project") is written to `$DSH_HOME/approvals.json` (`~/.dsh/approvals.json`)
+and still holds after a restart or a `/resume`:
+
+```jsonc
+{
+  "version": 1,
+  "projects": {
+    "/home/you/code/app": {
+      "allow": ["edit", "bash(npm run:*)", "bash(git status)", "edit [danger-full-access]"]
+    }
+  }
+}
+```
+
+Rules are keyed by the workspace the session was opened in, so a grant given in
+one repository is never spent in another, and nothing is written into the
+repository itself. A rule is either a bare tool name (`edit` — every ask about
+that tool is granted), a command prefix (`bash(npm run:*)` — `npm run build`
+and `npm run test`, but never `npm run-evil`), or one exact command
+(`bash(git status)`). Commands are compared word by word, so the spacing a model
+happens to use never decides whether a rule fires. A rule never covers a line
+that runs more than one command: anything carrying `;`, `&&`, `|`, a redirect, a
+backquote, a parenthesis or a newline is asked about even when its first command
+is allowed. A command that names a working directory outside the project is
+asked about too, and the prompt says which directory that is. To revoke a grant,
+delete its entry from the file — everything else under `projects`, including
+keys this build does not write, is left alone.
+
+A trailing `[mode]` is the sandbox access the grant was given at. Hosts widen a
+refused call by asking again for more permission ("escalate sandbox to
+danger-full-access: …"), and a rule only ever answers asks of its own kind: one
+saved while widening to `workspace-write` leaves a later `danger-full-access`
+request to you, and a rule saved for an ordinary call answers no escalation at
+all. The answer row says the access it would stop asking about.
+
+A shell asks about the command it is about to run, so row 5 offers a rule
+instead of a blanket grant: the prompt pre-fills it (`npm run build` becomes
+`npm run:*`, `git status` becomes `git status:*`), `Enter` saves it, and
+editing it first is the point — trim it to `npm:*` to cover more, or to
+`npm run build` alone to cover exactly this one. Emptying the box allows this
+call and stores nothing. There is deliberately no "allow every shell command in
+this project" row, and a command no rule could ever match — a compound line, or
+a bare `sudo`/`env`/`bash -c` wrapper — leaves the prompt with its first four
+answers. So does a request the terminal could not look behind, such as a
+background command or a call whose arguments will not parse: a permanent grant
+is offered on what the prompt could show, never on a tool name alone.
+
+A tool that writes files shows the change it would make inside the prompt: the
+file's path and the old→new hunks, taken from the pending call's own arguments
+(nothing is read from disk). Long changes are clipped to keep the answers on
+screen at any terminal width — the preview is budgeted in the rows it will
+actually occupy, wrapped lines and extra files included — and the marker says
+how many rows are not shown, with the tool's card in the transcript carrying the
+whole diff once the call runs. A change past `maxDiffEditLength` is shown as a
+whole-file replacement and labelled as approximate; a call the terminal cannot
+present at all asks the plain question.
 
 ### `@` file references
 

@@ -113,7 +113,7 @@ stdin 和 stdout 都必须是 TTY，否则拒绝启动。`--print` 是唯一例�
 |---|---|
 | 面板（`/help`、`/hotkeys`、`/palette`、`/status`、`/mcp`、`/doctor`） | Up/Down 滚动 · PgUp/PgDn 翻页 · g/G 或 Home/End 到顶/到底 · Esc 或 Ctrl+C 关闭 |
 | 提问 | Up/Down 移动 · 1-9 直接作答 · Space 勾选（多选）· "Type something." 行输入自定义答案 · PgUp/PgDn 翻长详情 · Enter 提交 · Esc 或 Ctrl+C 取消 |
-| 权限审批 | Up/Down 移动 · 1-4 直接作答 · Enter 确认 · Esc 或 Ctrl+C 拒绝 |
+| 权限审批 | Up/Down 移动 · 数字键直接作答该行 · Enter 确认 · Esc 或 Ctrl+C 拒绝。只有能被记住的授权才会多出第 5 行（命令行工具则打开规则供编辑） |
 | 历史搜索（Ctrl+R） | 输入即匹配 · Ctrl+R 跳上一条更旧的匹配 · Tab 或 Esc 取回编辑器 · Enter 直接发送 · Ctrl+C 或清空查询恢复草稿 |
 | 会话搜索（`/search`、Ctrl+G） | 输入即过滤 · Up/Down 移动 · PgUp/PgDn 翻页 · Enter 打开该消息 · Esc 依次退出消息、清空查询、关闭 |
 | 模型选择器（`/model`） | 输入即过滤 · Up/Down 移动 · Left/Right 或 Shift+Tab 调推理力度 · Enter 存为默认 · Ctrl+S 仅本会话生效 · Esc 先清过滤再关闭 |
@@ -219,6 +219,54 @@ transcript 里每档还会写一行，因为正在读长回答的人不会盯着
 两个阈值是常量，不是配置项：25% 特意高于 `@deepseek-ai/dsh-compaction-basic` 默认
 配置下自动压缩的 20%，所以黄行是你还能自己决定压不压的最后时刻；红行意味着自动压缩
 这条路缺席、被关掉或者失败了。
+
+### 权限授权
+
+权限审批框的第 2 行（"本会话内不再询问"）只记在内存里，窗口关掉就没了。第 5 行
+（"本项目内不再询问"）写入 `$DSH_HOME/approvals.json`（`~/.dsh/approvals.json`），
+重启或 `/resume` 之后依然有效：
+
+```jsonc
+{
+  "version": 1,
+  "projects": {
+    "/home/you/code/app": {
+      "allow": ["edit", "bash(npm run:*)", "bash(git status)", "edit [danger-full-access]"]
+    }
+  }
+}
+```
+
+规则按会话打开时的工作区分组，所以在一个仓库里给的授权不会花在另一个仓库上，也
+不会有任何东西被写进仓库本身。规则有三种：裸工具名（`edit`——该工具的每次询问都
+放行）、命令前缀（`bash(npm run:*)`——匹配 `npm run build`、`npm run test`，但绝不
+匹配 `npm run-evil`）、单条精确命令（`bash(git status)`）。命令按词比较，模型多打
+几个空格不会改变规则是否命中。规则永远不覆盖一行里跑多条命令的情况：只要带上
+`;`、`&&`、`|`、重定向、反引号、括号或换行，即使第一条命令被允许也照样弹框；命令
+指定了项目目录之外的工作目录时同样弹框，审批框里会写明是哪个目录。想撤销授权，把
+对应条目从文件里删掉即可——`projects` 下其余内容（包括本版本不写的键）原样保留。
+
+规则末尾的 `[mode]` 是这条授权当时对应的 sandbox 权限。宿主在调用被沙箱拒绝后会带
+着更高权限重问一次（「escalate sandbox to danger-full-access: …」），而一条规则只回
+答与自己同类的请求：在 `workspace-write` 下存的规则不会替之后的 `danger-full-access`
+作答，普通调用下存的规则也不会回答任何提权请求。第 5 行的文案会写明它将不再询问的
+权限档位。
+
+命令行工具问的是「这条命令能不能跑」，所以它的第 5 行给的是一条规则而不是整工具放
+行：审批框会预填（`npm run build` 预填成 `npm run:*`，`git status` 预填成
+`git status:*`），Enter 保存，而先改一改正是它的用意——改成 `npm:*` 覆盖得更宽，改
+成 `npm run build` 就只覆盖这一条。把输入框清空则只允许这一次、不存任何规则。这里
+刻意没有「本项目内放行所有 shell 命令」这一行；遇到任何规则都匹配不上的命令——复合
+命令，或 `sudo`/`env`/`bash -c` 这类裸包装——第 5 行直接不出现，只剩原来的四个选项。
+终端看不清这次调用时也一样（后台命令、入参不是合法 JSON 等）：持久授权只对审批框
+真正展示过的内容开放，绝不只凭一个工具名发出去。
+
+写文件类的工具会把这次改动直接画在审批框里：文件路径加 old→new 的 diff，内容取自
+这次调用自己的入参（不读磁盘）。改动太长会被截断以保住下面的选项行——预算按实际占用
+的屏幕行数计算（含长行折行与多文件），所以终端多宽都不会把选项挤掉；截断标记会写明
+还有多少行没显示，调用真正跑起来之后，transcript 里的工具卡片有完整 diff。改动量
+超过 `maxDiffEditLength` 时按整文件替换渲染并标注为近似；终端拿不到这次调用的内容
+时，弹的就是原来那个不带 diff 的审批框。
 
 ### `@` 文件引用
 
