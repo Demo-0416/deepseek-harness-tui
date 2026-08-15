@@ -127,6 +127,8 @@ describe('terminal preferences', () => {
       thinkingPinned: false,
       toolCards: 'expanded',
       theme: 'dark',
+      queueUpHintSeen: 0,
+      busyEnter: 'steer',
     } satisfies TuiPreferences)
   })
 
@@ -136,6 +138,8 @@ describe('terminal preferences', () => {
     store.save({ theme: 'no-color' })
     store.save({ toolCards: 'expanded' })
     store.save({ thinkingPinned: true })
+    store.save({ queueUpHintSeen: 1 })
+    store.save({ busyEnter: 'queue' })
     // Every write is fire-and-forget: the value is already live on screen, so
     // the document catches up on the microtask queue rather than in the keystroke.
     await delay(SETTLE_MS)
@@ -143,11 +147,15 @@ describe('terminal preferences', () => {
       { theme: 'no-color' },
       { toolCards: 'expanded' },
       { thinkingPinned: true },
+      { queueUpHintSeen: 1 },
+      { busyEnter: 'queue' },
     ], 'each row saves the field it changed, not the whole section')
     assert.deepEqual(store.current(), {
       thinkingPinned: true,
       toolCards: 'expanded',
       theme: 'no-color',
+      queueUpHintSeen: 1,
+      busyEnter: 'queue',
     } satisfies TuiPreferences)
   })
 
@@ -162,13 +170,34 @@ describe('terminal preferences', () => {
   it('falls back to the default for a value the document got wrong', () => {
     // The kind of thing a hand-edited settings.yaml carries: a plausible theme
     // name that is not one of the four, and a phase spelled as a boolean.
-    const settings = new FakeSettings({ theme: 'solarized', toolCards: true })
+    const settings = new FakeSettings({ theme: 'solarized', toolCards: true, busyEnter: 'steering' })
     const store = openTuiPreferences(contextWith(settings), {}, refuseErrors)
     assert.deepEqual(store.current(), {
       thinkingPinned: false,
       toolCards: 'collapsed',
       theme: 'auto',
+      queueUpHintSeen: 0,
+      busyEnter: 'steer',
     } satisfies TuiPreferences)
+  })
+
+  it('clamps a teaching count the document put out of range', () => {
+    // The counter is written by the terminal, so a document carrying 12.5 was
+    // edited by hand or by an older build. Either way it says "this user has
+    // been told", and the shape check is what turns that into a usable number
+    // rather than dropping the whole section over it.
+    const stored = { thinkingPinned: false, toolCards: 'collapsed', theme: 'auto', queueUpHintSeen: 12.5 }
+    const provider = { register: () => {}, get: () => stored, update: () => Promise.resolve() }
+    const store = openTuiPreferences(contextWith(provider), {}, refuseErrors)
+    assert.equal(store.current().queueUpHintSeen, 3)
+
+    const negative = { ...stored, queueUpHintSeen: -1 }
+    const belowZero = openTuiPreferences(
+      contextWith({ register: () => {}, get: () => negative, update: () => Promise.resolve() }),
+      {},
+      refuseErrors,
+    )
+    assert.equal(belowZero.current().queueUpHintSeen, 0, 'a count below zero is no count at all')
   })
 
   it('says so when the section was refused, and stays silent on a second mount', () => {
@@ -433,6 +462,7 @@ describe('the mounted /config and /theme', { skip: skipWithoutEntry }, () => {
       await delay(SETTLE_MS)
       // Down to the Theme row, then Enter: the picker takes the inline slot the
       // panel was holding, which is what every other surface here does with it.
+      harness.terminal.send(ARROW_DOWN)
       harness.terminal.send(ARROW_DOWN)
       harness.terminal.send(ARROW_DOWN)
       harness.terminal.send(ENTER)

@@ -583,6 +583,27 @@ describe('appendOptimisticUserMessage', () => {
     })
   })
 
+  it('keeps a queued echo queued where it stands, once its turn claims it', async () => {
+    await withSession((session) => {
+      // Typed over a turn the user chose not to interrupt: the echo sits
+      // between two steps of THAT turn, and the log records it as the plain
+      // user message that opened a later one.
+      session.append('step/start', { turn: 1, step: 1 })
+      session.append('assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'answering' } })
+      const nodes = foldEvents(session.events)
+      const message = submission('and after that, run the tests')
+      assert.equal(appendOptimisticUserMessage(nodes, message, 'queued'), true)
+
+      assert.equal(foldEvent(nodes, appendUserMessage(session, message)), true)
+      const landed = nodeOf(nodes, 1, 'user-message')
+      assert.equal(landed.optimistic, undefined, 'the log has it now')
+      // The node stays where the echo was — in the middle of the turn it was
+      // typed over — so reading it back as an ordinary prompt would close that
+      // turn there, printing its completion row above its own remaining output.
+      assert.equal(landed.source, 'queued')
+    })
+  })
+
   it('echoes one node per submission', async () => {
     await withSession(() => {
       const nodes: ChatNode[] = []

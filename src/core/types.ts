@@ -40,8 +40,14 @@ interface NodeBase {
 export interface UserMessageNode extends NodeBase {
   kind: 'user-message'
   text: string
-  /** `user` is a typed prompt; `steering` is mid-run input from a steering source. */
-  source: 'user' | 'steering'
+  /**
+   * `user` is a typed prompt; `steering` is mid-run input the running turn will
+   * claim at its next step; `queued` is mid-run input parked for a turn of its
+   * own. The last two describe how a submission was routed, so they only ever
+   * reach a node the terminal echoed itself: a landed log entry is a `user`
+   * message whichever boundary carried it.
+   */
+  source: 'user' | 'steering' | 'queued'
   /**
    * Set while this node is the terminal's own echo of a submission no event has
    * recorded yet. The `user/message` event that lands replaces the node without

@@ -9,6 +9,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm';
 import type { JsonValue, SessionEvent, TodoItem } from '@deepseek-ai/dsh-session';
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 import { type CollapsedGroup } from '../core/collapse.ts';
+import type { WorkflowRunNode } from '../core/types.ts';
 import { type Palette } from './theme.ts';
 import { type ParsedArguments } from './content.ts';
 import { type MarkdownAnsiTheme } from '../render/markdown.ts';
@@ -710,6 +711,91 @@ export declare class CollapsedGroupComponent extends CachedCardComponent {
      * @returns The hint to render, or `undefined` for no hint row.
      */
     private hintInFlight;
+}
+/**
+ * One workflow run, rendered as the run / phase / member block the four
+ * `tool-workflow/*` records fold into.
+ *
+ * Which of the three levels is on screen is decided by the run's state, not by
+ * a per-run toggle this transcript has no key for: a phase holding anything
+ * that is not completed keeps its member rows, and a run whose every member
+ * completed recedes to one summary row with the usual Ctrl+O hint. That is the
+ * web client's rule (`WorkflowRunPanel`), and it is the one that matches what a
+ * reader wants — the members still in flight, the ones that failed, and nothing
+ * else.
+ *
+ * The Ctrl+O phase then overrides it in both directions: the expanded phase
+ * prints every phase and member whatever their status, and the hidden phase
+ * keeps only the run's own row. A run is conversation structure rather than
+ * tool noise, so even hidden it does not vanish the way a tool card does.
+ */
+export declare class WorkflowRunComponent extends CachedCardComponent {
+    private node;
+    private visibility;
+    private readonly palette;
+    private readonly expandKey;
+    private readonly now;
+    /**
+     * @param node - The folded run.
+     * @param visibility - The Ctrl+O phase this block renders under.
+     * @param palette - Active role palette.
+     * @param expandKey - The label of whichever key cycles tool cards, read per
+     *   render for the same reason {@link CollapsedGroupComponent} reads it.
+     * @param now - Render clock, read per render so a running run and its running
+     *   members count up between events. Injected, never `Date.now`.
+     */
+    constructor(node: WorkflowRunNode, visibility: ToolCardVisibility, palette: Palette, expandKey: () => string, now: () => number);
+    /**
+     * Apply the run's current facts; every member event re-seals the block.
+     * @param node - The freshly folded run.
+     */
+    setNode(node: WorkflowRunNode): void;
+    /**
+     * Apply a Ctrl+O phase change.
+     * @param visibility - The new phase.
+     */
+    setVisibility(visibility: ToolCardVisibility): void;
+    protected renderLines(width: number): string[];
+    /**
+     * The run's own row, plus the expand hint when this render is holding rows
+     * back.
+     * @param node - The folded run.
+     * @param status - The run's derived status.
+     * @param hint - Whether to offer the expand hint.
+     * @param width - Render width.
+     * @returns The head rows.
+     */
+    private headRows;
+    /**
+     * One phase header: its name, how many members it holds, and which of them
+     * still want attention.
+     * @param node - The run the phase belongs to.
+     * @param group - The phase group.
+     * @param width - Render width.
+     * @returns The header row.
+     */
+    private phaseRow;
+    /**
+     * One member row: its status glyph, its label, and how long it has been (or
+     * was) running.
+     * @param node - The run the member belongs to.
+     * @param member - The member entry.
+     * @param width - Render width.
+     * @returns The member row.
+     */
+    private memberRow;
+    /**
+     * A status word and the wall time behind it.
+     *
+     * The node publishes start and end times, never a length: a running row's
+     * clock has to move between events, and a settled one has to freeze at the
+     * time the log recorded rather than at whatever the renderer read last.
+     * @param status - The derived status of the run or member.
+     * @param startedAt - Log time the run or member started.
+     * @param endedAt - Log time it stopped, when it did.
+     * @returns The status fragment.
+     */
+    private statusText;
 }
 /**
  * Injected context (plugin/goal source, e.g. `workspace-context`), rendered as a

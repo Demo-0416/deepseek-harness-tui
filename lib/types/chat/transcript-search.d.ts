@@ -13,7 +13,7 @@
  */
 import type { ChatNode } from '../core/types.ts';
 /** Which surface an entry was folded from; decides its row's tone and label. */
-export type TranscriptEntryRole = 'user' | 'assistant' | 'tool' | 'notice' | 'context' | 'reference' | 'compaction';
+export type TranscriptEntryRole = 'user' | 'assistant' | 'tool' | 'notice' | 'context' | 'reference' | 'compaction' | 'workflow';
 /** One searchable message: everything one node contributes, as plain text. */
 export interface TranscriptEntry {
     /** The node's own key, so a selection survives a re-filter. */

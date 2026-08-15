@@ -140,9 +140,13 @@ function userKey(message: { id?: unknown }, seq: number): string {
  * that position is the whole point of echoing it. `time` and `key` are readonly,
  * so the update is a replacement of the node object, carrying the log's time.
  *
- * A `steering` echo stays steering: rc.6 has no steering message source, so the
- * log records mid-run input as a plain `user` message and only the terminal that
- * submitted it knows it interrupted a running turn.
+ * A `steering` or `queued` echo keeps that source: rc.6 has no steering or
+ * queueing message source, so the log records mid-run input as a plain `user`
+ * message and only the terminal that submitted it knows it was typed over a
+ * running turn. Keeping it matters beyond the badge — the node sits where the
+ * echo sat, in the middle of the turn it was typed over, and a transcript that
+ * read it back as an ordinary prompt would close that turn there, printing its
+ * completion row above the rest of its own answer.
  */
 function landUserMessage(
   nodes: ChatNode[],
@@ -162,7 +166,7 @@ function landUserMessage(
     version: existing.node.version + 1,
     time,
     text,
-    source: existing.node.source === 'steering' ? 'steering' : source,
+    source: existing.node.source === 'user' ? source : existing.node.source,
   }
   nodes[existing.index] = node
   return true

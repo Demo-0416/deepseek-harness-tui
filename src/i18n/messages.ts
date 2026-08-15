@@ -78,6 +78,7 @@ export const EN_MESSAGES = {
   'hotkeys.copy': '{todos} expand or collapse the plan • {copy} copy the last answer • {redraw} redraw',
   'hotkeys.externalEditor':
     '{key} edit the draft in $EDITOR — $VISUAL, then $EDITOR, then a terminal editor on PATH',
+  'hotkeys.busyEnter': '{key} send with the opposite busy-Enter behavior, queue ⇄ steer (Kitty-protocol terminals)',
   'hotkeys.cancel': '{cancel} cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind',
   'hotkeys.exit': '{exit} exit on an empty prompt • Shift+Ctrl+D session debug panel',
   'hotkeys.interrupt': 'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
@@ -325,6 +326,7 @@ export const EN_MESSAGES = {
   'settings.hint': '↑↓ move · enter change · esc close',
   'settings.thinking': 'Thinking display',
   'settings.toolCards': 'Tool cards default',
+  'settings.busyEnter': 'Enter while running',
   'settings.theme': 'Theme',
   'settings.language': 'Language',
   'settings.model': 'Model',
@@ -412,6 +414,10 @@ export const EN_MESSAGES = {
   // under it would never be seen.
   'prompt.compactingCancelling': 'Cancelling the compaction… {duration}',
   'prompt.queued': '{count} queued',
+  // The empty input row while prompts wait in the queue: the only place the key
+  // that edits them is named. Shown a few times and then never again, because a
+  // user who has read it either uses the key or has decided not to.
+  'prompt.queuedEditHint': 'press up to edit queued messages',
   // The background-work badge: a count and nothing else. A job outlives the
   // tool call that started it, so without this the row a user watches says
   // nothing about work that is still going on; the stopwatch stays in `/jobs`,
@@ -569,6 +575,14 @@ export const EN_MESSAGES = {
   'status.systemPrompt': 'System prompt',
   'status.registeredTools': 'Registered tools',
 
+  // The queue section: what the agent has been handed and has not read yet, in
+  // the order it will read it. Each line says which boundary is holding the
+  // prompt, because that is the difference between "interrupts this answer"
+  // and "asked after this answer".
+  'status.queued': 'Queued messages',
+  'status.queued.steering': 'steering',
+  'status.queued.nextTurn': 'next turn',
+
   // How `/status` and the debug panel name the Ctrl+T state. Three states, not
   // a shown/hidden pair: `showReasoning: false` is a deployment-level `off`
   // that the key cannot leave, and it reads differently from a user who simply
@@ -699,6 +713,12 @@ export const EN_MESSAGES = {
   'transcript.compactionMarker': '… earlier context was compacted …',
   'transcript.compactionSummaryHeader': 'Compaction summary',
   'transcript.steeringBadge': 'Steering',
+  // The same prompt before the agent's inbox has claimed it: still queued, and
+  // still cancellable back into the editor. The marker settles by itself when
+  // the logged message replaces the echo.
+  'transcript.steeringBadgePending': 'Steering · pending',
+  // A prompt submitted while a turn ran but parked for a turn of its own.
+  'transcript.queuedBadge': 'Queued',
   // The two mode badges above the prompt, and the hint that names the key which
   // moves between them. `{key}` is filled from the installed keybinding manager,
   // so a rebound action prints its own key here too.
@@ -765,6 +785,12 @@ export const EN_MESSAGES = {
   'settings.toolCards.collapsed': 'collapsed',
   'settings.toolCards.expanded': 'expanded',
   'settings.toolCards.hidden': 'hidden',
+
+  // The two answers to "I typed something while the agent is still working".
+  // Worded as what happens to the turn in flight, not as the API call behind
+  // it: `steer` and `queue` are this bundle's words, not the user's.
+  'settings.busyEnter.steer': 'Steer the current turn',
+  'settings.busyEnter.queue': 'Queue for the next turn',
 
   // `/login`: picking a route, typing a key, and being told exactly what was
   // verified. The honesty rules this flow is held to live in the wording, so
@@ -929,6 +955,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'hotkeys.copy': '{todos} 展开或收起计划 • {copy} 复制最后一条回答 • {redraw} 重绘屏幕',
   'hotkeys.externalEditor':
     '{key} 用 $EDITOR 编辑草稿——先看 $VISUAL，再看 $EDITOR，最后在 PATH 上找终端编辑器',
+  'hotkeys.busyEnter': '{key} 按忙时 Enter 的相反档发送：排队 ⇄ 插话（需 Kitty 协议终端）',
   'hotkeys.cancel': '{cancel} 取消当前轮次；草稿状态下再按一次清空草稿；空输入时再按一次打开 Rewind',
   'hotkeys.exit': '{exit} 空输入时退出 • Shift+Ctrl+D 打开会话调试面板',
   'hotkeys.interrupt': 'Ctrl+C 运行中取消；输入中清空输入；空闲时连按两次退出',
@@ -1127,6 +1154,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'settings.hint': '↑↓ 移动 · enter 修改 · esc 关闭',
   'settings.thinking': '思考块显示',
   'settings.toolCards': '工具卡片默认形态',
+  'settings.busyEnter': '运行中按 Enter',
   'settings.theme': '配色',
   'settings.language': '界面语言',
   'settings.model': '模型',
@@ -1188,6 +1216,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'prompt.compacting': '正在压缩上下文 {duration}',
   'prompt.compactingCancelling': '正在取消压缩… {duration}',
   'prompt.queued': '{count} 条排队中',
+  'prompt.queuedEditHint': '按 ↑ 逐条编辑排队消息',
   'prompt.jobs.one': '{count} 个后台任务运行中',
   'prompt.jobs.other': '{count} 个后台任务运行中',
 
@@ -1295,6 +1324,9 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.contextUnknown': '已用 {used} · 容量未知',
   'status.systemPrompt': 'System prompt',
   'status.registeredTools': '已注册工具',
+  'status.queued': '排队消息',
+  'status.queued.steering': '插话',
+  'status.queued.nextTurn': '下一轮',
   'status.thinking.disabled': '已禁用',
   'status.thinking.kept': '常驻',
   'status.thinking.live': '仅流式输出时',
@@ -1371,6 +1403,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'transcript.compactionMarker': '… 更早的上下文已被压缩 …',
   'transcript.compactionSummaryHeader': '压缩摘要',
   'transcript.steeringBadge': '插入指令',
+  'transcript.steeringBadgePending': '插入指令 · 待认领',
+  'transcript.queuedBadge': '排队中',
   'transcript.planModeBadge': 'plan 模式已开启',
   'transcript.planModeBadgePending': 'plan 模式已开启（下一步生效）',
   'transcript.autoAcceptBadge': 'auto-accept 已开启',
@@ -1406,6 +1440,9 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'settings.toolCards.collapsed': '折叠',
   'settings.toolCards.expanded': '展开',
   'settings.toolCards.hidden': '隐藏',
+
+  'settings.busyEnter.steer': '插话当前轮次',
+  'settings.busyEnter.queue': '排到下一轮',
 
   'command.login.description': '给一个 provider 配置 API key 并保存',
   'command.provider.description': '列出已配置的 provider，或添加一个 /login 没有提供的',

@@ -334,6 +334,14 @@ export class ApprovalDialog implements Component, Focusable {
     }
     if (this.mode !== 'list') {
       this.input.focused = this.focused
+      // The inline editor is single-line, so a bare CR/LF is always a submit.
+      // pi-tui's Input binds submit through `tui.input.submit`, which a real
+      // terminal's key negotiation can leave untriggered for these bytes —
+      // the dialog's own handleInput receives them reliably, so submit here.
+      if (data === '\r' || data === '\n') {
+        this.input.onSubmit?.(this.input.getValue())
+        return
+      }
       this.input.handleInput(data)
       this.invalidate()
       return

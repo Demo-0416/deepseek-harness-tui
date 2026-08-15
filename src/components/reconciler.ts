@@ -63,6 +63,28 @@ export const COMPACTION_MARKER = t('transcript.compactionMarker', undefined, 'en
 export const STEERING_BADGE = t('transcript.steeringBadge', undefined, 'en')
 
 /**
+ * The label above one user prompt, or nothing for an ordinary one.
+ *
+ * A prompt the terminal has echoed but the agent's inbox has not claimed yet is
+ * still queued: it can be cancelled back into the editor, and nothing has been
+ * answered. Saying so is the whole difference between the queue being visible
+ * and the count on the prompt row being the only sign it exists — the badge is
+ * the marker, and it settles by itself when the logged message replaces the
+ * echo without `optimistic`.
+ * @param node - the user node being rendered.
+ * @returns the badge row's text, or `undefined` when the prompt carries none.
+ */
+function userBadge(node: UserMessageNode): string | undefined {
+  // A queued prompt is labelled only while it waits: once a turn claims it, it
+  // IS that turn's opening prompt and carries no more meaning than any other.
+  // (The node keeps its `queued` source anyway, because the transcript still
+  // needs to know it was typed into the middle of an earlier turn.)
+  if (node.source === 'queued') return node.optimistic === true ? t('transcript.queuedBadge') : undefined
+  if (node.source !== 'steering') return undefined
+  return node.optimistic === true ? t('transcript.steeringBadgePending') : t('transcript.steeringBadge')
+}
+
+/**
  * The status line one Ctrl+O phase reports.
  *
  * Only the expanded phase renders injected context at all (see
@@ -397,11 +419,15 @@ export class TranscriptReconciler {
       flushFooter()
       // A new turn opens at its first step, or at the prompt that asked for it
       // (the fold logs the prompt above the step it entered), so either one is
-      // where the previous turn's row is due. A steering prompt is neither: it
-      // lands between two steps of the turn it interrupted, and closing the
-      // turn there reported it mid-answer and again at its real end.
+      // where the previous turn's row is due. A steered or queued prompt is
+      // neither: it is echoed between two steps of the turn it was submitted
+      // into, and closing the turn there reported it mid-answer and again at
+      // its real end. Both keep that source when the log lands on them (see
+      // `landUserMessage`), so the echoed position never opens a turn; a prompt
+      // this terminal did not echo is a plain `user` message and does open one,
+      // in the place the fold gives it.
       const opensTurn = node.kind === 'user-message'
-        ? node.source !== 'steering'
+        ? node.source === 'user'
         : node.kind === 'assistant' && node.turn !== turn
       if (opensTurn) flushTurn()
       if (node.kind === 'assistant') turn = node.turn
@@ -669,17 +695,19 @@ export class TranscriptReconciler {
   }
 
   /**
-   * Build one user turn: the filled prompt block, under a `Steering` badge when
-   * the turn interrupted a running one. Claude Code's block names no role, so
-   * an ordinary prompt carries no label at all and the badge is the exception
-   * that says this text reached the model mid-answer.
+   * Build one user turn: the filled prompt block, under the badge
+   * {@link userBadge} gives it when the prompt was not simply typed at an idle
+   * agent. Claude Code's block names no role, so an ordinary prompt carries no
+   * label at all and the badge is the exception that says this text reached the
+   * model mid-answer — or has not reached it yet.
    */
   private userView(node: UserMessageNode): Component {
     const body = new UserMessageComponent(node.text, this.deps.palette, this.deps.scheme())
-    if (node.source !== 'steering') return block(body)
+    const badge = userBadge(node)
+    if (badge === undefined) return block(body)
     const container = new Container()
     container.addChild(new Spacer(1))
-    container.addChild(new Text(this.deps.palette.dim(t('transcript.steeringBadge')), 0, 0))
+    container.addChild(new Text(this.deps.palette.dim(badge), 0, 0))
     container.addChild(body)
     return container
   }

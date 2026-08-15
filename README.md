@@ -18,7 +18,14 @@ no alternate screen, so the conversation stays in the scrollback after you leave
   output, and a one-row collapse for runs of read-only calls (`Thought for 8s,
   searched for 3 patterns, read 2 files`); Ctrl+O reopens the cards.
 - **Steer while it runs** — the editor stays live under a running turn: Enter
-  steers, Esc cancels, and queued prompts are handed back on cancel.
+  steers, Esc or Ctrl+C cancels, and queued prompts are handed back on cancel.
+  A prompt the agent has not read yet says so (`Steering · pending`), the prompt
+  row counts what is still queued, and `/status` lists it. Up on an empty prompt
+  hands the newest queued message back for editing; sending it again puts it at
+  the back of the queue, so pressing Up again walks the whole queue. `/config`
+  turns Enter into "queue for the next turn" instead, and Ctrl+Enter takes the
+  other branch for one prompt (see
+  [Steering and queueing](#steering-and-queueing)).
 - **Modes on one key** — Shift+Tab cycles normal → auto-accept → plan; the
   badges above the prompt and `/permission` / `/plan` always agree, because the
   key writes through the same services.
@@ -94,9 +101,10 @@ all three.
 
 | Key | Action |
 |---|---|
-| Enter | send |
+| Enter | send; while a turn runs it steers or queues, whichever `/config` says (see [Steering and queueing](#steering-and-queueing)) |
+| Ctrl+Enter | send with the opposite busy-Enter behavior for this one prompt: queue when Enter would steer, steer when Enter would queue. Needs a terminal that distinguishes it — under the Kitty keyboard protocol or xterm's `modifyOtherKeys` it arrives as its own key, and everywhere else it reaches the process as a plain Enter and sends normally |
 | Shift+Enter / Alt+Enter / Ctrl+J | newline; a `\` before Enter does the same, for terminals that cannot send Shift+Enter |
-| Up / Down | prompt history from the first row of the prompt, cursor movement below it |
+| Up / Down | prompt history from the first row of the prompt, cursor movement below it; on an empty prompt with messages still queued, Up takes the newest one back into the editor to edit |
 | Tab | accept a completion |
 | `@` | reference a file |
 | `/` | run a command; `/skill:<name>` loads a skill |
@@ -111,7 +119,7 @@ all three.
 | Alt+E | edit the draft in `$EDITOR` and take back what you save; `$VISUAL` first, then `$EDITOR`, then nano/vim/vi on `PATH`. `/editor` does the same for terminals that cannot send Alt |
 | Ctrl+L | redraw |
 | Esc | cancel the turn (and hand back what was queued behind it); again on a draft clears it; again on an empty prompt opens Rewind |
-| Ctrl+C | cancel while running, clear the draft while typing, twice to exit while idle; a third press leaves a turn that will not cancel |
+| Ctrl+C | cancel while running (queued prompts are handed back, exactly as Esc does), clear the draft while typing, twice to exit while idle; a third press leaves a turn that will not cancel |
 | Ctrl+D | exit on an empty prompt |
 | Shift+Ctrl+D | session debug panel — identity, lifecycle, screen, resolved keys |
 
@@ -144,7 +152,7 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/hotkeys` | the keyboard shortcuts alone |
 | `/model [[provider/]model]` | switch the model and save it as your default; without an argument it opens the picker, which can also pick for this session only |
 | `/preset [<preset> \| copy <preset> <new-id>]` | show, switch, or copy this session's agent preset |
-| `/config` | this terminal's own settings — the Ctrl+T thinking pin, the tool-card phase a session opens on, theme — changed in place and saved for the next session |
+| `/config` | this terminal's own settings — the Ctrl+T thinking pin, the tool-card phase a session opens on, what Enter does while a turn runs, theme — changed in place and saved for the next session |
 | `/theme [auto\|light\|dark\|no-color]` | the palette this terminal paints with; without an argument it opens the picker |
 | `/login [provider]` | give a provider an API key: pick a configured route or one the adapter offers, paste the key, and it is checked against the endpoint before being stored. The key goes to the credential store; settings record only the variable name |
 | `/provider [add]` | list configured providers and the ones `/login` can configure; `add` walks through name, endpoint, protocol, key, and the models the endpoint reports |
@@ -164,7 +172,7 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/skills` | search this session's skills and read one in full |
 | `/subagents` | the subagent tree below this session: label, one-shot or continuable, running or inactive, and the child session id `/resume` takes. Refreshes itself while it is open; says so when the profile mounts no subagent registry |
 | `/jobs` | background jobs: kind, label, state, the producer's own detail, and how long each has been running. Follows the registry while it is open; says so when the profile mounts no job registry |
-| `/status` | session diagnostics, system prompt, registered tools |
+| `/status` | session diagnostics, queued messages, system prompt, registered tools |
 | `/mcp` | the MCP servers this agent's tools come from, with each server's tool list; says how to mount one when the profile has none |
 | `/doctor` | check the Node version, the terminal, the model route, and the services this terminal degrades without |
 | `/exit`, `/quit` | exit after the active turn reaches idle |
@@ -205,16 +213,53 @@ The choice is written to the Host's `locale` settings section when a settings
 provider owns one, which is the same preference the web client reads, and to
 `$DSH_HOME/tui-locale.json` (`~/.dsh/tui-locale.json`) otherwise.
 
+### Steering and queueing
+
+The editor stays live under a running turn, so Enter always sends. What sending
+means while the agent is busy is the `/config` row **Enter while running**:
+
+- **Steer the current turn** (the default) hands the prompt to the running
+  driver, which reads it at its next step boundary — the answer in flight is
+  interrupted by it. The echo above the prompt is badged `Steering`.
+- **Queue for the next turn** parks it instead: the turn in flight finishes
+  undisturbed and the prompt opens the turn after it. Its echo is badged
+  `Queued` until the agent picks it up, and then it is an ordinary prompt row,
+  because that is what it became.
+
+Ctrl+Enter sends one prompt the other way without moving the setting. It needs
+a terminal that can tell it apart from Enter — the Kitty keyboard protocol or
+xterm's `modifyOtherKeys`; elsewhere Ctrl+Enter physically sends a bare `\r`,
+which nothing can distinguish, so it simply sends normally.
+
+Either way the prompt is queued rather than answered, and everything the queue
+offers applies to both: the prompt row counts it (`2 queued`), `/status` lists
+it with the boundary that holds it, Up on an empty prompt takes it back for
+editing (see [Prompt history](#prompt-history)), and Esc or Ctrl+C hands the
+text back to the editor when the turn is cancelled. The choice is stored per
+user in `$DSH_HOME/settings.yaml`; the harness's web chat keeps its own copy of
+the same choice and defaults it to queueing, while this terminal defaults to
+steering, which is what it has always done.
+
 ### Prompt history
 
 Up and Ctrl+R reach the prompts typed before this process started. Every
-submitted prompt — and a draft cleared with Esc, which is a prompt you may want
-back — is appended to `$DSH_HOME/history.jsonl` (`~/.dsh/history.jsonl`) and
+submitted prompt — and a draft cleared with Esc or Ctrl+C, which is a prompt you
+may want back, queue handed back by a cancel included — is appended to `$DSH_HOME/history.jsonl` (`~/.dsh/history.jsonl`) and
 read at mount: newest first, this session's own before any other session's, and
 only the ones typed in this workspace. A prompt over 1,024 characters keeps a
 200-character preview on its line and its body moves to `history-cache/` beside
 the file; both are written `0600`. Past 1 MB the file is compacted once to its
 newest 1,000 entries, and a body nothing points at is deleted a week later.
+
+Up has a second job while a turn runs. On an empty prompt, with messages still
+queued and no completion menu open, it takes the newest queued message out of
+the agent's inbox and back into the editor — the echo above the prompt goes with
+it, and the badge counts one fewer. From there it is an ordinary draft: Enter
+sends it again, which puts it at the back of the queue, and Esc throws it away
+into this same history. Editing an older one is sending this one back and
+pressing Up again, which walks the whole queue. Any of the three conditions
+missing and Up means what it always meant, so a draft in progress is never
+overwritten and an empty queue navigates history as before.
 
 It is the prompt as sent, in plain text: a key or a customer name pasted at the
 prompt is on disk until the file is. Overlay fields are not prompts and are
@@ -411,7 +456,13 @@ its four values, and `/resume` this workspace's recent sessions.
   only tell the open panel to read the directory again. A child that was just
   spawned can be one refresh late: the directory lists a child from the moment
   it has written its own descriptor. `/status` states the same tree in one row.
-- **Status** — `/status`: session diagnostics, system prompt, registered tools.
+- **Status** — `/status`: session diagnostics, queued messages, system prompt,
+  registered tools. The queue section lists what the agent has been handed and
+  has not read yet, in the order it will read it, one elided line each, saying
+  which boundary holds it — `[steering]` interrupts the answer being written,
+  `[next turn]` waits for a turn of its own. It is the same queue the prompt
+  row counts (`2 queued`), read from the agent's inbox, so a prompt another
+  host steered into this session is listed here too.
 - **Background jobs** — `/jobs`: what this session left running in the
   background. A `bash` call with `run_in_background`, or a delegation that was
   sent off rather than waited for, returns to the model at once and keeps

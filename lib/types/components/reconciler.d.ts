@@ -114,6 +114,11 @@ export declare class TranscriptReconciler {
      * snapshot is due while the model is thinking between two events.
      */
     private openGroup;
+    /**
+     * The workflow run still live, refreshed on the same tick: its rows count up
+     * while its members work, and no event of its own lands in between.
+     */
+    private openWorkflow;
     /** Wall time of every turn in the log, for the per-turn completion row. */
     private readonly turnDurations;
     /**
@@ -196,10 +201,11 @@ export declare class TranscriptReconciler {
      */
     setThinkingPinned(pinned: boolean): void;
     /**
-     * Refresh the two rows whose text moves with the clock rather than with the
-     * log — the open step's timing footer and the collapsed row of a group that
-     * is still thinking — for the status animation tick. Only those components
-     * are invalidated, so a long transcript is not re-rendered 20 times a second.
+     * Refresh the rows whose text moves with the clock rather than with the log —
+     * the open step's timing footer, the collapsed row of a group that is still
+     * thinking, and a workflow run still working — for the status animation tick.
+     * Only those components are invalidated, so a long transcript is not
+     * re-rendered 20 times a second.
      */
     invalidateOpenStep(): void;
     /**
@@ -221,10 +227,11 @@ export declare class TranscriptReconciler {
     /** Mount or reuse a component that never updates after creation. */
     private plainView;
     /**
-     * Build one user turn: the filled prompt block, under a `Steering` badge when
-     * the turn interrupted a running one. Claude Code's block names no role, so
-     * an ordinary prompt carries no label at all and the badge is the exception
-     * that says this text reached the model mid-answer.
+     * Build one user turn: the filled prompt block, under the badge
+     * {@link userBadge} gives it when the prompt was not simply typed at an idle
+     * agent. Claude Code's block names no role, so an ordinary prompt carries no
+     * label at all and the badge is the exception that says this text reached the
+     * model mid-answer — or has not reached it yet.
      */
     private userView;
     /** Mount or update one assistant step, keeping its streamed buffer in sync. */
@@ -235,6 +242,16 @@ export declare class TranscriptReconciler {
      * into it every snapshot without re-wrapping the rows it already computed.
      */
     private groupView;
+    /**
+     * Mount or update one workflow run.
+     *
+     * Like {@link groupView} and unlike {@link plainView}, the block is updated in
+     * place rather than remounted: a run gains members and settles them for as
+     * long as it lasts, and the Ctrl+O phase changes what it prints without
+     * changing which run it is. Both are pushed into the same component so its
+     * cached rows survive everything that did not move.
+     */
+    private workflowView;
     /**
      * Mount or update one tool card. The card captures its parsed arguments (its
      * presenter reads them), so a call whose raw arguments changed after the card
