@@ -34,10 +34,11 @@ export declare function isExecutableFile(candidate: string): boolean;
 /**
  * Resolve one command name against every `PATH` entry.
  * @param name - bare command name, without a directory part.
- * @param env - environment whose `PATH` is searched.
+ * @param env - environment whose `PATH` (and, on Windows, `PATHEXT`) is searched.
+ * @param platform - the host being resolved for; tests name it, callers do not.
  * @returns the absolute path of the first executable match, or `undefined`.
  */
-export declare function lookupOnPath(name: string, env: NodeJS.ProcessEnv): string | undefined;
+export declare function lookupOnPath(name: string, env: NodeJS.ProcessEnv, platform?: NodeJS.Platform): string | undefined;
 /**
  * Resolve the gitignore-aware file-search binary for this session.
  *

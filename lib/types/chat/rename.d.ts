@@ -68,6 +68,15 @@ export interface RenameCommandDeps {
  */
 export declare function isInvalidTitleError(error: unknown): boolean;
 /**
+ * Whether a failed generation was cancelled in favour of a newer one.
+ *
+ * A supersession is not a failure: the operation that caused it owns the title
+ * now and prints its own receipt, so the overtaken call has nothing to add.
+ * @param error - the rejection from `refresh()`.
+ * @returns true when a newer title operation aborted this one.
+ */
+export declare function isSupersededTitleError(error: unknown): boolean;
+/**
  * Run one `/rename` invocation.
  *
  * `rename()` is synchronous, so the argument branch is never interrupted by the

@@ -142,6 +142,41 @@ export interface SessionMarkdownMeta {
     readonly exportedAt: number;
 }
 /**
+ * How much of the whole document survives.
+ *
+ * The same reason as {@link TOOL_BODY_MAX}, one level up, and for the same one
+ * path: when the export leaves this process as a single OSC 52 write, base64
+ * makes the sequence a third larger again — clipping only tool bodies still let
+ * a long session render hundreds of kilobytes of answers into one sequence. It
+ * is the caller's job not to spend this budget on the clipboard routes that pipe
+ * the document into a utility instead (`pbcopy`, `wl-copy`, `tmux load-buffer`),
+ * which have no per-write ceiling to respect. No budget can promise
+ * delivery (every terminal has a ceiling of its own, and the usual failure is
+ * to drop the oversized sequence in silence), so this one is deliberately
+ * generous: it bounds the write, and it is what makes the receipt able to say
+ * the document was cut instead of reporting an unqualified success for a
+ * clipboard that may have received nothing.
+ */
+export declare const MARKDOWN_MAX_CHARS = 100000;
+/** A rendered document after the whole-document budget was applied. */
+export interface ClippedMarkdown {
+    /** The document to hand to the clipboard, marked when it was cut. */
+    readonly text: string;
+    /** Whether anything had to be dropped. */
+    readonly truncated: boolean;
+}
+/**
+ * Hold one rendered document to the budget, marking it when it did not fit.
+ *
+ * Separate from {@link renderSessionMarkdown} so rendering stays a pure
+ * function of the entries: what a session looks like as Markdown is not a
+ * function of how much of it one terminal will take.
+ * @param markdown - the rendered document.
+ * @param max - the character budget; defaults to {@link MARKDOWN_MAX_CHARS}.
+ * @returns the document to write, and whether it was cut.
+ */
+export declare function clipSessionMarkdown(markdown: string, max?: number): ClippedMarkdown;
+/**
  * Render this session as a Markdown transcript.
  *
  * The entries come from `transcriptEntries`, so order, emptiness, and "a

@@ -34,6 +34,19 @@ export declare const CONTEXT_CRITICAL_REMAINING_PERCENT = 10;
  * above; nothing branches on it.
  */
 export declare const AUTO_COMPACT_REMAINING_PERCENT = 20;
+/**
+ * How far back above a threshold the reading must come before that band is
+ * armed again — the hysteresis on {@link nextContextAnnouncement}.
+ *
+ * A measurement is not monotonic: `@deepseek-ai/dsh-token-meter` reports a
+ * provider-usage anchor plus a heuristic delta, so every landed anchor can
+ * revise the number DOWN by more than a percentage point (10%+ on code and CJK
+ * is ordinary), and a lost anchor re-estimates the whole thing. Without a band
+ * of slack, one such revision across 25% re-arms the warning and the next tool
+ * result writes the identical row again. The rows are appended transcript
+ * history, not a recomputed live indicator, so repeats stay on screen.
+ */
+export declare const CONTEXT_REARM_MARGIN_PERCENT = 3;
 /** One measured reading of window pressure. */
 export interface ContextPressure {
     /** Measured request pressure in tokens. */
@@ -53,6 +66,18 @@ export interface ContextPressure {
  * @returns the pressure band.
  */
 export declare function pressureLevel(percentRemaining: number): ContextPressureLevel;
+/**
+ * Band a reading has to fall back to before the band above it counts as left.
+ *
+ * The same edges as {@link pressureLevel}, each widened by
+ * {@link CONTEXT_REARM_MARGIN_PERCENT}: sitting one point over a threshold is
+ * still inside that band as far as re-arming is concerned, so measurement noise
+ * across the edge cannot produce a second copy of a row the session already
+ * has.
+ * @param percentRemaining - integer percent of the window still free.
+ * @returns the band this reading re-arms down to.
+ */
+export declare function rearmLevel(percentRemaining: number): ContextPressureLevel;
 /**
  * Order the bands so an escalation is a `>` comparison.
  * @param level - the band to rank.
@@ -84,12 +109,18 @@ export declare function createContextAnnouncementTracker(): ContextAnnouncementT
  * Decide whether a band deserves a transcript row, and record the decision.
  *
  * One row per band per escalation: re-entering a band the session already
- * announced stays silent, and dropping to a lower band (which is what a
- * successful compaction looks like) re-arms the higher ones. That is the whole
- * debounce — the caller runs this every frame and it writes at most twice per
- * session per compaction cycle.
+ * announced stays silent, and dropping CLEAR of a band (which is what a
+ * successful compaction looks like) re-arms it. That is the whole debounce —
+ * the caller runs this every frame and it writes at most twice per session per
+ * compaction cycle.
+ *
+ * "Clear of" rather than "below", because the reading is noisy: a drop only
+ * re-arms once it reaches {@link rearmLevel}, so a token count that revises
+ * itself back and forth across a threshold cannot append the same warning
+ * twice.
  * @param tracker - mutable per-session state; updated in place.
- * @param level - the band measured now.
+ * @param pressure - the reading measured now; both its band and its distance
+ *   from the edge matter, so this takes the reading rather than the band.
  * @returns the band to announce, or `undefined` when nothing new happened.
  */
-export declare function nextContextAnnouncement(tracker: ContextAnnouncementTracker, level: ContextPressureLevel): Exclude<ContextPressureLevel, 'normal'> | undefined;
+export declare function nextContextAnnouncement(tracker: ContextAnnouncementTracker, pressure: Pick<ContextPressure, 'level' | 'percentRemaining'>): Exclude<ContextPressureLevel, 'normal'> | undefined;

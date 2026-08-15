@@ -262,6 +262,7 @@ export declare const EN_MESSAGES: {
     readonly 'prompt.context': "{percent}% context";
     readonly 'prompt.contextLow': "{remaining}% context left";
     readonly 'prompt.compacting': "Context being compacted {duration}";
+    readonly 'prompt.compactingCancelling': "Cancelling the compaction… {duration}";
     readonly 'prompt.queued': "{count} queued";
     readonly 'collapse.thinking.active': "thinking for {duration}";
     readonly 'collapse.thinking.settled': "thought for {duration}";
@@ -316,7 +317,7 @@ export declare const EN_MESSAGES: {
     readonly 'status.flash.copied': "Copied {count} chars to clipboard.";
     readonly 'status.flash.copiedTmux': "Copied to tmux buffer (prefix+] to paste).";
     readonly 'status.flash.copiedOsc52': "Sent to clipboard via OSC 52.";
-    readonly 'status.flash.copiedNth': "Answer {n} of {total} — {detail}";
+    readonly 'status.flash.copiedNth': "Answer {n} of {total}, newest first — {detail}";
     readonly 'status.card.title': "Session status";
     readonly 'status.row.session': "Session";
     readonly 'status.row.title': "Title";
@@ -395,10 +396,11 @@ export declare const EN_MESSAGES: {
     readonly 'notice.contextLow': "Context low — {remaining}% of the window left ({used} / {capacity} tokens). {action}";
     readonly 'notice.contextCritical': "Context nearly full — only {remaining}% of the window left ({used} / {capacity} tokens). {action}";
     readonly 'notice.contextCompactAction': "Run /compact to summarize the history and keep going.";
+    readonly 'notice.contextCompactActionAfterTurn': "When this turn ends, run /compact to summarize the history and keep going.";
     readonly 'notice.contextNoCompactAction': "This session composes no compaction service; start a fresh session with /new before the window fills.";
     readonly 'compact.usage': string;
     readonly 'compact.unavailable': "This session's agent preset mounts no compaction service, so there is nothing to compact with.";
-    readonly 'compact.busy': "Compaction needs an idle session; this one is {status}.";
+    readonly 'compact.busy': "Compaction needs an idle session; this one is still running a turn.";
     readonly 'compact.inFlight': "A compaction started from this terminal is still running.";
     readonly 'compact.nothing': "Nothing to compact yet: this session has no history the model can safely stop seeing.";
     readonly 'compact.done.one': "Compacted {items} history item (~{tokens} tokens) · {key} shows the summary";
@@ -429,9 +431,12 @@ export declare const EN_MESSAGES: {
     readonly 'export.overwrite.keep': "Keep it";
     readonly 'export.arg.clipboard': "Copy this session to the clipboard as Markdown";
     readonly 'export.clipboard.empty': "Nothing to export yet: this session has no messages.";
-    readonly 'export.clipboard.done.one': "Exported 1 message as Markdown. {detail}";
-    readonly 'export.clipboard.done.other': "Exported {count} messages as Markdown. {detail}";
+    readonly 'export.clipboard.done.one': "Exported 1 entry as Markdown. {detail}";
+    readonly 'export.clipboard.done.other': "Exported {count} entries as Markdown. {detail}";
+    readonly 'export.clipboard.truncated.one': "Exported 1 entry as Markdown, truncated to {limit} characters. {detail}";
+    readonly 'export.clipboard.truncated.other': "Exported {count} entries as Markdown, truncated to {limit} characters. {detail}";
     readonly 'export.markdown.exported': "Exported";
+    readonly 'export.markdown.truncated': "… export truncated at {limit} characters …";
     readonly 'rename.done': "Session renamed to: {title}";
     readonly 'rename.generating': "Generating a session title…";
     readonly 'rename.generated': "Session title regenerated: {title}. It stays automatic — pass a name to make it yours.";
