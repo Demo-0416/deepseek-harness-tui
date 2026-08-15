@@ -182,7 +182,7 @@
 | low | S | confirmed | /compact 手动压缩命令 | 有自动压缩但无 /compact 手动命令 | /compact 命令手动触发上下文压缩，可选择压缩方向和反馈 |
 | low | M | confirmed | /usage 用量面板 | 无 /usage 命令 | /usage 打开 Usage tab，展示 LimitBar（5h/7d 限流进度条）和 overage credit |
 | low | M | confirmed | /stats 统计图表 | 有 sessionStats 数据但无 /stats 命令 | /stats 展示 asciichart 图表（token 用量、API 时长、成本等） |
-| low | S | confirmed | 自动更新器 | 无自动更新 | AutoUpdater 检查更新并提示用户安装 |
+| low | S | closed | 自动更新器 | 已补：挂载后异步查 npm registry，每天最多一次，发现新版本提示一条 `Update available: … — run: npm install -g …`（`updateCheck` 可关；只提示，不自装） | AutoUpdater 检查更新并提示用户安装 |
 | low | S | confirmed | Worktree 退出对话框 | 无 worktree 功能 | WorktreeExitDialog 在退出 worktree 会话时确认 |
 | low | S | confirmed | ExitFlow 随机告别语 | 有可配置 goodbyeMessage 但无随机告别 | ExitFlow 显示随机告别语（从列表中选择） |
 | low | S | confirmed | InvalidSettingsDialog 设置校验错误 | 无设置校验错误对话框 | InvalidSettingsDialog 显示 ValidationErrors 列表，可继续或退出 |

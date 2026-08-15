@@ -459,6 +459,11 @@ export async function createTuiTestHarness<TerminalType extends Terminal, Exit e
   const controller = createTuiChat(ctx, Object.assign({
     ...options.omitWelcome === true ? {} : { welcome: 'Coding agent ready.' },
     sessionId: session.id,
+    // Off unless a case asks for it: the production default is on, and a suite
+    // that inherited it would have every mounted terminal reach the npm
+    // registry — a real request, from CI, that no assertion wanted. The
+    // update-check cases turn it back on and hand the terminal a fake `fetch`.
+    updateCheck: false,
     theme: { color: false },
   }, options.config), {
     terminal,

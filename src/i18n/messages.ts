@@ -534,6 +534,11 @@ export const EN_MESSAGES = {
   'notice.reloadDone':
     'Config reload complete. Unchanged files were skipped; invalid files keep the running tree (see logs).',
   'notice.reloadFailed': 'Config reload failed: {error}',
+  // Both versions are named rather than just the new one: "there is 0.2.0" is
+  // an advertisement, "you are on 0.1.8 and there is 0.2.0" is a fact the
+  // reader can act on or dismiss. The command is spelled out because the answer
+  // to "how do I get it" must not be another search.
+  'notice.updateAvailable': 'Update available: {current} → {latest} — run: {command}',
   // Rendered by the transcript reconciler rather than by a command, but the
   // same kind of chrome: a label over names the session carries.
   'notice.referencedSessions': 'Referenced sessions · {labels}',
@@ -1149,6 +1154,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'notice.reloadStarted': '正在重载 {count} 棵配置树…（experimental）',
   'notice.reloadDone': '配置重载完成。未改动的文件已跳过；不合法的文件保持原来的运行态（详见日志）。',
   'notice.reloadFailed': '配置重载失败：{error}',
+  'notice.updateAvailable': '发现新版本：{current} → {latest}，运行 {command} 更新。',
   'notice.referencedSessions': '引用的会话 · {labels}',
   'notice.contextLow': '上下文快满了——窗口还剩 {remaining}%（{used} / {capacity} tokens）。{action}',
   'notice.contextCritical': '上下文几乎用尽——窗口只剩 {remaining}%（{used} / {capacity} tokens）。{action}',

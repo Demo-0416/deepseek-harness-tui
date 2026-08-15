@@ -332,6 +332,7 @@ Values on the bundle row (`tui-runner`), all optional.
 | `fileSearchCommand` | — | `fd` path or name; unset discovers it on `PATH`, `""` disables it |
 | `externalEditor` | — | editor `Alt+E` and `/editor` hand the draft to; unset reads `$VISUAL`/`$EDITOR` then discovers one on `PATH`, `""` disables it. A GUI editor needs its wait flag (`code -w`); the known ones get it added |
 | `showHardwareCursor` | `false` | show the terminal's hardware cursor at the editor's IME marker |
+| `updateCheck` | `true` | ask the npm registry once a day whether a newer release is published and say so in one notice; nothing is ever installed, and every failure is silent |
 | `title` | `DeepSeek Harness` | terminal window title while the UI is mounted |
 | `theme.color` | `true` | apply the built-in ANSI palette |
 | `theme.truecolor` | detected | 24-bit brand gradient on the banner; unset reads `COLORTERM` |

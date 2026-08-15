@@ -286,6 +286,7 @@ bundle 行（`tui-runner`）上的值，全部可选。
 | `fileSearchCommand` | — | `fd` 的路径或名称；不设则在 `PATH` 上发现，`""` 禁用 |
 | `externalEditor` | — | `Alt+E` 与 `/editor` 交给哪个编辑器；不设则依次读 `$VISUAL`/`$EDITOR` 再在 `PATH` 上发现，`""` 关闭该功能。GUI 编辑器需要自带等待参数（`code -w`），已知的那些会自动补上 |
 | `showHardwareCursor` | `false` | 在编辑器 IME 标记处显示终端硬件光标 |
+| `updateCheck` | `true` | 每天最多问一次 npm registry 有没有更新的版本，有则提示一条；从不自动安装，任何失败都不出声 |
 | `title` | `DeepSeek Harness` | UI 挂载期间的终端窗口标题 |
 | `theme.color` | `true` | 应用内置 ANSI 配色 |
 | `theme.truecolor` | 自动检测 | banner 的 24 位品牌渐变；不设时读 `COLORTERM` |

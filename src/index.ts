@@ -237,6 +237,11 @@ import {
   PROMPT_HISTORY_FLUSH_TIMEOUT_MS,
 } from './chat/prompt-history.ts'
 import {
+  checkForUpdate,
+  updateCommandLine,
+  UPDATE_CHECK_PACKAGE_NAME,
+} from './chat/update-check.ts'
+import {
   createModelController,
   type ModelController,
 } from './chat/model-command.ts'
@@ -1032,6 +1037,8 @@ export function createTuiChat(
    */
   const inFlightToolCalls = new Map<CallId, { name: string; arguments: string }>()
   const skillAbort = new AbortController()
+  /** The registry read behind the update notice; nobody's answer once this terminal is gone. */
+  const updateCheckAbort = new AbortController()
   const tokens = sessionTokens(agent.session)
   const commandControllers = new Set<AbortController>()
   /**
@@ -4537,6 +4544,7 @@ export function createTuiChat(
 
   const detachListeners = (): void => {
     skillAbort.abort()
+    updateCheckAbort.abort()
     fileSearch.dispose()
     clearFlash()
     disarmEscape()
@@ -4656,6 +4664,37 @@ export function createTuiChat(
     new TuiExtensionServiceImpl(serviceCtx, agent, overlayManager)
   })
   startBannerReveal()
+
+  // Is a newer bundle published? Asked after the first frame and never before
+  // it: a registry read is a network round trip, and nothing about it is worth
+  // a startup a user waits on. At most one notice per process — the check is
+  // fire-and-forget, so the only way to nag twice is to run twice.
+  //
+  // A version this build cannot state (`packageVersion()` found no
+  // package.json) has nothing to compare against, so the check is skipped
+  // rather than run against a guess.
+  const runningVersion = packageVersion()
+  if (resolved.updateCheck && runningVersion !== undefined) {
+    void checkForUpdate({
+      name: UPDATE_CHECK_PACKAGE_NAME,
+      currentVersion: runningVersion,
+      signal: updateCheckAbort.signal,
+    }).then(
+      (update) => {
+        if (disposed || updateCheckAbort.signal.aborted) return
+        if (update === undefined || !update.hasUpdate) return
+        appendNotice(t('notice.updateAvailable', {
+          current: runningVersion,
+          latest: update.latest,
+          command: updateCommandLine(UPDATE_CHECK_PACKAGE_NAME),
+        }))
+      },
+      /* v8 ignore next 4 -- `checkForUpdate` answers `undefined` instead of throwing; this guards a future one that does not. */
+      (error: unknown) => {
+        ctx.logger.warn(`dsh-tui: update check failed: ${errorChain(error)}`)
+      },
+    )
+  }
 
   // A launcher-seeded first turn (`dsh migrate`/`dsh upgrade`):
   // invoke the named skill exactly as a typed `/skill:<name>` would, once the

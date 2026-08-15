@@ -100,6 +100,15 @@ export interface TuiConfig {
   externalEditor?: string
   /** Show the terminal's hardware cursor at the pi editor's IME marker. */
   showHardwareCursor?: boolean
+  /**
+   * Ask the npm registry once a day whether a newer release of this bundle is
+   * published, and say so in one notice when there is.
+   *
+   * The check only ever tells; nothing is downloaded or installed. `false` for
+   * a deployment that pins its own version, or one whose terminals must make no
+   * outbound request they were not asked to make.
+   */
+  updateCheck?: boolean
   /** Color and prompt-template settings. */
   theme?: TuiThemeConfig
   /** Terminal window title while the UI is mounted; a logged session title prefixes it. */
@@ -141,6 +150,7 @@ const fileSearchCommandSchema = z.string()
 // discovers an editor, `""` forbids one, and the two must not collapse.
 const externalEditorSchema = z.string()
 const showHardwareCursorSchema = z.boolean().default(false)
+const updateCheckSchema = z.boolean().default(true)
 const colorSchema = z.boolean().default(true)
 // No default: an unset value auto-detects truecolor from COLORTERM in `apply`.
 const truecolorSchema = z.boolean()
@@ -187,6 +197,7 @@ const tuiConfigSchemaFields = {
   fileSearchCommand: fileSearchCommandSchema,
   externalEditor: externalEditorSchema,
   showHardwareCursor: showHardwareCursorSchema,
+  updateCheck: updateCheckSchema,
   theme: TuiThemeConfigSchema,
   title: titleSchema,
   keybindings: keybindingsSchema,
@@ -267,6 +278,7 @@ export const Config: z<Config> = z.object({
   fileSearchCommand: tuiConfigSchemaFields.fileSearchCommand,
   externalEditor: tuiConfigSchemaFields.externalEditor,
   showHardwareCursor: tuiConfigSchemaFields.showHardwareCursor,
+  updateCheck: tuiConfigSchemaFields.updateCheck,
   theme: tuiConfigSchemaFields.theme,
   title: tuiConfigSchemaFields.title,
   keybindings: tuiConfigSchemaFields.keybindings,
@@ -306,6 +318,7 @@ export interface ResolvedTuiConfig {
   /** Configured editor path or command line; `undefined` leaves discovery to `$VISUAL`/`$EDITOR`/`PATH`. */
   externalEditor: string | undefined
   showHardwareCursor: boolean
+  updateCheck: boolean
   theme: ResolvedTuiThemeConfig
   title: string
   /** Key overrides, empty when the deployment configured none. */
@@ -340,6 +353,7 @@ export function resolveTuiConfig(config: TuiConfig | undefined): ResolvedTuiConf
     fileSearchCommand: config?.fileSearchCommand,
     externalEditor: config?.externalEditor,
     showHardwareCursor: config?.showHardwareCursor ?? false,
+    updateCheck: config?.updateCheck ?? true,
     theme: {
       color: config?.theme?.color ?? true,
       truecolor: config?.theme?.truecolor ?? false,
