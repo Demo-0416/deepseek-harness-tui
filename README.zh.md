@@ -93,7 +93,7 @@ stdin 和 stdout 都必须是 TTY，否则拒绝启动。`--print` 是唯一例�
 | `@` | 引用文件 |
 | `/` | 运行命令；`/skill:<name>` 加载技能 |
 | `?` | 空输入框时显示快捷键帮助；不会打进草稿 |
-| Ctrl+R | 反向搜索 prompt 历史 |
+| Ctrl+R | 反向搜索 prompt 历史；历史跨进程保存在 `$DSH_HOME/history.jsonl`，`DSH_SKIP_PROMPT_HISTORY=1` 停写（见 [prompt 历史](#prompt-历史)） |
 | Ctrl+G | 搜索本会话消息；Ctrl+F 保留给编辑器的前进一格 |
 | Shift+Tab | 循环模式：normal → auto-accept → plan → normal。`normal` 和 `auto-accept` 是 `workspace-write` 与 `auto-accept` 两个权限 preset（同一沙箱，问不问审批之差）；`plan` 是计划模式，循环在 `workspace-write` 上进入。`danger-full-access` 不在循环里——它靠 `/permission` 进入，已处于其上的会话保持不变，按键只切计划模式 |
 | Ctrl+N | 展开/收起计划；Ctrl+Y 保留给编辑器的 kill-ring 粘贴 |
@@ -148,7 +148,7 @@ Ctrl+C 是唯一永不可重绑的键：它是离开终端的最后手段。其�
 | `/compact` | 把更早的对话历史压缩成一段摘要；屏幕上的对话保留，模型侧只留摘要。不接受参数 |
 | `/lang [en\|zh]` | 查看或切换界面语言；选择会记住到下次会话 |
 | `/palette` | 本终端渲染的全部颜色与属性角色 |
-| `/export [path \| clipboard]` | 把本会话日志写入文件并报告路径（覆盖已有文件前会先确认）；写 `clipboard` 则把会话以 Markdown 放到系统剪贴板 |
+| `/export [path \| clipboard]` | 把本会话日志写入文件并报告路径（覆盖已有文件前会先确认）；写 `clipboard` 则把会话以 Markdown 放到系统剪贴板（远程 SSH 下走一次 OSC 52 写入，超过 100000 个字符会截断，提示里会说明） |
 | `/plugins` | 搜索并查看 Loader 的插件条目 |
 | `/search [query]` | 搜索本会话消息；参数会预填面板查询框 |
 | `/rewind` | 回到本会话更早的 prompt |
@@ -186,6 +186,39 @@ cancelled."、"The model reached its output-token limit."）来自会话日志�
 语言选择写入 Host 的 `locale` settings 段（有 settings provider 时，与 web
 客户端读的是同一份偏好），否则写入 `$DSH_HOME/tui-locale.json`
 （`~/.dsh/tui-locale.json`）。
+
+### prompt 历史
+
+上方向键和 Ctrl+R 能取回本进程启动之前输入过的 prompt。每条提交的 prompt——
+以及被 Esc 清掉的草稿，那也是你可能想要回来的东西——都会追加到
+`$DSH_HOME/history.jsonl`（`~/.dsh/history.jsonl`），挂载时读回：最新的在前，
+本会话自己的排在其他会话之前，且只取在本工作区里输入过的。超过 1024 个字符的
+prompt 在行内只留 200 字符预览，正文移到旁边的 `history-cache/`；两者都以
+`0600` 写入。文件超过 1 MB 后压实一次，只保留最新 1000 条；没人再引用的正文
+文件在一周后删除。
+
+存的是发出去的原文，明文：粘在输入框里的密钥或客户名会一直留在磁盘上，直到
+文件被删掉。浮层里的输入框不是 prompt，不会被记录——`/login` 的 API key 不会
+进这个文件。设 `DSH_SKIP_PROMPT_HISTORY=1`（或 `true`/`yes`/`on`）可以只停写、
+不停读；要清掉已经记下的，删掉 `$DSH_HOME` 下的 `history.jsonl` 和
+`history-cache/`。
+
+### 上下文压力
+
+prompt 行上的 `${context}` 报告本会话用掉了模型窗口的多少——`已用 78% 上下文`，
+暗色——直到窗口变紧。剩 25% 起改报另一个数：黄色的 `上下文剩 22%`；剩 10% 及以下
+转红色。一次测量同时喂给颜色和数字，所以两个数不会打架，屏幕上也只会出现其中一个。
+
+transcript 里每档还会写一行，因为正在读长回答的人不会盯着 prompt 行：黄色的
+`上下文快满了——窗口还剩 25%`，以及剩 10% 以下时红色的 `上下文几乎用尽`。每档最多
+写一行，并且只有读数重新回到该阈值之上 3 个百分点才会重新武装，所以读数在边界上来
+回跳不会把同一条警告重复贴出来。本会话的 preset 挂了压缩服务时，这一行让你执行
+`/compact`，没挂时让你用 `/new`；而当前这一轮还在运行时，它会说等这一轮结束再压缩
+——`/compact` 需要会话空闲。
+
+两个阈值是常量，不是配置项：25% 特意高于 `@deepseek-ai/dsh-compaction-basic` 默认
+配置下自动压缩的 20%，所以黄行是你还能自己决定压不压的最后时刻；红行意味着自动压缩
+这条路缺席、被关掉或者失败了。
 
 ### `@` 文件引用
 
@@ -298,7 +331,8 @@ bundle 行（`tui-runner`）上的值，全部可选。
 
 提示行模板以 `${name}` 插值本 bundle 注册的值——`cwd`、`git/worktree`、
 `model`、`context`、`token_meter/cache_hit_rate`、`goal`、`queued`、`symbol`、
-`indicator`——某个值当前不可用时，挨着它的分隔符一并省去。
+`indicator`——某个值当前不可用时，挨着它的分隔符一并省去。`context` 报的是"已用"
+还是"剩余"取决于窗口有多满，见[上下文压力](#上下文压力)。
 
 除 Ctrl+C 外的绑定均可配置：在 bundle 行上设 `keybindings`
 （`{ "app.history.search": "alt+r" }`），按 action id 键入，值为一个或多个

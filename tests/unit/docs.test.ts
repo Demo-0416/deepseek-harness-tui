@@ -19,6 +19,16 @@ import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { KeybindingsManager } from '@earendil-works/pi-tui'
+import {
+  PROMPT_HISTORY_BODY_DIR,
+  PROMPT_HISTORY_FILE_NAME,
+  SKIP_PROMPT_HISTORY_ENV,
+} from '../../src/chat/prompt-history.ts'
+import {
+  AUTO_COMPACT_REMAINING_PERCENT,
+  CONTEXT_CRITICAL_REMAINING_PERCENT,
+  CONTEXT_LOW_REMAINING_PERCENT,
+} from '../../src/chat/context-pressure.ts'
 import { Config } from '../../src/config.ts'
 import { CUSTOM_ANSWER_LABEL } from '../../src/components/dialogs.ts'
 import {
@@ -40,6 +50,9 @@ import {
 import { HeadlessTerminal } from '../headless-terminal.ts'
 
 const README = readFileSync(new URL('../../README.md', import.meta.url), 'utf8')
+
+/** The Chinese README, held to the same statements as the English one where a case names both. */
+const README_ZH = readFileSync(new URL('../../README.zh.md', import.meta.url), 'utf8')
 
 /** `src/index.ts` is landed by a separate port; without it the end-to-end suite cannot run. */
 const entryAvailable = await tuiEntryAvailable()
@@ -212,6 +225,41 @@ describe('README configuration table', () => {
     ])
     for (const key of keysOf('Configuration')) {
       assert.ok(accepted.has(key), `README's "${key}" is a key the schema accepts`)
+    }
+  })
+})
+
+describe('README prompt history', () => {
+  it('names the file prompts are kept in, and the one switch that stops it', () => {
+    // The persistence has no config key: the environment variable is the only
+    // way to turn it off, and a user who cannot read about it cannot use it —
+    // nor clean up a file they were never told exists.
+    for (const [name, text] of [['README.md', README], ['README.zh.md', README_ZH]] as const) {
+      assert.ok(text.includes(PROMPT_HISTORY_FILE_NAME), `${name} names ${PROMPT_HISTORY_FILE_NAME}`)
+      assert.ok(text.includes(PROMPT_HISTORY_BODY_DIR), `${name} names ${PROMPT_HISTORY_BODY_DIR}`)
+      assert.ok(text.includes(SKIP_PROMPT_HISTORY_ENV), `${name} names ${SKIP_PROMPT_HISTORY_ENV}`)
+    }
+  })
+})
+
+describe('README context pressure', () => {
+  it('documents the row that changes what it reports, and both thresholds', () => {
+    // The prompt value `${context}` is documented as a value, and this batch
+    // changed what it MEANS: past a threshold it counts down instead of up, in
+    // colour, and writes transcript rows. Neither threshold is configurable, so
+    // a user who wants to know where 25% comes from has only this to read.
+    for (const [name, text, countdown, warning] of [
+      ['README.md', README, 'context left', 'Context low'],
+      ['README.zh.md', README_ZH, '上下文剩', '上下文快满了'],
+    ] as const) {
+      assert.ok(text.includes(countdown), `${name} shows the row counting down`)
+      assert.ok(text.includes(warning), `${name} names the transcript row`)
+      assert.ok(text.includes(`${CONTEXT_LOW_REMAINING_PERCENT}%`), `${name} names the yellow threshold`)
+      assert.ok(text.includes(`${CONTEXT_CRITICAL_REMAINING_PERCENT}%`), `${name} names the red threshold`)
+      // The reason 25% is 25%: it has to be the last moment before the engine
+      // acts on its own, which is a number the reader can check.
+      assert.ok(text.includes(`${AUTO_COMPACT_REMAINING_PERCENT}%`),
+        `${name} names the automatic-compaction threshold the warning sits above`)
     }
   })
 })

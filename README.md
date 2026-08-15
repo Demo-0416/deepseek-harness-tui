@@ -101,7 +101,7 @@ all three.
 | `@` | reference a file |
 | `/` | run a command; `/skill:<name>` loads a skill |
 | `?` | shortcut help, on an empty prompt; never typed into the draft |
-| Ctrl+R | search the prompt history backwards |
+| Ctrl+R | search the prompt history backwards; it outlives the process in `$DSH_HOME/history.jsonl`, which `DSH_SKIP_PROMPT_HISTORY=1` stops writing (see [Prompt history](#prompt-history)) |
 | Ctrl+G | search this session's messages; Ctrl+F stays the editor's forward-char |
 | Shift+Tab | cycle mode: normal → auto-accept → plan → normal. `normal` and `auto-accept` are the `workspace-write` and `auto-accept` permission presets (same sandbox, approval asked or not); `plan` is plan mode, which the cycle enters on `workspace-write`. `danger-full-access` is not a rung — it is reached with `/permission`, and a session already on it keeps it while the key moves plan mode alone |
 | Ctrl+N | expand or collapse the plan; Ctrl+Y stays the editor's kill-ring paste |
@@ -156,7 +156,7 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/compact` | compact older conversation history into one summary; the conversation stays on screen and the model keeps the summary. Takes no arguments |
 | `/lang [en\|zh]` | show or switch the interface language; the choice is remembered for the next session |
 | `/palette` | every color and attribute role this terminal renders |
-| `/export [path \| clipboard]` | write this session's log to a file and report the path (an existing file is replaced only after you confirm); `clipboard` puts the session on the system clipboard as Markdown instead |
+| `/export [path \| clipboard]` | write this session's log to a file and report the path (an existing file is replaced only after you confirm); `clipboard` puts the session on the system clipboard as Markdown instead (over SSH, where the copy is one OSC 52 write, a document past 100,000 characters is truncated and the confirmation says so) |
 | `/plugins` | search and inspect the Loader's plugin entries |
 | `/search [query]` | search this session's messages; an argument fills the panel's query box |
 | `/rewind` | go back to an earlier prompt in this session |
@@ -202,6 +202,47 @@ session log rather than from the message table.
 The choice is written to the Host's `locale` settings section when a settings
 provider owns one, which is the same preference the web client reads, and to
 `$DSH_HOME/tui-locale.json` (`~/.dsh/tui-locale.json`) otherwise.
+
+### Prompt history
+
+Up and Ctrl+R reach the prompts typed before this process started. Every
+submitted prompt — and a draft cleared with Esc, which is a prompt you may want
+back — is appended to `$DSH_HOME/history.jsonl` (`~/.dsh/history.jsonl`) and
+read at mount: newest first, this session's own before any other session's, and
+only the ones typed in this workspace. A prompt over 1,024 characters keeps a
+200-character preview on its line and its body moves to `history-cache/` beside
+the file; both are written `0600`. Past 1 MB the file is compacted once to its
+newest 1,000 entries, and a body nothing points at is deleted a week later.
+
+It is the prompt as sent, in plain text: a key or a customer name pasted at the
+prompt is on disk until the file is. Overlay fields are not prompts and are
+never recorded — `/login` never puts an API key there. Export
+`DSH_SKIP_PROMPT_HISTORY=1` (or `true`/`yes`/`on`) to stop the writing while
+keeping the reading, and delete `history.jsonl` and `history-cache/` under
+`$DSH_HOME` to drop what is already recorded.
+
+### Context pressure
+
+`${context}` on the prompt row reports how much of the model's window this
+session has used — `78% context`, dim — until the window gets tight. From 25%
+left it reports the other number instead, `22% context left` in yellow, and
+turns red at 10% or less. One reading paints the row, so the two numbers never
+disagree and only one of them is ever on screen.
+
+The transcript gets one row per band as well, because a user reading a long
+answer is not watching the prompt row: `Context low — 25% of the window left`
+in yellow, and `Context nearly full` in red under 10%. Each band writes at most
+one row, and re-arms only after the reading comes back clear of the threshold
+it crossed (3 points above it), so a token count that revises itself across the
+edge cannot repeat a warning you already have. The row names `/compact` when
+this session's preset composes a compaction service and `/new` when it composes
+none — and while a turn is running it says to compact once the turn ends, since
+`/compact` needs an idle session.
+
+Both thresholds are constants, not configuration: 25% is deliberately above the
+20% at which `@deepseek-ai/dsh-compaction-basic` compacts on its own under its
+shipped defaults, so the yellow row is the last moment to choose `/compact`
+yourself, and red means the automatic path is absent, disabled, or failing.
 
 ### `@` file references
 
@@ -345,7 +386,9 @@ Values on the bundle row (`tui-runner`), all optional.
 Prompt templates interpolate `${name}` against the values this bundle registers
 — `cwd`, `git/worktree`, `model`, `context`, `token_meter/cache_hit_rate`,
 `goal`, `queued`, `symbol`, `indicator` — and a separator next to a value that
-is currently unavailable is dropped with it.
+is currently unavailable is dropped with it. `context` reports used or
+remaining depending on how full the window is; see
+[Context pressure](#context-pressure).
 
 Bindings other than Ctrl+C are configurable: set `keybindings` on the bundle row
 (`{ "app.history.search": "alt+r" }`), keyed by action id and valued with one

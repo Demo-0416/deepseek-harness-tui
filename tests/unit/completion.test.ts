@@ -26,7 +26,7 @@ import {
   type TuiHarness,
 } from '../harness.ts'
 import { HeadlessTerminal } from '../headless-terminal.ts'
-import { resolveFileSearchCommand } from '../../src/chat/fd.ts'
+import { lookupOnPath, resolveFileSearchCommand } from '../../src/chat/fd.ts'
 import {
   DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES,
   WorkspaceFileSearch,
@@ -125,6 +125,40 @@ describe('gitignore-aware file search discovery', () => {
       } finally {
         process.chdir(previous)
       }
+    })
+  })
+
+  it('resolves a Windows command word through PATHEXT', async () => {
+    await withTempDirectory(async (bin) => {
+      // The platform is named rather than read, so this runs on every host —
+      // the Windows cases are skipped wholesale everywhere else, which is how
+      // `notepad` stayed unresolvable without a single case failing.
+      for (const name of ['notepad.exe', 'vim.EXE']) {
+        await writeFile(join(bin, name), '')
+        await chmod(join(bin, name), 0o755)
+      }
+      const env = { PATH: bin, PATHEXT: '.com;.exe;.bat;.cmd' }
+      assert.equal(lookupOnPath('notepad', env, 'win32'), join(bin, 'notepad.exe'))
+      assert.equal(
+        lookupOnPath('notepad.exe', env, 'win32'),
+        join(bin, 'notepad.exe'),
+        'a name that carries its extension is searched as written',
+      )
+      assert.equal(
+        lookupOnPath('vim', { PATH: bin }, 'win32'),
+        join(bin, 'vim.EXE'),
+        'an unset PATHEXT falls back to cmd.exe\'s own list',
+      )
+      assert.equal(
+        lookupOnPath('notepad', { PATH: bin, PATHEXT: '.cmd' }, 'win32'),
+        undefined,
+        'a PATHEXT that leaves it out leaves it out',
+      )
+      assert.equal(
+        lookupOnPath('notepad', env, 'linux'),
+        undefined,
+        'a POSIX host runs the name it was given',
+      )
     })
   })
 

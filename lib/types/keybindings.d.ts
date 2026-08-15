@@ -23,6 +23,7 @@ export interface AppKeybindings {
     'app.todos.toggle': true;
     'app.thinking.toggle': true;
     'app.message.copy': true;
+    'app.draft.edit': true;
     'app.screen.redraw': true;
     'app.cancel': true;
     'app.exit': true;
@@ -67,6 +68,10 @@ export declare const APP_KEYBINDINGS: {
     readonly 'app.message.copy': {
         readonly defaultKeys: "ctrl+x";
         readonly description: "Copy the last answer";
+    };
+    readonly 'app.draft.edit': {
+        readonly defaultKeys: "alt+e";
+        readonly description: "Edit the draft in $EDITOR";
     };
     readonly 'app.screen.redraw': {
         readonly defaultKeys: "ctrl+l";

@@ -173,6 +173,26 @@ export declare function loginArgumentCompletions(roster: readonly CompletablePro
  */
 export declare function providerArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null;
 /**
+ * Complete `/copy [N]` with the answers this session actually has.
+ *
+ * The argument is an ordinal, and a bare `[N]` hint leaves the user counting
+ * rows on the screen. Each row's description is that answer's first non-empty
+ * line, so the menu itself is the answer to "which one is number two".
+ * @param answers - answer texts, newest first, as `collectAnswerTexts` returns them.
+ * @param argumentPrefix - argument text typed so far.
+ * @param limit - maximum rows offered.
+ * @returns the ordinals still matching, or `null` for no menu.
+ */
+export declare function copyArgumentCompletions(answers: readonly string[], argumentPrefix: string, limit: number): AutocompleteItem[] | null;
+/**
+ * Complete `/export [path | clipboard]` by naming the one value that is not a
+ * path.
+ * @param argumentPrefix - argument text typed so far.
+ * @returns the `clipboard` row while it still matches, or `null`: paths are the
+ *   file completer's business.
+ */
+export declare function exportArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null;
+/**
  * Complete `/resume [session]` with this workspace's resumable sessions.
  *
  * Scoped to the current workspace because that is the scope the picker opens

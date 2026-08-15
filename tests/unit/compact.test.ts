@@ -122,6 +122,17 @@ describe('runCompactCommand', () => {
     assert.equal(engine.calls.length, 0, 'the agent is never asked to run maintenance')
   })
 
+  it('refuses a busy session without splicing the status enum into the sentence', async () => {
+    // `AgentStatus` is `idle | running` and this branch only sees the running
+    // one, so the state is part of the sentence each table writes rather than a
+    // parameter — interpolating it put an English token in a Chinese line.
+    setLocale('zh')
+    const engine = fakeEngine(() => Promise.resolve(OUTCOME))
+    const result = await runCompactCommand(deps(engine, 'running'), '', new AbortController().signal)
+    assert.equal(result.text, t('compact.busy'))
+    assert.doesNotMatch(result.text ?? '', /running|idle/u, result.text ?? '')
+  })
+
   it('reports a session with nothing safe to stop showing the model', async () => {
     const engine = fakeEngine(() => Promise.resolve(null))
     const result = await runCompactCommand(deps(engine), '', new AbortController().signal)
@@ -341,6 +352,140 @@ describe('TUI /compact', { skip: skipWithoutEntry }, () => {
     }
   })
 
+  it('does not carry the cancelled state onto a compaction nobody cancelled', async () => {
+    // Esc in the window before `compaction/start` lands: the backend never
+    // opened a bracket for this request, so no `compaction/end` will ever close
+    // one. A cancelling state left standing would relabel the next bracket this
+    // terminal merely WATCHES — the automatic policy's compaction, or another
+    // process's — as one the user stopped.
+    const engine = fakeEngine(call => new Promise<CompactionOutcome>((_resolve, reject) => {
+      call.signal.addEventListener('abort', () => { reject(call.signal.reason as Error) }, { once: true })
+    }))
+    const harness = await mount({ services: { compaction: engine } })
+    try {
+      setAgentStatus(harness.agent, 'idle')
+      const running = run(harness, '/compact')
+      await delay(SETTLE_MS)
+      harness.terminal.send('\x1b')
+      assert.equal(await running, t('compact.cancelled'), 'the cancel is answered before any bracket opened')
+      await delay(SETTLE_MS)
+
+      // Not this terminal's: `turn: null` is what an automatic compaction in
+      // another process looks like from here.
+      harness.session.append('compaction/start', { compactionId: CompactionId('compact-automatic'), turn: null })
+      await delay(SETTLE_MS)
+      const frame = harness.terminal.text()
+      assert.match(frame, /Context being compacted/u, frame)
+      assert.ok(!frame.includes('Cancelling the compaction'),
+        `nobody asked this compaction to stop:\n${frame}`)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('says it is cancelling in the row the live compaction owns', async () => {
+    // The case the fake engine above does not produce and every real backend
+    // does: `compaction/start` lands, so the stopwatch takes the status row.
+    // A flash under it is never seen — the row is claimed for as long as the
+    // compaction runs — so the cancelling state has to be a phase OF that row.
+    const compactionId = CompactionId('compact-cancel-row')
+    const engine = fakeEngine(call => new Promise<CompactionOutcome>((_resolve, reject) => {
+      call.signal.addEventListener('abort', () => { reject(call.signal.reason as Error) }, { once: true })
+    }))
+    const harness = await mount({ services: { compaction: engine } })
+    try {
+      setAgentStatus(harness.agent, 'idle')
+      const running = run(harness, '/compact')
+      await delay(SETTLE_MS)
+      harness.session.append('compaction/start', { compactionId, turn: null })
+      await delay(SETTLE_MS)
+      assert.match(harness.terminal.text(), /Context being compacted/u, harness.terminal.text())
+
+      harness.terminal.send('\x1b')
+      await delay(SETTLE_MS)
+      const frame = harness.terminal.text()
+      assert.match(frame, /Cancelling the compaction/u, frame)
+      assert.ok(!frame.includes('Context being compacted'),
+        `and the stopwatch stops claiming the compaction is simply running:\n${frame}`)
+      await running
+
+      // The backend closes its transaction after the command has answered; the
+      // row goes back to nothing rather than to "being compacted".
+      harness.session.append('compaction/end', { compactionId, turn: null })
+      await delay(SETTLE_MS)
+      const settled = harness.terminal.text()
+      assert.ok(!settled.includes('Cancelling the compaction'), `the row clears with the bracket:\n${settled}`)
+      assert.ok(!settled.includes('Context being compacted'), settled)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('resolves the engine the preset realm mounts, not just the host one', async () => {
+    // The shipped `standard` preset mounts compaction behind `isolate:
+    // { compaction }`, which no host context can see, and this bundle disables
+    // the host-plane `compaction-basic` — so `serviceFor` is the only live
+    // resolution in a real deployment. Provided WITHOUT a host service, so a
+    // regression in the roster arm cannot be masked by the fallback.
+    const engine = fakeEngine(() => Promise.resolve(OUTCOME))
+    const asked: string[] = []
+    const harness = await mount({
+      services: {
+        agentPresets: {
+          defaultId: 'standard',
+          authorable: false,
+          list: () => Promise.resolve([{ id: 'standard', path: '/deployment/standard/agent.cordis.yml' }]),
+          resolve: () => Promise.resolve({ id: 'standard', path: '/deployment/standard/agent.cordis.yml' }),
+          mount: () => Promise.resolve({ id: 'standard', path: '/deployment/standard/agent.cordis.yml' }),
+          recompose: () => Promise.resolve({ id: 'standard', path: '/deployment/standard/agent.cordis.yml' }),
+          serviceFor: (agent: unknown, service: string) => {
+            asked.push(service)
+            return service === 'compaction' && agent === harness.agent ? engine : undefined
+          },
+        },
+      },
+    })
+    try {
+      assert.equal(harness.ctx.get('compaction'), undefined, 'nothing on the host plane to fall back to')
+      const text = await run(harness, '/compact')
+      assert.equal(engine.calls.length, 1, `the realm's engine ran it; roster asked for: ${asked.join(', ')}`)
+      assert.equal(engine.calls[0]?.agent, harness.agent)
+      assert.match(text ?? '', /Compacted 3 history items/u)
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('re-resolves the realm engine per invocation, so /preset moves it', async () => {
+    // `serviceFor` returns the VALUE of whichever standing mount the agent's
+    // scope points at when it is called. A composition switched to one that
+    // mounts no compaction has to produce the refusal, not keep compacting
+    // through a service this agent no longer has.
+    const engine = fakeEngine(() => Promise.resolve(OUTCOME))
+    let mounted: FakeEngine | undefined = engine
+    const harness = await mount({
+      services: {
+        agentPresets: {
+          defaultId: 'standard',
+          authorable: false,
+          list: () => Promise.resolve([]),
+          resolve: () => Promise.resolve({ id: 'standard', path: '/deployment/standard/agent.cordis.yml' }),
+          mount: () => Promise.resolve({ id: 'standard', path: '/deployment/standard/agent.cordis.yml' }),
+          recompose: () => Promise.resolve({ id: 'minimal', path: '/deployment/minimal/agent.cordis.yml' }),
+          serviceFor: (_agent: unknown, service: string) => service === 'compaction' ? mounted : undefined,
+        },
+      },
+    })
+    try {
+      assert.match(await run(harness, '/compact') ?? '', /Compacted 3 history items/u)
+      mounted = undefined
+      assert.equal(await run(harness, '/compact'), t('compact.unavailable'))
+      assert.equal(engine.calls.length, 1, 'the engine the session left is never called again')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
   it('answers Esc with one sentence, in one language', async () => {
     // The backend closes an aborted transaction by appending `compaction/end`
     // with the abort reason on it. That is a diagnostic for the log, not a
@@ -477,6 +622,11 @@ describe('compaction summary in the transcript', { skip: skipWithoutEntry }, () 
       const hidden = harness.terminal.text()
       assert.ok(!hidden.includes('Compaction summary'), `hidden drops the card:\n${hidden}`)
       assert.match(hidden, /earlier context was compacted/u, hidden)
+      // And offers no key here: the cycle is collapsed → expanded → hidden →
+      // collapsed, so one press from hidden lands on collapsed with the card
+      // still folded. A hint that needs two presses teaches the key is broken.
+      assert.ok(!hidden.includes('to expand'),
+        `the marker only names the key from the phase one press away:\n${hidden}`)
 
       // And back to the phase the session opened on: the marker is keyed per
       // phase, so a stale cached row would surface here as the wrong text.

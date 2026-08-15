@@ -66,6 +66,7 @@ async function script(name: string, body: string): Promise<string> {
 before(async () => {
   scripts = await mkdtemp(join(tmpdir(), 'dsh-editor-handoff-'))
   await script('write.sh', 'printf \'text the editor saved\\n\' > "$1"')
+  await script('question.sh', 'printf \'?\\n\' > "$1"')
   await script('noop.sh', 'exit 0')
   await script('fail.sh', 'exit 3')
   await script('capture.sh', 'cp "$1" "$TUI_HANDOFF_CAPTURE"')
@@ -194,6 +195,25 @@ describe('the draft goes to $EDITOR', { skip }, () => {
       assert.match(await waitForScreen(harness, /text the editor saved/u), /text the editor saved/u)
       assert.equal(harness.terminal.stopped, 1, 'the terminal was released once')
       assert.equal(harness.terminal.started, 2, 'and taken back after the child exited')
+    } finally {
+      await unmount(harness)
+    }
+  })
+
+  it('takes back a draft saved as a single `?` instead of opening the shortcut list', async () => {
+    // `setText` runs `onChange` synchronously, and `?` is a keystroke rule: a
+    // file saved with nothing but a question mark in it was saved on purpose,
+    // and answering it with `/hotkeys` would drop the save without a word.
+    const harness = await mount({ config: { externalEditor: join(scripts, 'question.sh') } })
+    try {
+      await press(harness, 'what is this')
+      harness.terminal.send(ALT_E)
+      await waitForTerminalBack(harness)
+      const frame = unwrapped(await waitForScreen(harness, /edit> \?/u))
+
+      assert.match(frame, /edit> \?/u, 'the saved draft is in the prompt')
+      assert.doesNotMatch(frame, /\/hotkeys/u, 'no panel took the draft away')
+      assert.doesNotMatch(frame, /what is this/u, 'and the old draft was replaced')
     } finally {
       await unmount(harness)
     }

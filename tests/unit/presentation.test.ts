@@ -16,6 +16,7 @@ import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Container, visibleWidth, type Component } from '@earendil-works/pi-tui'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { DEFAULT_MAX_PROMPT_CHARS, truncatePrompt } from '../../src/chat/prompt-truncation.ts'
 import { StepTimingTracker } from '../../src/chat/timing.ts'
 import { TranscriptReconciler, type TranscriptDeps } from '../../src/components/reconciler.ts'
 import { createPalette, markdownTheme, type Palette } from '../../src/components/theme.ts'
@@ -208,6 +209,19 @@ describe('user message block', () => {
     assert.match(rendered, /HEAD/)
     assert.match(rendered, /TAIL/)
     assert.match(rendered, /… \+\d+ lines …/, 'the middle is reported rather than printed')
+  })
+
+  it('clips the longest prompt that can reach it, which is one cut to the send budget', () => {
+    // Submission cuts a pasted file to exactly the send budget, so a display
+    // threshold equal to that budget would never fire and the block would echo
+    // the whole hundred rows the paste became.
+    const submitted = truncatePrompt(`HEAD${'x\n'.repeat(20_000)}TAIL`, DEFAULT_MAX_PROMPT_CHARS)
+    assert.equal(submitted.text.length, DEFAULT_MAX_PROMPT_CHARS)
+    const rendered = new UserMessageComponent(submitted.text, createPalette(false)).render(WIDTH)
+    const joined = rendered.join('\n')
+    assert.match(joined, /HEAD/)
+    assert.match(joined, /TAIL/)
+    assert.match(joined, /… \+\d+ lines …/, 'the middle is reported rather than printed')
   })
 
   it('fills with the scheme\'s own background, not a fixed dark bar', () => {

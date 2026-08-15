@@ -220,7 +220,10 @@ describe('/copy N', { skip: skipWithoutEntry }, () => {
       assert.equal(result?.kind, 'success')
       assert.equal(result?.text, undefined, 'the status row already said it; no transcript line follows')
       assert.equal(clipboardText(harness.writes), 'second answer')
-      assert.match(harness.terminal.text(), /Answer 2 of 3/u, harness.terminal.text())
+      // The number counts back from the newest answer — `/copy 2` of three took
+      // the second one in time — so the row has to name the direction, or the
+      // reader checks the wrong end of the transcript for what they copied.
+      assert.match(harness.terminal.text(), /Answer 2 of 3, newest first/u, harness.terminal.text())
     } finally {
       await unmount(harness)
     }
@@ -233,7 +236,7 @@ describe('/copy N', { skip: skipWithoutEntry }, () => {
       await delay(SETTLE_MS)
 
       assert.equal(clipboardText(harness.writes), 'third answer')
-      assert.match(harness.terminal.text(), /Answer 1 of 3/u, harness.terminal.text())
+      assert.match(harness.terminal.text(), /Answer 1 of 3, newest first/u, harness.terminal.text())
     } finally {
       await unmount(harness)
     }

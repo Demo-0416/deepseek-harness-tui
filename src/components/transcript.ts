@@ -745,8 +745,16 @@ const PROMPT_POINTER = '❯'
  * Characters of one prompt beyond which the block prints a middle instead
  * (`UserPromptMessage.tsx:28-30`): a pasted file is not worth scrolling past to
  * reach the answer it asked for.
+ *
+ * Deliberately half of what a prompt may be *sent* at
+ * (`chat/prompt-truncation.ts`'s default budget): a submission is cut to
+ * exactly that budget, so a display threshold equal to it would never fire and
+ * a pasted file would echo at full length — a hundred rows to scroll past on
+ * the way to the answer. The echo is clipped rather than shortened: the middle
+ * it drops is named on its own row, and what was sent is what the transcript
+ * says it sent.
  */
-const MAX_PROMPT_CHARS = 10_000
+const MAX_PROMPT_CHARS = 5_000
 
 /** Characters kept from each end when a prompt exceeds {@link MAX_PROMPT_CHARS}. */
 const PROMPT_EDGE_CHARS = 2_500

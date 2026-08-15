@@ -18,10 +18,16 @@
  * The archive is a single file rather than the Web ZIP because the two things
  * the ZIP bundles — descendant sessions and image attachments — come from
  * `sessionQuery` and `attachments`, neither of which a TUI profile mounts.
+ *
+ * `/export clipboard` is the second delivery this module renders for: the file
+ * carries the log, which is written for a machine, while the clipboard carries
+ * a Markdown transcript, which is written to be pasted into another window for
+ * a person to read.
  * @module @deepseek-ai/dsh-tui/chat/export
  */
 import type { CommandResult } from '@deepseek-ai/dsh-commands';
 import type { Session, SessionId } from '@deepseek-ai/dsh-session';
+import type { TranscriptEntry } from './transcript-search.ts';
 /**
  * The part of `ctx.sessionPersistence` an export reads.
  *
@@ -112,3 +118,39 @@ export declare function serializeSessionLog(session: Session): string;
  * @returns a success result naming the absolute path, or an error result.
  */
 export declare function exportSessionLog(deps: SessionLogExportDeps, session: Session, rawInput: string, signal: AbortSignal): Promise<CommandResult>;
+/**
+ * Whether this `/export` asks for the clipboard rather than for a file.
+ *
+ * Only the bare word counts, so a file actually named `clipboard` is still
+ * exportable as `./clipboard`. Matched case-insensitively because the keyword
+ * is a word the user says, not a path the filesystem owns.
+ * @param rawInput - the text after the command name.
+ * @returns true when this export goes to the clipboard.
+ */
+export declare function isClipboardExportTarget(rawInput: string): boolean;
+/** The header facts of a Markdown export, read by the entry point from the snapshot and the header. */
+export interface SessionMarkdownMeta {
+    /** The session's durable id. */
+    readonly sessionId: string;
+    /** The folded session title, when one was written. */
+    readonly title?: string;
+    /** The session's workspace. */
+    readonly cwd?: string;
+    /** The model label from the latest request context. */
+    readonly model?: string;
+    /** When the export ran, in milliseconds, from the entry point's own clock. */
+    readonly exportedAt: number;
+}
+/**
+ * Render this session as a Markdown transcript.
+ *
+ * The entries come from `transcriptEntries`, so order, emptiness, and "a
+ * rewound echo is not a message" are decided exactly as `/search` decides them
+ * — the exported session and the searchable one are the same session. Headings
+ * use each entry's own localized label, and the fact list reuses the `/status`
+ * card's row names.
+ * @param entries - the flattened session entries, in log order.
+ * @param meta - the session identity and export time for the header.
+ * @returns a Markdown document ending in exactly one newline.
+ */
+export declare function renderSessionMarkdown(entries: readonly TranscriptEntry[], meta: SessionMarkdownMeta): string;

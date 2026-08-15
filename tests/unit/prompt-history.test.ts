@@ -10,12 +10,12 @@
  */
 
 import assert from 'node:assert/strict'
-import { existsSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, statSync } from 'node:fs'
 import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { setTimeout as delay } from 'node:timers/promises'
+import { setImmediate as immediate, setTimeout as delay } from 'node:timers/promises'
 import {
   appendUser,
   createTuiTestHarness,
@@ -346,6 +346,47 @@ describe('the prompt history file', () => {
       assert.equal(existsSync(join(bodies, `${referenced}.txt`)), true)
       assert.equal(existsSync(stale), false)
       assert.equal(existsSync(fresh), true)
+    })
+  })
+
+  it('carries a concurrent append across once, not twice', async () => {
+    await inTempDirectory(async (directory) => {
+      const path = join(directory, PROMPT_HISTORY_FILE_NAME)
+      const writer = store(path)
+      for (let index = 0; index < 50; index++) {
+        writer.append(`prompt ${index}`)
+      }
+      await writer.flush()
+
+      // Another process appending while the compaction runs, the way the write
+      // path itself appends: no lock, one open per line. A line that lands
+      // while the file is being read is already in what the read returned, so
+      // carrying it a second time would leave it in the file twice.
+      const foreign = (text: string): string => `${JSON.stringify({
+        display: text,
+        timestamp: Date.now(),
+        cwd: '/workspace/project',
+        sessionId: 'session-b',
+      })}\n`
+      let running = true
+      const compaction = compactPromptHistory(path, { keep: 10, bodyTtlMs: 60_000 })
+        .finally(() => { running = false })
+      let written = 0
+      while (running) {
+        appendFileSync(path, foreign(`concurrent ${written}`), { mode: 0o600 })
+        written++
+        await immediate()
+      }
+      await compaction
+
+      const displays = (await records(path)).map(entry => entry.display)
+      const concurrent = displays.filter(display => display.startsWith('concurrent '))
+      assert.ok(concurrent.length > 0, `a foreign line survived the rewrite: ${displays.join(' | ')}`)
+      assert.deepEqual(
+        concurrent.filter((display, index) => concurrent.indexOf(display) !== index),
+        [],
+        `no foreign line was carried twice: ${concurrent.join(' | ')}`,
+      )
     })
   })
 

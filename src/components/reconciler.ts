@@ -403,15 +403,22 @@ export class TranscriptReconciler {
           // history, the card says WHAT it kept instead. Claude Code puts the
           // same body behind the same key, and the collapsed marker names it.
           const opened = this.visibility === 'expanded' && node.summary !== ''
+          // The hint promises what ONE press does, so only the phase that is one
+          // press away from the summary may carry it. The cycle is collapsed →
+          // expanded → hidden → collapsed: from `hidden` a press lands back on
+          // `collapsed`, where the card is still folded, and advertising the key
+          // there taught the user it was broken. `CollapsedGroupComponent` says
+          // nothing in `hidden` for the same reason.
+          const hints = node.summary !== '' && this.visibility === 'collapsed'
           // The phase is part of the cache KEY, not of the body: `plainView`
           // reuses a component while key and version both hold, so a row whose
           // text moves with Ctrl+O needs a key that moves with it. The phase
           // that is not current falls out of `seen` and is pruned below.
-          const markerKey = `${node.key}:${opened ? 'open' : 'closed'}`
+          const markerKey = `${node.key}:${opened ? 'open' : hints ? 'closed' : 'quiet'}`
           seen.add(markerKey)
-          const hint = node.summary === '' || opened
-            ? ''
-            : ` ${t('collapse.expandHint', { key: this.deps.expandKey().toLowerCase() })}`
+          const hint = hints
+            ? ` ${t('collapse.expandHint', { key: this.deps.expandKey().toLowerCase() })}`
+            : ''
           children.push(this.plainView(markerKey, node.version, () =>
             block(new Text(this.deps.palette.dim(t('transcript.compactionMarker') + hint), 0, 0))))
           if (opened) {

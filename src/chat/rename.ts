@@ -79,6 +79,31 @@ export function isInvalidTitleError(error: unknown): boolean {
 }
 
 /**
+ * The service's own wording for "a newer title operation took this one over".
+ *
+ * `SessionTitleService.supersede` aborts the in-flight generation with a plain
+ * `Error` carrying only this reason — no `code`, and `name` stays `Error`, so
+ * unlike {@link isInvalidTitleError} there is nothing structural to route on.
+ * The three reasons it can carry (a user rename, a newer explicit refresh, and
+ * a newer user message overtaking generation) all say `superseded`, and the
+ * abort travels either bare or wrapped by the provider's own `AbortError`, so
+ * the whole rendered chain is what has to be matched.
+ */
+const SUPERSEDED_REASON = /superseded/u
+
+/**
+ * Whether a failed generation was cancelled in favour of a newer one.
+ *
+ * A supersession is not a failure: the operation that caused it owns the title
+ * now and prints its own receipt, so the overtaken call has nothing to add.
+ * @param error - the rejection from `refresh()`.
+ * @returns true when a newer title operation aborted this one.
+ */
+export function isSupersededTitleError(error: unknown): boolean {
+  return SUPERSEDED_REASON.test(errorChain(error))
+}
+
+/**
  * Run one `/rename` invocation.
  *
  * `rename()` is synchronous, so the argument branch is never interrupted by the
@@ -117,6 +142,13 @@ export async function runRenameCommand(
     if (generated === undefined) return { kind: 'error', text: t('rename.noContext') }
     return { kind: 'success', text: t('rename.generated', { title: displayInlineText(generated.title) }) }
   } catch (error: unknown) {
+    // Nothing to report when this generation was cancelled rather than failed:
+    // a second `/rename` overlapping the first is reachable — the command has
+    // no in-flight guard and its signal only aborts on teardown — and the call
+    // that overtook this one already printed the title it pinned. A red "could
+    // not generate a title" under a green "session renamed to …" describes a
+    // failure that did not happen.
+    if (signal.aborted || isSupersededTitleError(error)) return { kind: 'success' }
     return { kind: 'error', text: t('rename.generateFailed', { error: displayInlineText(errorChain(error)) }) }
   }
 }

@@ -45,21 +45,56 @@ export function isExecutableFile(candidate: string): boolean {
   }
 }
 
+/** What Windows searches for a name with no extension when `PATHEXT` is unset (`cmd.exe`'s own default). */
+const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD'
+
+/**
+ * Suffixes one command name is tried with, in order.
+ *
+ * On Windows a command word is a name without an extension — `notepad`, `code`
+ * — and the executable behind it is `notepad.exe` or `code.cmd`. A lookup that
+ * only stats the bare name finds neither, which is what made every Windows
+ * fallback editor unresolvable. A name that already carries one of the
+ * extensions is searched as written.
+ * @param name - the command word.
+ * @param env - environment whose `PATHEXT` is read.
+ * @param platform - the host this lookup is for.
+ * @returns the suffixes to append, always including the empty one.
+ */
+function executableSuffixes(name: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  if (platform !== 'win32') return ['']
+  const extensions = (env['PATHEXT'] ?? DEFAULT_PATHEXT)
+    .split(';')
+    .map(extension => extension.trim())
+    .filter(extension => extension.startsWith('.'))
+  const lowered = name.toLowerCase()
+  if (extensions.some(extension => lowered.endsWith(extension.toLowerCase()))) return ['']
+  return ['', ...extensions]
+}
+
 /**
  * Resolve one command name against every `PATH` entry.
  * @param name - bare command name, without a directory part.
- * @param env - environment whose `PATH` is searched.
+ * @param env - environment whose `PATH` (and, on Windows, `PATHEXT`) is searched.
+ * @param platform - the host being resolved for; tests name it, callers do not.
  * @returns the absolute path of the first executable match, or `undefined`.
  */
-export function lookupOnPath(name: string, env: NodeJS.ProcessEnv): string | undefined {
+export function lookupOnPath(
+  name: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
   const search = env['PATH'] ?? ''
+  const suffixes = executableSuffixes(name, env, platform)
   for (const directory of search.split(delimiter)) {
     // An empty `PATH` entry means the working directory on POSIX shells. This
     // deliberately does not honor that: a workspace-local `fd` is a file the
     // model may have just written, and completion must not run it.
     if (directory === '') continue
-    const candidate = join(directory, name)
-    if (isExecutableFile(candidate)) return candidate
+    for (const suffix of suffixes) {
+      const candidate = join(directory, name + suffix)
+      if (isExecutableFile(candidate)) return candidate
+    }
   }
   return undefined
 }

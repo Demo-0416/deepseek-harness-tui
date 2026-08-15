@@ -116,6 +116,23 @@ describe('truncatePrompt', () => {
     assert.equal(result.original - result.removed, DEFAULT_MAX_PROMPT_CHARS - marker[0].length)
   })
 
+  it('states the count it reports even when the cut stepped off a surrogate pair', () => {
+    // The head lands inside the emoji, so both edges give back a character the
+    // marker's own arithmetic had already spent: the number printed in the text
+    // and the number the notice prints come from the same cut or they disagree
+    // on screen about a single truncation.
+    const result = truncatePrompt(`${'a'.repeat(4_979)}😀${'b'.repeat(30_000)}`, DEFAULT_MAX_PROMPT_CHARS)
+    const marker = /\n\n\.\.\. \[(\d+) characters truncated\] \.\.\.\n\n/u.exec(result.text)
+    assert.ok(marker !== null, `the result carries the marker:\n${result.text.slice(0, 200)}`)
+    assert.ok(result.text.slice(0, marker.index).endsWith('a'), 'the head stopped before the pair')
+    assert.equal(Number(marker[1]), result.removed)
+    assert.ok(
+      result.text.length <= DEFAULT_MAX_PROMPT_CHARS,
+      `${result.text.length} <= ${DEFAULT_MAX_PROMPT_CHARS}`,
+    )
+    assert.doesNotMatch(result.text, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u)
+  })
+
   it('changes nothing on a second pass, so a re-submitted prompt is not cut twice', () => {
     const once = truncatePrompt('x'.repeat(30_000), DEFAULT_MAX_PROMPT_CHARS)
     const twice = truncatePrompt(once.text, DEFAULT_MAX_PROMPT_CHARS)
@@ -148,6 +165,17 @@ describe('truncatePrompt', () => {
     assert.equal(result.text, 'abcd')
     assert.equal(result.removed, 6)
     assert.doesNotMatch(result.text, /characters truncated/u)
+  })
+
+  it('keeps the pair whole on that head, so a tiny budget cannot emit a lone surrogate', () => {
+    // A budget under ~39 characters takes the marker-less path; it owes the
+    // request body the same guarantee, since a lone surrogate is what JSON
+    // encoding cannot carry.
+    const result = truncatePrompt('😀'.repeat(50), 5)
+    assert.doesNotMatch(result.text, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u)
+    assert.equal(result.text, '😀😀')
+    assert.equal(result.original, 100)
+    assert.equal(result.removed, 96)
   })
 })
 

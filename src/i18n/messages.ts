@@ -352,6 +352,11 @@ export const EN_MESSAGES = {
   // number they monitor.
   'prompt.contextLow': '{remaining}% context left',
   'prompt.compacting': 'Context being compacted {duration}',
+  // The same row after Esc: the request has been asked to stop and the backend
+  // has not let go yet. A phase of the stopwatch rather than a flash beside it,
+  // because the stopwatch owns this row while a compaction runs and a flash
+  // under it would never be seen.
+  'prompt.compactingCancelling': 'Cancelling the compaction… {duration}',
   'prompt.queued': '{count} queued',
 
   // The one row a run of read-only calls collapses into. Each fragment is a
@@ -437,8 +442,10 @@ export const EN_MESSAGES = {
   'status.flash.copiedOsc52': 'Sent to clipboard via OSC 52.',
   // Only a `/copy N` says which answer it took: a bare `/copy` already means
   // "the last one", and a position on it would be answering a question nobody
-  // asked.
-  'status.flash.copiedNth': 'Answer {n} of {total} — {detail}',
+  // asked. `{n}` counts back from the newest answer — `/copy 2` of five copies
+  // the fourth in time — so the wording has to name the direction, or the
+  // reader checks the wrong end of the transcript for what they just copied.
+  'status.flash.copiedNth': 'Answer {n} of {total}, newest first — {detail}',
 
   // The `/status` card.
   'status.card.title': 'Session status',
@@ -552,6 +559,12 @@ export const EN_MESSAGES = {
   'notice.contextCritical':
     'Context nearly full — only {remaining}% of the window left ({used} / {capacity} tokens). {action}',
   'notice.contextCompactAction': 'Run /compact to summarize the history and keep going.',
+  // The same instruction for the case it usually lands in: the window fills
+  // while an answer and its tool results are streaming, and `/compact` needs an
+  // idle session, so naming the wait is the difference between an action and a
+  // refusal the user has to work out for themselves.
+  'notice.contextCompactActionAfterTurn':
+    'When this turn ends, run /compact to summarize the history and keep going.',
   'notice.contextNoCompactAction':
     'This session composes no compaction service; start a fresh session with /new before the window fills.',
 
@@ -562,7 +575,10 @@ export const EN_MESSAGES = {
     + 'so there is nothing here to steer.',
   'compact.unavailable':
     'This session\'s agent preset mounts no compaction service, so there is nothing to compact with.',
-  'compact.busy': 'Compaction needs an idle session; this one is {status}.',
+  // No `{status}` placeholder: `AgentStatus` is `idle | running` and this
+  // refusal only fires on the non-idle one, so interpolating the enum would
+  // splice an untranslated English token into every other language's sentence.
+  'compact.busy': 'Compaction needs an idle session; this one is still running a turn.',
   'compact.inFlight': 'A compaction started from this terminal is still running.',
   'compact.nothing':
     'Nothing to compact yet: this session has no history the model can safely stop seeing.',
@@ -619,9 +635,22 @@ export const EN_MESSAGES = {
   // when it is done. The `Exported` row heads the Markdown document itself.
   'export.arg.clipboard': 'Copy this session to the clipboard as Markdown',
   'export.clipboard.empty': 'Nothing to export yet: this session has no messages.',
-  'export.clipboard.done.one': 'Exported 1 message as Markdown. {detail}',
-  'export.clipboard.done.other': 'Exported {count} messages as Markdown. {detail}',
+  // "Entries", not "messages": what is counted is what `/search` flattens, and
+  // that includes tool cards, notices, and references — a session with one
+  // exchange under three tool calls exports far more entries than it has
+  // messages, and calling those messages misdescribes the screen.
+  'export.clipboard.done.one': 'Exported 1 entry as Markdown. {detail}',
+  'export.clipboard.done.other': 'Exported {count} entries as Markdown. {detail}',
+  // The same receipt for a document that hit the one-write budget. Success is
+  // still success — the clipboard did get the head of the transcript — but a
+  // partial export has to say so rather than let the user paste and discover it.
+  'export.clipboard.truncated.one': 'Exported 1 entry as Markdown, truncated to {limit} characters. {detail}',
+  'export.clipboard.truncated.other':
+    'Exported {count} entries as Markdown, truncated to {limit} characters. {detail}',
   'export.markdown.exported': 'Exported',
+  // The line the truncated document itself ends on, so the pasted text is
+  // honest about being partial too.
+  'export.markdown.truncated': '… export truncated at {limit} characters …',
 
   // `/rename`: a title the user pins, or a regenerated one that stays
   // automatic. The service normalizes what it accepts, so every confirmation
@@ -1020,6 +1049,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'prompt.context': '已用 {percent}% 上下文',
   'prompt.contextLow': '上下文剩 {remaining}%',
   'prompt.compacting': '正在压缩上下文 {duration}',
+  'prompt.compactingCancelling': '正在取消压缩… {duration}',
   'prompt.queued': '{count} 条排队中',
 
   // 折叠行。中文没有单复数之分，所以 .one 与 .other 填同一句；只有 MCP 那两对
@@ -1159,11 +1189,12 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'notice.contextLow': '上下文快满了——窗口还剩 {remaining}%（{used} / {capacity} tokens）。{action}',
   'notice.contextCritical': '上下文几乎用尽——窗口只剩 {remaining}%（{used} / {capacity} tokens）。{action}',
   'notice.contextCompactAction': '执行 /compact 把历史压成摘要，然后继续。',
+  'notice.contextCompactActionAfterTurn': '这一轮结束后执行 /compact，把历史压成摘要再继续。',
   'notice.contextNoCompactAction': '本会话没有挂压缩服务；在窗口填满前用 /new 开一个新会话。',
 
   'compact.usage': '/compact 不接受参数。摘要的写法由压缩后端固定，这里没有可传的指令。',
   'compact.unavailable': '本会话的 agent preset 没有挂压缩服务，因此没有可用的压缩能力。',
-  'compact.busy': '压缩需要会话空闲，当前状态是 {status}。',
+  'compact.busy': '压缩需要会话空闲，当前这一轮还在运行。',
   'compact.inFlight': '这个终端已经有一次压缩在跑了。',
   'compact.nothing': '暂时没有可压缩的内容：这个会话还没有可以安全让模型不再看到的历史。',
   'compact.done.one': '已压缩 {items} 条历史（约 {tokens} tokens）· 按 {key} 查看摘要',
@@ -1195,9 +1226,12 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'export.overwrite.keep': '保留原文件',
   'export.arg.clipboard': '把本会话以 Markdown 复制到剪贴板',
   'export.clipboard.empty': '本会话还没有消息可导出。',
-  'export.clipboard.done.one': '已把 1 条消息导出为 Markdown。{detail}',
-  'export.clipboard.done.other': '已把 {count} 条消息导出为 Markdown。{detail}',
+  'export.clipboard.done.one': '已把 1 个条目导出为 Markdown。{detail}',
+  'export.clipboard.done.other': '已把 {count} 个条目导出为 Markdown。{detail}',
+  'export.clipboard.truncated.one': '已把 1 个条目导出为 Markdown，内容已截断到 {limit} 个字符。{detail}',
+  'export.clipboard.truncated.other': '已把 {count} 个条目导出为 Markdown，内容已截断到 {limit} 个字符。{detail}',
   'export.markdown.exported': '导出时间',
+  'export.markdown.truncated': '…… 导出内容已截断在 {limit} 个字符处 ……',
 
   'rename.done': '会话已重命名为：{title}',
   'rename.generating': '正在生成会话标题…',

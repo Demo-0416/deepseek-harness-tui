@@ -22,6 +22,7 @@ import {
   appendAssistant,
   createTuiTestHarness,
   disposeTuiTestHarness,
+  setAgentStatus,
   tuiEntryAvailable,
   type TuiHarness,
   type TuiHarnessOptions,
@@ -33,11 +34,23 @@ import {
   nextContextAnnouncement,
   pressureLevel,
   pressureRank,
+  rearmLevel,
   AUTO_COMPACT_REMAINING_PERCENT,
   CONTEXT_CRITICAL_REMAINING_PERCENT,
   CONTEXT_LOW_REMAINING_PERCENT,
+  CONTEXT_REARM_MARGIN_PERCENT,
+  type ContextPressure,
 } from '../../src/chat/context-pressure.ts'
 import { setLocale } from '../../src/i18n/index.ts'
+
+/**
+ * One reading, written as the number the tracker reasons about.
+ * @param percentRemaining - integer percent of the window still free.
+ * @returns the band and the distance from its edge, which is what the tracker reads.
+ */
+function reading(percentRemaining: number): Pick<ContextPressure, 'level' | 'percentRemaining'> {
+  return { percentRemaining, level: pressureLevel(percentRemaining) }
+}
 
 describe('context pressure arithmetic', () => {
   it('reports nothing while no usable window is known', () => {
@@ -107,29 +120,60 @@ describe('context pressure arithmetic', () => {
 
   it('announces each band once as the window tightens', () => {
     const tracker = createContextAnnouncementTracker()
-    assert.equal(nextContextAnnouncement(tracker, 'normal'), undefined)
-    assert.equal(nextContextAnnouncement(tracker, 'low'), 'low')
-    assert.equal(nextContextAnnouncement(tracker, 'low'), undefined)
-    assert.equal(nextContextAnnouncement(tracker, 'critical'), 'critical')
-    assert.equal(nextContextAnnouncement(tracker, 'critical'), undefined)
+    assert.equal(nextContextAnnouncement(tracker, reading(60)), undefined)
+    assert.equal(nextContextAnnouncement(tracker, reading(25)), 'low')
+    assert.equal(nextContextAnnouncement(tracker, reading(22)), undefined)
+    assert.equal(nextContextAnnouncement(tracker, reading(10)), 'critical')
+    assert.equal(nextContextAnnouncement(tracker, reading(4)), undefined)
   })
 
-  it('re-arms a band the session dropped out of', () => {
+  it('re-arms a band the session dropped clear of', () => {
     const tracker = createContextAnnouncementTracker()
-    nextContextAnnouncement(tracker, 'critical')
+    nextContextAnnouncement(tracker, reading(5))
     // What a successful compaction looks like from here: the band falls, which
     // is not news, and the band above it becomes news again.
-    assert.equal(nextContextAnnouncement(tracker, 'low'), undefined)
+    assert.equal(nextContextAnnouncement(tracker, reading(20)), undefined)
     assert.equal(tracker.announced, 'low')
-    assert.equal(nextContextAnnouncement(tracker, 'critical'), 'critical')
+    assert.equal(nextContextAnnouncement(tracker, reading(9)), 'critical')
   })
 
   it('re-arms the first band once the window is comfortable again', () => {
     const tracker = createContextAnnouncementTracker()
-    nextContextAnnouncement(tracker, 'low')
-    assert.equal(nextContextAnnouncement(tracker, 'normal'), undefined)
+    nextContextAnnouncement(tracker, reading(25))
+    assert.equal(nextContextAnnouncement(tracker, reading(60)), undefined)
     assert.equal(tracker.announced, 'normal')
-    assert.equal(nextContextAnnouncement(tracker, 'low'), 'low')
+    assert.equal(nextContextAnnouncement(tracker, reading(25)), 'low')
+  })
+
+  it('does not re-arm on a reading that only just cleared the threshold', () => {
+    // The measurement is not monotonic: a landed usage anchor can revise the
+    // count down by more than a point, and without the margin that one revision
+    // re-arms the band so the next tool result appends the identical row.
+    const tracker = createContextAnnouncementTracker()
+    assert.equal(nextContextAnnouncement(tracker, reading(25)), 'low')
+    for (const percentRemaining of [26, 27, CONTEXT_LOW_REMAINING_PERCENT + CONTEXT_REARM_MARGIN_PERCENT]) {
+      assert.equal(nextContextAnnouncement(tracker, reading(percentRemaining)), undefined)
+      assert.equal(tracker.announced, 'low', `${percentRemaining}% is still inside the low band's slack`)
+    }
+    assert.equal(nextContextAnnouncement(tracker, reading(25)), undefined, 'so coming back is not news')
+    // Clear of the slack is a real recovery, and arms the row again.
+    assert.equal(
+      nextContextAnnouncement(tracker, reading(CONTEXT_LOW_REMAINING_PERCENT + CONTEXT_REARM_MARGIN_PERCENT + 1)),
+      undefined,
+    )
+    assert.equal(tracker.announced, 'normal')
+    assert.equal(nextContextAnnouncement(tracker, reading(25)), 'low')
+  })
+
+  it('holds the red band through noise around its own threshold', () => {
+    const tracker = createContextAnnouncementTracker()
+    nextContextAnnouncement(tracker, reading(25))
+    assert.equal(nextContextAnnouncement(tracker, reading(10)), 'critical')
+    assert.equal(nextContextAnnouncement(tracker, reading(11)), undefined)
+    assert.equal(tracker.announced, 'critical', 'one point over red is still red for re-arming')
+    assert.equal(nextContextAnnouncement(tracker, reading(10)), undefined)
+    assert.equal(rearmLevel(CONTEXT_CRITICAL_REMAINING_PERCENT + CONTEXT_REARM_MARGIN_PERCENT), 'critical')
+    assert.equal(rearmLevel(CONTEXT_CRITICAL_REMAINING_PERCENT + CONTEXT_REARM_MARGIN_PERCENT + 1), 'low')
   })
 })
 
@@ -275,6 +319,46 @@ describe('context low warning', { skip: skipWithoutEntry }, () => {
       const frame = mounted.harness.terminal.text()
       assert.match(frame, /Run \/compact to summarize/u, frame)
       assert.match(frame, /100,000 \/ 128,000 tokens/u, frame)
+    } finally {
+      await unmount(mounted)
+    }
+  })
+
+  it('tells a running turn when to compact, since /compact refuses a busy session', async () => {
+    // Where this warning normally lands: the window fills while an answer and
+    // its tool results stream in, and `/compact` answers a non-idle agent with
+    // a refusal. An instruction that cannot be followed at the moment it is
+    // given is a puzzle, not an action.
+    const mounted = await mount({ services: { compaction: COMPACTION_SERVICE } }, 20_000)
+    try {
+      setAgentStatus(mounted.harness.agent, 'running')
+      await bump(mounted, 100_000)
+      const frame = mounted.harness.terminal.text()
+      assert.match(frame, /When this turn ends, run \/compact/u, frame)
+      assert.ok(!frame.includes('Run /compact to summarize'),
+        `and not the bare instruction the session would refuse:\n${frame}`)
+    } finally {
+      setAgentStatus(mounted.harness.agent, 'idle')
+      await unmount(mounted)
+    }
+  })
+
+  it('does not repeat a row because the reading wobbled across the threshold', async () => {
+    // The meter reports a provider-usage anchor plus a heuristic delta, so a
+    // landed anchor can revise the count DOWN across the band edge. Without
+    // hysteresis that revision re-arms the band and the next tool result writes
+    // the identical warning under the first one.
+    const mounted = await mount({}, 20_000)
+    try {
+      await bump(mounted, 100_000)
+      assert.equal(countOf(mounted.harness.terminal.text(), 'Context low'), 1)
+      // 94,000 / 128,000 is 27% left: out of the yellow band, still inside its
+      // slack, so nothing is re-armed.
+      await bump(mounted, 94_000)
+      assert.match(mounted.harness.terminal.text(), /73% context/u, mounted.harness.terminal.text())
+      await bump(mounted, 100_000)
+      assert.equal(countOf(mounted.harness.terminal.text(), 'Context low'), 1,
+        mounted.harness.terminal.text())
     } finally {
       await unmount(mounted)
     }

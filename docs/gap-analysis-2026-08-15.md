@@ -106,7 +106,7 @@
 
 | 严重度 | 工作量 | 验证 | 差距 | 我们的现状 | 参考方行为 |
 |---|---|---|---|---|---|
-| high | M | confirmed | /compact 手动压缩上下文 | absent — 压缩仅自动触发（dsh-compaction），无手动命令，无自定义摘要指令 | /compact 清空对话历史但在上下文中保留摘要，可带自定义摘要指令，支持非交互模式；证据 src/commands/compact/index.ts:6-7 |
+| high | M | fixed@0.2.0 | /compact 手动压缩上下文 | absent — 压缩仅自动触发（dsh-compaction），无手动命令，无自定义摘要指令 | /compact 清空对话历史但在上下文中保留摘要，可带自定义摘要指令，支持非交互模式；证据 src/commands/compact/index.ts:6-7 |
 | medium | S | partial | /clear 语义：清视图 vs 清上下文 | partial — /clear 只清 transcript 视图（会话日志不变）；释放上下文要靠 /new 开新会话（旧会话保留可 resume） | /clear 清空对话历史并释放上下文，有 caches/conversation 子命令；证据 src/commands/clear/index.ts:12-13 |
 | medium | S | confirmed | /cost 会话费用显示 | absent — token-meter 有启发式定价但 TUI 只显示 token 数和缓存命中率，无 cost 命令或显示 | /cost 显示本会话总费用和时长；证据 src/commands/cost/index.ts:10-11 |
 | medium | M | partial | /permissions 持久 allow/deny 规则管理 | partial — /permission 是 host 命令切换四个预设（read-only/workspace-write/auto-accept/danger-full-access）；审批对话框有'本会话不再问'但仅进程内记忆，无持久 allow/deny 规则管理 | /permissions 管理 allow 和 deny 工具权限规则（持久规则）；证据 src/commands/permissions/index.ts:5-7 |
@@ -121,13 +121,13 @@
 | low | M | confirmed | /diff per-turn 变更视图 | absent — 无 per-turn diff 聚合视图；单次编辑 diff 在工具卡片中渲染 | /diff 查看未提交变更和 per-turn diff；证据 src/commands/diff/index.ts:5-6 |
 | medium | M | confirmed | /memory 记忆文件编辑 | absent — 无记忆文件编辑命令，无自动记忆系统 | /memory 编辑 Claude 记忆文件（CLAUDE.md / 记忆层）；证据 src/commands/memory/index.ts:5-6 |
 | low | M | confirmed | /btw 侧边提问 | absent — 无侧问命令；运行中提交 prompt 走 steering 排队进主对话 | /btw 问一个快速侧问题，不打断主对话；证据 src/commands/btw/index.ts:5-6 |
-| low | S | confirmed | /rename 会话重命名 | absent — 会话标题由 dsh-session-title 自动生成，显示在横幅和终端标题；无手动重命名命令 | /rename 重命名当前对话（无参数时用 generateSessionName 自动生成）；证据 src/commands/rename/index.ts:5-6 |
+| low | S | fixed@0.2.0 | /rename 会话重命名 | absent — 会话标题由 dsh-session-title 自动生成，显示在横幅和终端标题；无手动重命名命令 | /rename 重命名当前对话（无参数时用 generateSessionName 自动生成）；证据 src/commands/rename/index.ts:5-6 |
 | low | L | confirmed | /vim 编辑模式 | absent — 编辑器无 vim 模式 | /vim 在 Vim 和 Normal 编辑模式间切换；证据 src/commands/vim/index.ts:4-5 |
 | low | S | partial | /effort 命令（选择器已覆盖） | partial — 无 /effort 命令；reasoning effort 在 /model 选择器中用左右/Shift+Tab 调节，/status 显示当前值 | /effort 设置模型 effort 级别（low/medium/high/max），无参数打印当前值；证据 src/commands/effort/index.ts:6-7 |
 | low | S | partial | /keybindings 打开键位配置文件 | partial — 无 /keybindings 命令；键位配置在 settings 文件中，/hotkeys 面板查看 resolved 键 | /keybindings 打开或创建 keybindings 配置文件；证据 src/commands/keybindings/index.ts:5-6 |
 | low | S | confirmed | /logout 登出 | absent — 有 /login 存凭证，无 /logout 清除凭证 | /logout 登出 Anthropic 账户；证据 src/commands/logout/index.ts:6-7 |
-| low | S | partial | /copy N 复制第 N 条回答 | partial — /copy 只复制最后一条回答，不支持 /copy N | /copy 复制最后一条回答，/copy N 复制倒数第 N 条；证据 src/commands/copy/index.ts:9-10 |
-| low | S | partial | /export 导出到剪贴板 | partial — /export 只写文件（JSONL），不支持导出到剪贴板 | /export 把当前对话导出到文件或剪贴板；证据 src/commands/export/index.ts:5-6 |
+| low | S | fixed@0.2.0 | /copy N 复制第 N 条回答 | partial — /copy 只复制最后一条回答，不支持 /copy N | /copy 复制最后一条回答，/copy N 复制倒数第 N 条；证据 src/commands/copy/index.ts:9-10 |
+| low | S | fixed@0.2.0 | /export 导出到剪贴板 | partial — /export 只写文件（JSONL），不支持导出到剪贴板 | /export 把当前对话导出到文件或剪贴板；证据 src/commands/export/index.ts:5-6 |
 | low | S | confirmed | /terminal-setup 终端键位安装 | absent — 无终端键位安装命令 | /terminal-setup 安装 Shift+Enter 换行键位（Apple Terminal 上 Option+Enter）；证据 src/commands/terminalSetup/index.ts:14-15 |
 | low | M | confirmed | /hooks 查看 hook 配置 | absent — 无 hooks 配置查看命令，无用户级 hooks 系统 | /hooks 查看工具事件的 hook 配置；证据 src/commands/hooks/index.ts:5-6 |
 | low | S | confirmed | /files 列出上下文文件 | absent — 无列出上下文中文件的命令 | /files 列出当前上下文中的所有文件；证据 src/commands/files/index.ts:5-6 |
@@ -179,10 +179,10 @@
 | low | M | confirmed | /bug 和 /feedback 命令 | 无 /bug、/feedback 命令 | /bug 提交 bug 报告；/feedback 提交反馈（含 memory survey、transcript share） |
 | low | M | confirmed | /memory 记忆文件选择器 | 无 /memory 命令 | /memory 打开 MemoryFileSelector；记忆更新时显示 MemoryUpdateNotification |
 | low | S | confirmed | /init 命令 | 无 /init 命令 | /init 命令生成项目级 CLAUDE.md 配置文件 |
-| low | S | confirmed | /compact 手动压缩命令 | 有自动压缩但无 /compact 手动命令 | /compact 命令手动触发上下文压缩，可选择压缩方向和反馈 |
+| low | S | fixed@0.2.0 | /compact 手动压缩命令 | 有自动压缩但无 /compact 手动命令 | /compact 命令手动触发上下文压缩，可选择压缩方向和反馈 |
 | low | M | confirmed | /usage 用量面板 | 无 /usage 命令 | /usage 打开 Usage tab，展示 LimitBar（5h/7d 限流进度条）和 overage credit |
 | low | M | confirmed | /stats 统计图表 | 有 sessionStats 数据但无 /stats 命令 | /stats 展示 asciichart 图表（token 用量、API 时长、成本等） |
-| low | S | closed | 自动更新器 | 已补：挂载后异步查 npm registry，每天最多一次，发现新版本提示一条 `Update available: … — run: npm install -g …`（`updateCheck` 可关；只提示，不自装） | AutoUpdater 检查更新并提示用户安装 |
+| low | S | fixed@0.2.0 | 自动更新器 | 已补：挂载后异步查 npm registry，每天最多一次，发现新版本提示一条 `Update available: … — run: npm install -g …`（`updateCheck` 可关；只提示，不自装） | AutoUpdater 检查更新并提示用户安装 |
 | low | S | confirmed | Worktree 退出对话框 | 无 worktree 功能 | WorktreeExitDialog 在退出 worktree 会话时确认 |
 | low | S | confirmed | ExitFlow 随机告别语 | 有可配置 goodbyeMessage 但无随机告别 | ExitFlow 显示随机告别语（从列表中选择） |
 | low | S | confirmed | InvalidSettingsDialog 设置校验错误 | 无设置校验错误对话框 | InvalidSettingsDialog 显示 ValidationErrors 列表，可继续或退出 |
@@ -216,7 +216,7 @@
 | low | S | confirmed | CtrlOToExpand 展开提示 | 有 Ctrl+O 卡片相位循环但无展开提示 | CtrlOToExpand 显示 'Press Ctrl+O to expand' 提示 |
 | low | S | confirmed | Spinner 家族（shimmer/glimmer） | 有状态 glyph 淡入/脉冲动画但无 shimmer/glimmer | Spinner 家族：SpinnerGlyph（braille 动画）、FlashingChar、ShimmerChar（字符级 shimmer）、GlimmerMessage、TeammateSpinnerTree |
 | low | S | confirmed | useStalledAnimation 停滞动画 | 有 stallTimer 但无 stalled 动画 | useStalledAnimation 在操作超时时显示 stalled 提示 |
-| medium | S | confirmed | TokenWarning 上下文警告 | 有 context 百分比但无警告 | TokenWarning 在上下文使用率高时显示警告和升级建议 |
+| medium | S | fixed@0.2.0 | TokenWarning 上下文警告 | 有 context 百分比但无警告 | TokenWarning 在上下文使用率高时显示警告和升级建议 |
 | low | S | confirmed | CompactSummary 压缩摘要 | 有 COMPACTION_MARKER 但无摘要 | CompactSummary 展示压缩后的对话摘要 |
 | low | S | confirmed | MemoryUsageIndicator 内存指示器 | 无内存使用指示器 | MemoryUsageIndicator 显示进程内存使用 |
 | low | S | ? | FooterSuggestions 输入建议 | 有 autocomplete 但无 footer 建议 | FooterSuggestions 在输入框下方显示上下文建议（文件、MCP 资源、agent） |
@@ -243,7 +243,7 @@
 | low | S | ? | /install 安装命令 | 无 /install 命令 | /install 安装 hooks/skills |
 | low | S | ? | /terminal-setup 终端配置 | 无 /terminal-setup 命令 | /terminal-setup 配置终端键位 |
 | low | S | ? | Resume 选择器 worktree 分组 | ResumePicker 不按 worktree 分组 | ResumeConversation 按 worktree 分组展示历史会话 |
-| low | S | ? | ExportDialog 剪贴板导出选项 | /export 只支持文件导出 | ExportDialog 支持 'copy to clipboard' 和 'save to file' 两种方式 |
+| low | S | fixed@0.2.0 | ExportDialog 剪贴板导出选项 | /export 只支持文件导出 | ExportDialog 支持 'copy to clipboard' 和 'save to file' 两种方式 |
 | low | S | ? | GlobalSearch/QuickOpen 全局搜索 | 有 /search 会话内搜索但无全局搜索 | GlobalSearchDialog 全局搜索；QuickOpenDialog 快速打开 |
 | low | S | ? | MessageSelector 消息选择器 | RewindPanel 直接选择 prompt | MessageSelector 选择特定消息进行 rewind/fork |
 | low | S | ? | LogSelector 日志选择器 | 无日志选择器 | LogSelector 选择日志文件 |
@@ -296,13 +296,13 @@
 
 | 严重度 | 工作量 | 验证 | 差距 | 我们的现状 | 参考方行为 |
 |---|---|---|---|---|---|
-| high | M | confirmed | 跨会话历史持久化（history.jsonl） | absent - 历史纯内存（pi-tui Editor 私有 history + HintEditor mirror），进程退出即丢，无跨会话历史 | 历史持久化到 ~/.claude/history.jsonl，最多 100 条，当前会话条目优先于其他会话，支持 removeLastFromHistory 跳过已刷盘条目，粘贴内容超 1024 字符时存到 pasteStore 用 hash 引用。Up/Down 箭头导航时分块加载（每块 10 条）并合并并发磁盘读取 |
+| high | M | fixed@0.2.0 | 跨会话历史持久化（history.jsonl） | absent - 历史纯内存（pi-tui Editor 私有 history + HintEditor mirror），进程退出即丢，无跨会话历史 | 历史持久化到 ~/.claude/history.jsonl，最多 100 条，当前会话条目优先于其他会话，支持 removeLastFromHistory 跳过已刷盘条目，粘贴内容超 1024 字符时存到 pasteStore 用 hash 引用。Up/Down 箭头导航时分块加载（每块 10 条）并合并并发磁盘读取 |
 | high | L | confirmed | 图片粘贴与拖文件识别 | absent - 剪贴板仅文本（native/tmux/OSC52 三路），无图片粘贴、无图片路径识别、无 [Image #N] 占位符 | 粘贴文本中检测图片文件路径（换行或空格分隔，支持 Unix / 和 Windows C:\ 路径），拖拽多张图片时逐个读取为图片附件；macOS 上 Cmd+V 粘贴图片时终端发送空 bracketed paste，自动检测剪贴板图片并转为图片附件；粘贴的图片在输入框显示为 [Image #N] 占位符。 |
-| medium | M | confirmed | 外部编辑器（$EDITOR）编辑输入 | absent - 无外部编辑器功能，Ctrl+G 已绑定为会话消息搜索 | Ctrl+G 或 Ctrl+X Ctrl+E 打开 $EDITOR 编辑当前输入，保存后内容回到输入框；多行输入时底部提示 'edit in <editor>'；编辑前 push undo 快照。 |
+| medium | M | fixed@0.2.0 | 外部编辑器（$EDITOR）编辑输入 | absent - 无外部编辑器功能，Ctrl+G 已绑定为会话消息搜索 | Ctrl+G 或 Ctrl+X Ctrl+E 打开 $EDITOR 编辑当前输入，保存后内容回到输入框；多行输入时底部提示 'edit in <editor>'；编辑前 push undo 快照。 |
 | medium | L | confirmed | Ghost text 输入建议（Prompt Suggestion） | absent - 无 ghost text / 内联建议 | 空闲时用 forked agent 预测用户下一步输入（2-12 词），显示为 ghost text，Tab 或 Enter 接受；有严格过滤（拒绝评价/问题/Claude 口吻/多句）；被多种原因抑制（disabled/pending_permission/plan_mode/rate_limit 等）；接受时可触发 |
 | medium | M | confirmed | !bash 前缀直接执行 shell 命令 | absent - 无 bash 模式，所有输入都作为 prompt 发给 agent | 输入以 ! 开头时进入 bash 模式，直接在 shell 中执行命令（不经过 agent），输出回显到对话；历史导航按模式过滤（bash 历史只显示 bash 命令）；bash 模式下提供 shell 补全（命令/变量/路径）。 |
 | medium | L | confirmed | Vim 编辑模式 | absent - 无 vim 模式 | 输入框支持 vim 模式，INSERT/NORMAL 两种模式，Esc 从 INSERT 切到 NORMAL；NORMAL 下支持完整状态机：count(1-9)、operator(d/c/y)+motion、find(f/F/t/T)、text object(i/a+w/p/s)、replace(r)、indent( |
-| medium | S | confirmed | 超长输入自动截断 | absent - 输入不截断，仅 transcript 显示时裁剪（MAX_PROMPT_CHARS=10_000） | 输入超过 10,000 字符时自动截断（中间省略号），截断后光标移到末尾，防止超长输入导致 API 错误。 |
+| medium | S | fixed@0.2.0 | 超长输入自动截断 | absent - 输入不截断，仅 transcript 显示时裁剪（MAX_PROMPT_CHARS=10_000） | 输入超过 10,000 字符时自动截断（中间省略号），截断后光标移到末尾，防止超长输入导致 API 错误。 |
 | medium | M | confirmed | 排队消息可编辑（Up 键编辑 queued messages） | absent - 排队的 steering 消息只在取消时（Esc）全部放回编辑器，不支持 Up 键逐条编辑 | 有排队消息时，placeholder 显示 'Press up to edit queued messages'（最多提示 3 次）；Up 箭头可逐条编辑排队中的消息，编辑后可重新提交。 |
 | low | S | confirmed | Stash/unstash 暂存输入 | absent - 无 stash 功能 | Ctrl+S 保存当前输入（文本+光标位置+粘贴内容）到 stash，清空输入框；输入框为空时再按 Ctrl+S 恢复 stash 的内容。 |
 | low | S | partial | 历史记录中保留粘贴占位符 | partial - pi-tui 有 paste marker（[paste #N +M lines]），但提交时展开为全文存入历史，历史中不保留 marker | 粘贴的长文本在历史记录中保留为 [Pasted text #N +M lines] 占位符，显示时才展开为实际内容，保持历史文件紧凑。 |
@@ -327,13 +327,13 @@
 
 | 严重度 | 工作量 | 验证 | 差距 | 我们的现状 | 参考方行为 |
 |---|---|---|---|---|---|
-| high | M | confirmed | 缺少 /compact 手动压缩命令和 /clear 会话重置语义 | absent (no /compact command; /clear only hides view) | Claude Code has /compact to manually trigger conversation compaction with optional custom summarization instructions, and /clear with subcommands (caches, conve |
-| high | M | confirmed | 缺少上下文窗口不足警告和 auto-compact 阈值提示 | absent (no context-low warning UI; only output-token-limit notice) | Claude Code shows 'Context low (X% remaining) · Run /compact to compact & continue' warning when approaching context window, with auto-compact at threshold. War |
+| high | M | fixed@0.2.0 | 缺少 /compact 手动压缩命令和 /clear 会话重置语义 | absent (no /compact command; /clear only hides view) | Claude Code has /compact to manually trigger conversation compaction with optional custom summarization instructions, and /clear with subcommands (caches, conve |
+| high | M | fixed@0.2.0 | 缺少上下文窗口不足警告和 auto-compact 阈值提示 | absent (no context-low warning UI; only output-token-limit notice) | Claude Code shows 'Context low (X% remaining) · Run /compact to compact & continue' warning when approaching context window, with auto-compact at threshold. War |
 | high | L | confirmed | 完全缺少成本(cost)统计与显示 | absent (no cost tracking anywhere) | Claude Code tracks cost per session (cost-tracker.ts), shows total cost + duration at session end, per-model token usage breakdown, and 'costs may be inaccurate |
-| medium | M | confirmed | 缺少 /rename 用户自定义会话标题 | absent (title is backend auto-generated, read-only in TUI) | Claude Code /rename sets a user-defined session title (or auto-generates via generateSessionName when no arg). Title shown in /resume picker and terminal title. |
+| medium | M | fixed@0.2.0 | 缺少 /rename 用户自定义会话标题 | absent (title is backend auto-generated, read-only in TUI) | Claude Code /rename sets a user-defined session title (or auto-generates via generateSessionName when no arg). Title shown in /resume picker and terminal title. |
 | medium | M | confirmed | 缺少 /branch 显式分叉命令 | absent (fork only via /rewind selecting a past prompt) | Claude Code /branch creates a fork of the conversation at the current point (branch session). Explicit command separate from /rewind. |
-| medium | S | confirmed | 缺少 /copy N 复制历史第 N 条回答 | absent (/copy only copies last answer, no N argument) | Claude Code /copy N copies the Nth most recent assistant response to clipboard. |
-| medium | S | confirmed | 缺少 /export 到剪贴板选项 | absent (/export only writes to file, no clipboard option) | Claude Code /export exports conversation to file or clipboard. |
+| medium | S | fixed@0.2.0 | 缺少 /copy N 复制历史第 N 条回答 | absent (/copy only copies last answer, no N argument) | Claude Code /copy N copies the Nth most recent assistant response to clipboard. |
+| medium | S | fixed@0.2.0 | 缺少 /export 到剪贴板选项 | absent (/export only writes to file, no clipboard option) | Claude Code /export exports conversation to file or clipboard. |
 | medium | M | confirmed | 缺少 /context 上下文占用可视化 | absent (only meter in /status, no grid visualization) | Claude Code /context visualizes current context usage as a colored grid showing which sections (system prompt, tools, messages, compaction) occupy the window. |
 | medium | S | confirmed | 缺少 /effort 命令(仅在模型选择器中可调) | absent (effort only adjustable in model selector dialog) | Claude Code /effort sets reasoning effort level (low/medium/high/max) and prints current level when no arg. |
 | low | L | confirmed | 缺少空闲离开(away)摘要 | absent | Claude Code generates a 'while you were away' summary when terminal regains focus after 5+ minutes blur, if a turn was running. Delayed until turn completes. |
@@ -370,8 +370,8 @@
 
 | 严重度 | 工作量 | 验证 | 差距 | 我们的现状 | 参考方行为 |
 |---|---|---|---|---|---|
-| medium | S | confirmed | Session rename command | Session titles are read-only from backend events; no /rename command exists. Users cannot manually rename sessions. | Claude Code has /rename command to rename sessions |
-| medium | S | confirmed | Manual compaction trigger | Only auto-compaction exists; no /compact command for manual context compaction. | Claude Code has /compact command for manual context compaction |
+| medium | S | fixed@0.2.0 | Session rename command | Session titles are read-only from backend events; no /rename command exists. Users cannot manually rename sessions. | Claude Code has /rename command to rename sessions |
+| medium | S | fixed@0.2.0 | Manual compaction trigger | Only auto-compaction exists; no /compact command for manual context compaction. | Claude Code has /compact command for manual context compaction |
 | medium | M | confirmed | Memory file management | No /memory command or memory file system for persistent project knowledge across sessions. | Claude Code has /memory command and CLAUDE.md memory files |
 | low | S | confirmed | Feedback command | No /feedback command for users to submit feedback. | Claude Code has /feedback command |
 | low | M | confirmed | Diff viewer command | Diff rendering exists inline but no dedicated /diff command or viewer. | Claude Code has /diff command |

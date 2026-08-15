@@ -40,6 +40,11 @@ export interface TuiConfig {
     maxToolOutputLines?: number;
     /** Maximum added and removed lines explored while deriving an exact line diff. */
     maxDiffEditLength?: number;
+    /**
+     * Characters one submitted prompt may carry before its middle is dropped.
+     * `0` sends every prompt whole, however long.
+     */
+    maxPromptChars?: number;
     /** Maximum options visible at once in a user-question panel. */
     maxQuestionOptions?: number;
     /** Maximum models visible at once in the model selector. */
@@ -75,8 +80,25 @@ export interface TuiConfig {
      * excludes {@link fileSearchExcludedDirectories} by name instead.
      */
     fileSearchCommand?: string;
+    /**
+     * Path or command line of the editor `Alt+E` and `/editor` hand the draft to.
+     * Unset reads `$VISUAL`, then `$EDITOR`, then discovers a terminal editor on
+     * `PATH`; the empty string turns the feature off, and the key says so instead
+     * of spawning anything. A GUI editor needs its own wait flag (`code -w`); the
+     * known ones get it added for them.
+     */
+    externalEditor?: string;
     /** Show the terminal's hardware cursor at the pi editor's IME marker. */
     showHardwareCursor?: boolean;
+    /**
+     * Ask the npm registry once a day whether a newer release of this bundle is
+     * published, and say so in one notice when there is.
+     *
+     * The check only ever tells; nothing is downloaded or installed. `false` for
+     * a deployment that pins its own version, or one whose terminals must make no
+     * outbound request they were not asked to make.
+     */
+    updateCheck?: boolean;
     /** Color and prompt-template settings. */
     theme?: TuiThemeConfig;
     /** Terminal window title while the UI is mounted; a logged session title prefixes it. */
@@ -149,6 +171,7 @@ export interface ResolvedTuiConfig {
     markdownRenderer: MarkdownRendererId;
     maxToolOutputLines: number;
     maxDiffEditLength: number;
+    maxPromptChars: number;
     maxQuestionOptions: number;
     maxModelOptions: number;
     maxResumeOptions: number;
@@ -163,7 +186,10 @@ export interface ResolvedTuiConfig {
     fileSearchExcludedDirectories: string[];
     /** Configured `fd` path or name; `undefined` leaves discovery to `PATH`. */
     fileSearchCommand: string | undefined;
+    /** Configured editor path or command line; `undefined` leaves discovery to `$VISUAL`/`$EDITOR`/`PATH`. */
+    externalEditor: string | undefined;
     showHardwareCursor: boolean;
+    updateCheck: boolean;
     theme: ResolvedTuiThemeConfig;
     title: string;
     /** Key overrides, empty when the deployment configured none. */

@@ -23,6 +23,22 @@
  */
 export declare const FILE_SEARCH_COMMAND_NAMES: readonly ["fd", "fdfind"];
 /**
+ * Whether one absolute path is an executable file this process can run.
+ *
+ * A directory named `fd` on `PATH` satisfies neither, and a permission error
+ * is the same answer as a missing file: this host cannot run it.
+ * @param candidate - absolute path to test.
+ * @returns true when the path can be spawned.
+ */
+export declare function isExecutableFile(candidate: string): boolean;
+/**
+ * Resolve one command name against every `PATH` entry.
+ * @param name - bare command name, without a directory part.
+ * @param env - environment whose `PATH` is searched.
+ * @returns the absolute path of the first executable match, or `undefined`.
+ */
+export declare function lookupOnPath(name: string, env: NodeJS.ProcessEnv): string | undefined;
+/**
  * Resolve the gitignore-aware file-search binary for this session.
  *
  * The configured value wins over discovery in both directions, because both

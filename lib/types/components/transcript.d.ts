@@ -743,6 +743,25 @@ export declare class ContextCardComponent extends CachedCardComponent {
     protected renderLines(width: number): string[];
 }
 /**
+ * The summary one compaction wrote, rendered on the expanded Ctrl+O phase.
+ *
+ * Same placement rule as a context card: it is what the model was left holding
+ * rather than something anyone said, so the two default phases keep it off the
+ * transcript and the expanded phase — where a user goes to see what the model
+ * was actually sent — opens it in the conversation's own order, right under the
+ * marker that says where the history stopped.
+ *
+ * Not capped, for the same reason a context card is not: the point of the card
+ * is that the summary is now the whole of that history, and a summary clipped
+ * mid-sentence would answer the question with another one.
+ */
+export declare class CompactionSummaryComponent extends CachedCardComponent {
+    private readonly summary;
+    private readonly palette;
+    constructor(summary: string, palette: Palette);
+    protected renderLines(width: number): string[];
+}
+/**
  * The plan/todo panel rendered above the prompt, expanded or collapsed.
  *
  * The panel used to be unconditional: any session whose agent wrote a plan paid

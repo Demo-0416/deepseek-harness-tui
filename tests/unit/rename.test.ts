@@ -18,6 +18,7 @@ import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionTitleSnapshot } from '@deepseek-ai/dsh-session-title'
 import {
   isInvalidTitleError,
+  isSupersededTitleError,
   runRenameCommand,
   type SessionTitleWriter,
 } from '../../src/chat/rename.ts'
@@ -203,7 +204,7 @@ describe('/rename with no argument', () => {
     const result = await runRenameCommand(
       {
         titles: fakeTitles(noCalls(), {
-          refresh: () => Promise.reject(new Error('user rename superseded automatic title generation')),
+          refresh: () => Promise.reject(new Error('the title provider timed out after 60000 ms')),
         }),
       },
       SESSION,
@@ -212,7 +213,86 @@ describe('/rename with no argument', () => {
     )
 
     assert.equal(result.kind, 'error')
-    assert.match(result.text ?? '', /superseded/u)
+    assert.match(result.text ?? '', /timed out/u)
+  })
+
+  it('says nothing when a newer title operation superseded this generation', async () => {
+    // Both reachable supersessions: a `/rename <name>` overtaking a generation
+    // already in flight, and a second bare `/rename` overtaking the first. The
+    // operation that caused the abort prints its own receipt, so this one has
+    // nothing to add — and a red line under a green "renamed to …" describes a
+    // failure that did not happen.
+    for (const reason of [
+      'user rename superseded automatic title generation',
+      'explicit title refresh superseded older generation',
+    ]) {
+      const result = await runRenameCommand(
+        { titles: fakeTitles(noCalls(), { refresh: () => Promise.reject(new Error(reason)) }) },
+        SESSION,
+        '',
+        AbortSignal.timeout(1_000),
+      )
+
+      assert.equal(result.kind, 'success', reason)
+      assert.equal(result.text, undefined, 'and prints nothing at all')
+    }
+  })
+
+  it('recognizes the supersession through the provider abort that wraps it', async () => {
+    // The abort reaches the caller either bare or wrapped: a provider that was
+    // mid-request rejects with its own abort error carrying the reason as cause.
+    const aborted = new Error('The operation was aborted', {
+      cause: new Error('user rename superseded automatic title generation'),
+    })
+    const result = await runRenameCommand(
+      { titles: fakeTitles(noCalls(), { refresh: () => Promise.reject(aborted) }) },
+      SESSION,
+      '',
+      AbortSignal.timeout(1_000),
+    )
+
+    assert.equal(result.kind, 'success')
+    assert.equal(result.text, undefined)
+  })
+
+  it('says nothing when the terminal that dispatched it was torn down mid-generation', async () => {
+    const controller = new AbortController()
+    const result = await runRenameCommand(
+      {
+        titles: fakeTitles(noCalls(), {
+          refresh: (): Promise<never> => {
+            controller.abort(new Error('tui disposed'))
+            return Promise.reject(new Error('session-title provider "llm" was disposed'))
+          },
+        }),
+      },
+      SESSION,
+      '',
+      controller.signal,
+    )
+
+    assert.equal(result.kind, 'success')
+    assert.equal(result.text, undefined, 'there is no screen left to report a failure on')
+  })
+})
+
+describe('isSupersededTitleError', () => {
+  it('matches the service\'s own abort reasons, wrapped or bare, and nothing else', () => {
+    for (const reason of [
+      'user rename superseded automatic title generation',
+      'explicit title refresh superseded older generation',
+      'newer user message superseded title generation',
+    ]) {
+      assert.equal(isSupersededTitleError(new Error(reason)), true, reason)
+      assert.equal(
+        isSupersededTitleError(new Error('The operation was aborted', { cause: new Error(reason) })),
+        true,
+        `wrapped: ${reason}`,
+      )
+    }
+    assert.equal(isSupersededTitleError(new Error('the title provider timed out after 60000 ms')), false)
+    assert.equal(isSupersededTitleError(new Error('session "x" is not live in this store')), false)
+    assert.equal(isSupersededTitleError(null), false)
   })
 })
 

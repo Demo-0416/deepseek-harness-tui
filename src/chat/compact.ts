@@ -156,10 +156,11 @@ export async function runCompactCommand(
   if (engine === undefined) return { kind: 'error', text: t('compact.unavailable') }
   // The backend refuses a non-idle agent too, by throwing `busy` out of
   // `runMaintenance`. Answering it here names what the session is doing
-  // instead, and costs the agent nothing.
-  if (deps.agent.status !== 'idle') {
-    return { kind: 'error', text: t('compact.busy', { status: deps.agent.status }) }
-  }
+  // instead, and costs the agent nothing. The status is NOT interpolated: it is
+  // the closed `idle | running` enum, this branch only sees the running one,
+  // and splicing that English token into a translated sentence is exactly what
+  // the message table exists to prevent.
+  if (deps.agent.status !== 'idle') return { kind: 'error', text: t('compact.busy') }
   try {
     const result = await engine.compactNow(deps.agent, signal, commandId)
     if (result === null) return { kind: 'success', text: t('compact.nothing') }

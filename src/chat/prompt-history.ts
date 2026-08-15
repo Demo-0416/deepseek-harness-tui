@@ -233,13 +233,16 @@ export async function compactPromptHistory(
   const keep = options.keep ?? COMPACT_KEEP_ENTRIES
   const bodyTtlMs = options.bodyTtlMs ?? BODY_TTL_MS
   return await withFileLock(path, async () => {
-    const before = (await stat(path)).size
     const raw = await readFile(path, 'utf8')
     const lines = raw.split('\n').filter(line => line.trim() !== '' && parseRecord(line) !== undefined)
     if (lines.length <= keep) return undefined
     const kept = lines.slice(-keep)
     // Nothing stops another process appending between the read and the write,
-    // since ordinary appends take no lock: carry that tail across by hand.
+    // since ordinary appends take no lock: carry that tail across by hand. The
+    // window opens at the end of what the read actually returned rather than at
+    // a size sampled before it — a line that landed while the read was being
+    // issued is already in `raw`, and carrying it again would write it twice.
+    const before = Buffer.byteLength(raw)
     const after = (await stat(path)).size
     const tail = after > before ? await readBytes(path, before, after) : ''
     await writeFileAtomic(path, `${kept.join('\n')}\n${tail}`, { mode: 0o600, dirMode: 0o700 })

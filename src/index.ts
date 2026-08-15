@@ -257,8 +257,10 @@ import {
 import { createQuestionQueue } from './chat/questions.ts'
 import { startPrintRun, type PrintIo } from './print.ts'
 import {
+  clipSessionMarkdown,
   exportSessionLog,
   isClipboardExportTarget,
+  MARKDOWN_MAX_CHARS,
   renderSessionMarkdown,
   type SessionArtifactReader,
   type SessionFlusher,
@@ -1049,6 +1051,16 @@ export function createTuiChat(
    * another process ran. Only what this terminal started is ours to cancel.
    */
   let activeCompaction: AbortController | undefined
+  /**
+   * Whether the user has already asked {@link activeCompaction} to stop.
+   *
+   * Read by the status row rather than announced beside it: a live compaction
+   * owns that row while it runs, so a flash saying "cancelling" was painted
+   * only in the window where no `compaction/start` had landed yet — that is,
+   * never, once a real backend is behind the seam. The stopwatch says it
+   * itself, and keeps counting until the backend actually lets go.
+   */
+  let compactCancelling = false
   const referenceControllers = new Set<AbortController>()
   let tuiServiceFiber: Fiber | undefined
   // The route the next step runs under, resolved on EVERY read rather than
@@ -1284,9 +1296,12 @@ export function createTuiChat(
     queuedValue.set(queued === undefined ? undefined : palette.dim(queued))
     symbolValue.set(palette.bold(palette.accent('dsh')))
     // A live compaction owns the row while it runs; a flash only fills it in
-    // between, so a transient confirmation can never hide ongoing work.
+    // between, so a transient confirmation can never hide ongoing work. Which
+    // is why the one confirmation that belongs to the compaction — Esc asking
+    // it to stop — is a phase OF the stopwatch rather than a flash under it.
     statusLine.setText(compacting !== undefined
-      ? palette.dim(t('prompt.compacting', { duration: formatStatusDuration(renderTime - compacting.startedAt) }))
+      ? palette.dim(t(compactCancelling ? 'prompt.compactingCancelling' : 'prompt.compacting',
+        { duration: formatStatusDuration(renderTime - compacting.startedAt) }))
       : flashingStatus === undefined ? '' : palette.dim(displayText(flashingStatus.text)))
     // `${indicator}` owns the caret column and its trailing gap before the
     // cursor. The active status glyph replaces the `>` caret in place — same
@@ -1452,7 +1467,7 @@ export function createTuiChat(
    */
   const announceContextPressure = (pressure: ContextPressure): void => {
     if (compacting !== undefined) return
-    const announce = nextContextAnnouncement(contextAnnouncement, pressure.level)
+    const announce = nextContextAnnouncement(contextAnnouncement, pressure)
     if (announce === undefined) return
     const remaining = pressure.percentRemaining
     const used = formatDiagnosticNumber(Math.round(pressure.used))
@@ -1463,7 +1478,14 @@ export function createTuiChat(
     // a re-entrant frame cannot queue the same row twice.
     queueMicrotask(() => {
       if (disposed) return
-      const action = t(canCompact() ? 'notice.contextCompactAction' : 'notice.contextNoCompactAction')
+      // Read at write time, like `canCompact()`: the pressure that trips this
+      // warning is built by an answer and its tool results, so the session is
+      // usually mid-turn — and `/compact` refuses a non-idle agent. Telling a
+      // user to run a command that will answer "this one is still running a
+      // turn" is worse than telling them when to run it.
+      const action = t(canCompact()
+        ? agent.status === 'idle' ? 'notice.contextCompactAction' : 'notice.contextCompactActionAfterTurn'
+        : 'notice.contextNoCompactAction')
       appendNotice(
         t(announce === 'critical' ? 'notice.contextCritical' : 'notice.contextLow',
           { remaining, used, capacity, action }),
@@ -1772,6 +1794,7 @@ export function createTuiChat(
       clearInterval(compacting.timer)
       compacting = undefined
     }
+    compactCancelling = false
     clearFlash()
     // The armed exit outlives the row that announced it, so teardown drops the
     // timer too rather than holding the event loop open for its window.
@@ -3291,13 +3314,15 @@ export function createTuiChat(
    * `/search`'s own, so "what was exported" and "what is findable" are always
    * the same session.
    * @param signal - cancellation owned by the dispatching UI.
-   * @returns a success result naming how many entries went out and which
-   *   clipboard path carried them.
+   * @returns a success result naming how many entries went out, whether the
+   *   document had to be cut to fit one OSC 52 write, and which clipboard path
+   *   carried them.
    */
   const exportSessionMarkdown = async (signal: AbortSignal): Promise<CommandResult> => {
     const snapshot = store.getSnapshot()
     const entries = transcriptEntries(snapshot.nodes)
     if (entries.length === 0) return { kind: 'error', text: t('export.clipboard.empty') }
+    const path = clipboardPath()
     const markdown = renderSessionMarkdown(entries, {
       sessionId: agent.session.id,
       ...snapshot.title === undefined ? {} : { title: snapshot.title },
@@ -3305,19 +3330,32 @@ export function createTuiChat(
       ...snapshot.model === undefined ? {} : { model: snapshot.model },
       exportedAt: now(),
     })
-    const path = clipboardPath()
+    // The budget belongs to the escape sequence, not to the export: only OSC 52
+    // puts the whole document into a single terminal write, where a session long
+    // enough to overrun the terminal's ceiling is dropped in silence. The native
+    // utilities and `tmux load-buffer` are fed through a pipe with no per-write
+    // limit, so clipping there would throw away text the clipboard would have
+    // taken whole.
+    const document = path === 'osc52'
+      ? clipSessionMarkdown(markdown)
+      : { text: markdown, truncated: false }
     try {
       // Checked once, before the write: the clipboard port's subprocess has a
       // deadline of its own and no cancellation entry, so a signal threaded
       // into it would only be decoration.
       signal.throwIfAborted()
-      const sequence = await copyToClipboard(markdown)
+      const sequence = await copyToClipboard(document.text)
       if (!disposed) runtime.terminal.write(sequence)
       return {
         kind: 'success',
-        text: plural(entries.length, 'export.clipboard.done', {
-          detail: clipboardConfirmation(path, markdown.length),
-        }),
+        text: plural(
+          entries.length,
+          document.truncated ? 'export.clipboard.truncated' : 'export.clipboard.done',
+          {
+            detail: clipboardConfirmation(path, document.text.length),
+            limit: MARKDOWN_MAX_CHARS,
+          },
+        ),
       }
     } catch (error: unknown) {
       return { kind: 'error', text: t('notice.copyFailed', { error: errorChain(error) }) }
@@ -3467,6 +3505,10 @@ export function createTuiChat(
         // refuses a second with `busy` anyway, but a local refusal writes no
         // log line and claims no maintenance slot.
         if (activeCompaction !== undefined) return { kind: 'error', text: t('compact.inFlight') }
+        // A fresh request is not the cancelled one: the flag outlives the
+        // command on purpose (the backend closes its transaction after the
+        // command has already answered), so the next one clears it.
+        compactCancelling = false
         const controller = new AbortController()
         // The dispatching UI's signal still owns teardown; this one adds Esc,
         // so both reasons to stop reach the same backend request.
@@ -3487,6 +3529,14 @@ export function createTuiChat(
         } finally {
           invocation.signal.removeEventListener('abort', relay)
           activeCompaction = undefined
+          // The flag outlives the command only while a bracket is still open —
+          // that one is the cancelled compaction, and the row keeps saying so
+          // until `compaction/end` closes it. With no bracket open the backend
+          // never started one (Esc landed before `compaction/start`, or the
+          // events were logged against a turn), and a flag left standing here
+          // would label the NEXT compaction this terminal merely observes —
+          // the automatic policy's, or another process's — as cancelling.
+          if (compacting === undefined) compactCancelling = false
         }
       },
     })
@@ -3943,6 +3993,15 @@ export function createTuiChat(
   }
   editor.onSubmit = submitLine
   /**
+   * Whether the draft is being written by this terminal rather than typed.
+   *
+   * `setText` calls `onChange` synchronously, so a draft handed back by
+   * `$EDITOR` runs the same rule a keystroke does. `?` is a keystroke rule: a
+   * file whose whole content is `?` was saved on purpose, and answering it with
+   * the shortcut list would throw that save away silently.
+   */
+  let writingDraft = false
+  /**
    * `?` on an empty prompt opens the shortcut list, and is not typed.
    *
    * Claude Code's rule exactly (`PromptInput.tsx`): the help opens only when the
@@ -3950,7 +4009,7 @@ export function createTuiChat(
    * draft — a `?` typed inside a sentence is a question mark, not a keystroke.
    */
   editor.onChange = (text: string): void => {
-    if (text === '?') {
+    if (text === '?' && !writingDraft) {
       editor.setText('')
       showHotkeys()
       requestRender()
@@ -4228,8 +4287,15 @@ export function createTuiChat(
       // push an undo snapshot that undoes nothing.
       if (result.text === draft) return
       // `setText` pushes the undo snapshot itself, so Ctrl+- still reaches the
-      // draft as it was before the edit; it does not ask for a redraw.
-      editor.setText(result.text)
+      // draft as it was before the edit; it does not ask for a redraw. The flag
+      // marks the change as written rather than typed, so a file saved as a
+      // single `?` comes back as a draft instead of opening the shortcut list.
+      writingDraft = true
+      try {
+        editor.setText(result.text)
+      } finally {
+        writingDraft = false
+      }
       requestRender()
     } catch (error: unknown) {
       /* v8 ignore next 5 -- only a spawn that fails after the terminal was released reaches here. */
@@ -4270,8 +4336,13 @@ export function createTuiChat(
     // untouched. One press, not two — nothing is lost by stopping it.
     if (activeCompaction !== undefined) {
       disarmEscape()
+      compactCancelling = true
       activeCompaction.abort(new Error('compaction cancelled by the user'))
-      flashStatus(t('status.flash.compactCancelling'))
+      // The stopwatch row renders the cancelling phase whenever the backend has
+      // opened a `compaction/start`; the flash covers the window before it, so
+      // the answer to Esc is on screen either way and never twice.
+      if (compacting === undefined) flashStatus(t('status.flash.compactCancelling'))
+      requestRender()
       return
     }
     const draft = editor.getText()
@@ -4484,6 +4555,8 @@ export function createTuiChat(
       const fadeOutGlyph = runningPhaseGlyph(agent.session.events, false, true)
       clearInterval(compacting.timer)
       compacting = undefined
+      // The bracket the cancel was aimed at is closed; nothing is stopping.
+      compactCancelling = false
       // A concurrently running turn owns the indicator. Keep its timer and
       // progress bit instead of letting the compaction fade clear that state.
       if (runningStatus === undefined && fadeOutGlyph !== undefined) beginFadeOut(fadeOutGlyph)

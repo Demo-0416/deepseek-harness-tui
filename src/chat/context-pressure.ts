@@ -39,6 +39,20 @@ export const CONTEXT_CRITICAL_REMAINING_PERCENT = 10
  */
 export const AUTO_COMPACT_REMAINING_PERCENT = 20
 
+/**
+ * How far back above a threshold the reading must come before that band is
+ * armed again — the hysteresis on {@link nextContextAnnouncement}.
+ *
+ * A measurement is not monotonic: `@deepseek-ai/dsh-token-meter` reports a
+ * provider-usage anchor plus a heuristic delta, so every landed anchor can
+ * revise the number DOWN by more than a percentage point (10%+ on code and CJK
+ * is ordinary), and a lost anchor re-estimates the whole thing. Without a band
+ * of slack, one such revision across 25% re-arms the warning and the next tool
+ * result writes the identical row again. The rows are appended transcript
+ * history, not a recomputed live indicator, so repeats stay on screen.
+ */
+export const CONTEXT_REARM_MARGIN_PERCENT = 3
+
 /** One measured reading of window pressure. */
 export interface ContextPressure {
   /** Measured request pressure in tokens. */
@@ -61,6 +75,23 @@ export interface ContextPressure {
 export function pressureLevel(percentRemaining: number): ContextPressureLevel {
   if (percentRemaining <= CONTEXT_CRITICAL_REMAINING_PERCENT) return 'critical'
   if (percentRemaining <= CONTEXT_LOW_REMAINING_PERCENT) return 'low'
+  return 'normal'
+}
+
+/**
+ * Band a reading has to fall back to before the band above it counts as left.
+ *
+ * The same edges as {@link pressureLevel}, each widened by
+ * {@link CONTEXT_REARM_MARGIN_PERCENT}: sitting one point over a threshold is
+ * still inside that band as far as re-arming is concerned, so measurement noise
+ * across the edge cannot produce a second copy of a row the session already
+ * has.
+ * @param percentRemaining - integer percent of the window still free.
+ * @returns the band this reading re-arms down to.
+ */
+export function rearmLevel(percentRemaining: number): ContextPressureLevel {
+  if (percentRemaining <= CONTEXT_CRITICAL_REMAINING_PERCENT + CONTEXT_REARM_MARGIN_PERCENT) return 'critical'
+  if (percentRemaining <= CONTEXT_LOW_REMAINING_PERCENT + CONTEXT_REARM_MARGIN_PERCENT) return 'low'
   return 'normal'
 }
 
@@ -109,24 +140,33 @@ export function createContextAnnouncementTracker(): ContextAnnouncementTracker {
  * Decide whether a band deserves a transcript row, and record the decision.
  *
  * One row per band per escalation: re-entering a band the session already
- * announced stays silent, and dropping to a lower band (which is what a
- * successful compaction looks like) re-arms the higher ones. That is the whole
- * debounce — the caller runs this every frame and it writes at most twice per
- * session per compaction cycle.
+ * announced stays silent, and dropping CLEAR of a band (which is what a
+ * successful compaction looks like) re-arms it. That is the whole debounce —
+ * the caller runs this every frame and it writes at most twice per session per
+ * compaction cycle.
+ *
+ * "Clear of" rather than "below", because the reading is noisy: a drop only
+ * re-arms once it reaches {@link rearmLevel}, so a token count that revises
+ * itself back and forth across a threshold cannot append the same warning
+ * twice.
  * @param tracker - mutable per-session state; updated in place.
- * @param level - the band measured now.
+ * @param pressure - the reading measured now; both its band and its distance
+ *   from the edge matter, so this takes the reading rather than the band.
  * @returns the band to announce, or `undefined` when nothing new happened.
  */
 export function nextContextAnnouncement(
   tracker: ContextAnnouncementTracker,
-  level: ContextPressureLevel,
+  pressure: Pick<ContextPressure, 'level' | 'percentRemaining'>,
 ): Exclude<ContextPressureLevel, 'normal'> | undefined {
+  const { level } = pressure
   const rank = pressureRank(level)
   const announced = pressureRank(tracker.announced)
-  // A drop is the compaction (or the wider window) doing its job: record it so
-  // the band it left is armed again, and say nothing about it.
+  // Not news: either the band is one this session already announced, or the
+  // reading fell without clearing the band's hysteresis. Re-arm only what the
+  // reading is genuinely clear of.
   if (rank <= announced) {
-    tracker.announced = level
+    const rearmed = rearmLevel(pressure.percentRemaining)
+    if (pressureRank(rearmed) < announced) tracker.announced = rearmed
     return undefined
   }
   tracker.announced = level

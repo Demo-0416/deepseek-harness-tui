@@ -87,16 +87,29 @@ export function truncatePrompt(text: string, limit: number): TruncatedPrompt {
 
   const keep = limit - marker.length
   // A budget too small to seat the marker keeps the head alone: a marker that
-  // is most of the payload says nothing the notice has not already said.
-  if (keep < 2) return { text: text.slice(0, limit), original, removed: original - limit }
+  // is most of the payload says nothing the notice has not already said. The
+  // pair rule still holds here — a lone surrogate is what breaks the JSON body,
+  // whatever made the cut.
+  if (keep < 2) {
+    const end = splitsSurrogatePair(text, limit) ? limit - 1 : limit
+    return { text: text.slice(0, end), original, removed: original - end }
+  }
 
   let head = Math.ceil(keep / 2)
   let tail = keep - head
   if (splitsSurrogatePair(text, head)) head -= 1
   if (splitsSurrogatePair(text, original - tail)) tail -= 1
+  const dropped = original - head - tail
+  // Stepping off a surrogate pair drops one more character per edge than the
+  // convergence above priced in, so the marker is re-rendered rather than left
+  // stating a count the result no longer has: the notice on screen and the
+  // marker in the text are the same number or they are a bug report. The text
+  // stays inside the budget — a count one or two higher is at most one digit
+  // longer, and each edge gave back a character to pay for it.
+  if (dropped !== removed) marker = truncationMarker(dropped)
   return {
     text: `${text.slice(0, head)}${marker}${text.slice(original - tail)}`,
     original,
-    removed: original - head - tail,
+    removed: dropped,
   }
 }
