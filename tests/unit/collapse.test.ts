@@ -366,6 +366,27 @@ describe('collapse grouping', () => {
     ]).length, 2)
   })
 
+  it('breaks on a workflow run', () => {
+    // The run renders a block of its own, so a group that stepped over it would
+    // print its summary row below that block instead of where the reads were.
+    assert.equal(groupsOf([
+      call('read', { file_path: '/workspace/a.ts' }),
+      call('read', { file_path: '/workspace/b.ts' }),
+      {
+        kind: 'workflow-run',
+        key: 'workflow:wf-1',
+        version: 0,
+        time: START,
+        runId: 'wf-1',
+        name: 'release-check',
+        members: [],
+        startedAt: START,
+      },
+      call('read', { file_path: '/workspace/c.ts' }),
+      call('read', { file_path: '/workspace/d.ts' }),
+    ]).length, 2)
+  })
+
   it('carries thinking, notices, context and the plan over the group', () => {
     const nodes: ChatNode[] = [
       call('read', { file_path: '/workspace/a.ts' }),

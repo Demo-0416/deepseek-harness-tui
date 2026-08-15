@@ -711,6 +711,11 @@ function breaksGroup(node: ChatNode): boolean {
       return node.landed
     case 'reference':
       return true
+    case 'workflow-run':
+      // A workflow run is structure, not tool noise: it renders a block of its
+      // own, so a read/search group that stepped over it would print its summary
+      // row underneath the block instead of where the looking-around happened.
+      return true
     default:
       return false
   }

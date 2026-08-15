@@ -33,6 +33,16 @@ import {
   type CollapsedGroup,
   type CollapseHint,
 } from '../core/collapse.ts'
+import {
+  groupWorkflowPhases,
+  workflowMemberStatus,
+  workflowNeedsAttention,
+  workflowRunStatus,
+  workflowStatusCounts,
+  type WorkflowPhaseGroup,
+  type WorkflowRunStatus,
+} from '../core/workflow.ts'
+import type { WorkflowMemberEntry, WorkflowRunNode } from '../core/types.ts'
 import { plural, t } from '../i18n/index.ts'
 import { renderUnknownXml } from './xml-tool-output.ts'
 import { displayInlineText, displayText } from './text.ts'
@@ -1944,6 +1954,208 @@ export class CollapsedGroupComponent extends CachedCardComponent {
     if (hint === undefined) return undefined
     if (hint.kind === 'thinking') return this.group.thinkingSince === undefined ? undefined : hint
     return this.group.running ? hint : undefined
+  }
+}
+
+/** The glyph each workflow status wears, and the color it is painted in. */
+const WORKFLOW_GLYPHS: Readonly<Record<WorkflowRunStatus, { glyph: string; color: Rgb }>> = {
+  running: { glyph: TOOL_BULLET, color: BRAND_COLORS.brand },
+  completed: { glyph: '✔', color: BRAND_COLORS.success },
+  failed: { glyph: '✗', color: BRAND_COLORS.error },
+  // Cancelled and interrupted share the warning tone for the same reason the web
+  // client gives them one dot: both are "stopped on request or by circumstance",
+  // neither is the run failing at what it was doing.
+  cancelled: { glyph: '◼', color: BRAND_COLORS.warning },
+  interrupted: { glyph: '◼', color: BRAND_COLORS.warning },
+}
+
+/** The statuses a phase header counts out, in the order it names them. */
+const WORKFLOW_ATTENTION_STATUSES = ['running', 'failed', 'cancelled', 'interrupted'] as const
+
+/**
+ * One workflow run, rendered as the run / phase / member block the four
+ * `tool-workflow/*` records fold into.
+ *
+ * Which of the three levels is on screen is decided by the run's state, not by
+ * a per-run toggle this transcript has no key for: a phase holding anything
+ * that is not completed keeps its member rows, and a run whose every member
+ * completed recedes to one summary row with the usual Ctrl+O hint. That is the
+ * web client's rule (`WorkflowRunPanel`), and it is the one that matches what a
+ * reader wants — the members still in flight, the ones that failed, and nothing
+ * else.
+ *
+ * The Ctrl+O phase then overrides it in both directions: the expanded phase
+ * prints every phase and member whatever their status, and the hidden phase
+ * keeps only the run's own row. A run is conversation structure rather than
+ * tool noise, so even hidden it does not vanish the way a tool card does.
+ */
+export class WorkflowRunComponent extends CachedCardComponent {
+  /**
+   * @param node - The folded run.
+   * @param visibility - The Ctrl+O phase this block renders under.
+   * @param palette - Active role palette.
+   * @param expandKey - The label of whichever key cycles tool cards, read per
+   *   render for the same reason {@link CollapsedGroupComponent} reads it.
+   * @param now - Render clock, read per render so a running run and its running
+   *   members count up between events. Injected, never `Date.now`.
+   */
+  constructor(
+    private node: WorkflowRunNode,
+    private visibility: ToolCardVisibility,
+    private readonly palette: Palette,
+    private readonly expandKey: () => string,
+    private readonly now: () => number,
+  ) {
+    super()
+  }
+
+  /**
+   * Apply the run's current facts; every member event re-seals the block.
+   * @param node - The freshly folded run.
+   */
+  setNode(node: WorkflowRunNode): void {
+    this.node = node
+    this.dropLines()
+  }
+
+  /**
+   * Apply a Ctrl+O phase change.
+   * @param visibility - The new phase.
+   */
+  setVisibility(visibility: ToolCardVisibility): void {
+    this.visibility = visibility
+    this.dropLines()
+  }
+
+  protected renderLines(width: number): string[] {
+    const node = this.node
+    const status = workflowRunStatus(node)
+    const phases = groupWorkflowPhases(node)
+    const expandAll = this.visibility === 'expanded'
+    // A run that finished clean has nothing left to report but that it did, so
+    // the collapsed phase takes it down to its own row; anything else — still
+    // running, failed, cancelled, interrupted — holds the levels open.
+    const dirty = status !== 'completed' || phases.some((group) => workflowNeedsAttention(node, group.members))
+    const showPhases = expandAll || (this.visibility === 'collapsed' && dirty)
+    const openPhase = (group: WorkflowPhaseGroup): boolean =>
+      expandAll || workflowNeedsAttention(node, group.members)
+    // The hint is offered only where the key opens something: on the collapsed
+    // phase, with rows this render is holding back. The hidden phase keeps no
+    // hint of its own, the way a hidden tool card keeps none.
+    const hidden = phases.length > 0
+      && (!showPhases || phases.some((group) => !openPhase(group) && group.members.length > 0))
+    const rows = ['', ...this.headRows(node, status, this.visibility === 'collapsed' && hidden, width)]
+    if (showPhases) {
+      for (const group of phases) {
+        rows.push(this.phaseRow(node, group, width))
+        if (!openPhase(group)) continue
+        for (const member of group.members) rows.push(this.memberRow(node, member, width))
+      }
+    }
+    return plainIfNoColor(this.palette, rows)
+  }
+
+  /**
+   * The run's own row, plus the expand hint when this render is holding rows
+   * back.
+   * @param node - The folded run.
+   * @param status - The run's derived status.
+   * @param hint - Whether to offer the expand hint.
+   * @param width - Render width.
+   * @returns The head rows.
+   */
+  private headRows(
+    node: WorkflowRunNode,
+    status: WorkflowRunStatus,
+    hint: boolean,
+    width: number,
+  ): string[] {
+    const { glyph, color } = WORKFLOW_GLYPHS[status]
+    const bullet = status === 'running'
+      ? this.palette.bold(accent(this.palette, color, glyph))
+      : accent(this.palette, color, glyph)
+    const summary = [
+      t('workflow.run', { name: displayInlineText(node.name) }),
+      plural(node.members.length, 'workflow.members'),
+      this.statusText(status, node.startedAt, node.endedAt),
+    ].join(t('workflow.separator'))
+    const text = status === 'running' ? this.palette.text(summary) : this.palette.dim(summary)
+    const head = hint
+      ? `${text} ${this.palette.dim(t('collapse.expandHint', { key: this.expandKey().toLowerCase() }))}`
+      : text
+    const rows: string[] = []
+    let first = true
+    for (const row of wrapTextWithAnsi(head, Math.max(20, width - GUTTER_WIDTH - 2))) {
+      rows.push(first ? `${GUTTER}${bullet} ${row}` : `${GUTTER_INDENT}${row}`)
+      first = false
+    }
+    return rows
+  }
+
+  /**
+   * One phase header: its name, how many members it holds, and which of them
+   * still want attention.
+   * @param node - The run the phase belongs to.
+   * @param group - The phase group.
+   * @param width - Render width.
+   * @returns The header row.
+   */
+  private phaseRow(node: WorkflowRunNode, group: WorkflowPhaseGroup, width: number): string {
+    // An absent phase and an empty phase name are two different things in the
+    // log, so they read as two different labels rather than one blank one.
+    const name = group.phase === undefined
+      ? t('workflow.phase.none')
+      : group.phase === '' ? t('workflow.phase.unnamed') : displayInlineText(group.phase)
+    const counts = workflowStatusCounts(node, group.members)
+    const attention = WORKFLOW_ATTENTION_STATUSES
+      .filter((status) => counts[status] > 0)
+      .map((status) => t(`workflow.count.${status}`, { count: counts[status] }))
+    // Nothing to flag reads as the completed count alone; anything flagged
+    // alongside completed members names them too, so "some of it got done
+    // before the rest stopped" is visible rather than implied.
+    const parts = attention.length === 0
+      ? [t('workflow.count.completed', { count: counts.completed })]
+      : counts.completed > 0
+        ? [t('workflow.count.completed', { count: counts.completed }), ...attention]
+        : attention
+    const summary = [name, plural(group.members.length, 'workflow.members'), ...parts]
+      .join(t('workflow.separator'))
+    return truncateToWidth(this.palette.dim(`${GUTTER_INDENT}${summary}`), width, '…')
+  }
+
+  /**
+   * One member row: its status glyph, its label, and how long it has been (or
+   * was) running.
+   * @param node - The run the member belongs to.
+   * @param member - The member entry.
+   * @param width - Render width.
+   * @returns The member row.
+   */
+  private memberRow(node: WorkflowRunNode, member: WorkflowMemberEntry, width: number): string {
+    const status = workflowMemberStatus(node, member)
+    const { glyph, color } = WORKFLOW_GLYPHS[status]
+    const bullet = accent(this.palette, color, glyph)
+    const label = member.label === '' ? t('workflow.member.unnamed') : displayInlineText(member.label)
+    const text = [label, this.statusText(status, member.startedAt, member.endedAt ?? node.endedAt)]
+      .join(t('workflow.separator'))
+    const styled = status === 'running' ? this.palette.text(text) : this.palette.dim(text)
+    return truncateToWidth(`${GUTTER_INDENT}  ${bullet} ${styled}`, width, '…')
+  }
+
+  /**
+   * A status word and the wall time behind it.
+   *
+   * The node publishes start and end times, never a length: a running row's
+   * clock has to move between events, and a settled one has to freeze at the
+   * time the log recorded rather than at whatever the renderer read last.
+   * @param status - The derived status of the run or member.
+   * @param startedAt - Log time the run or member started.
+   * @param endedAt - Log time it stopped, when it did.
+   * @returns The status fragment.
+   */
+  private statusText(status: WorkflowRunStatus, startedAt: number, endedAt: number | undefined): string {
+    const elapsed = (endedAt ?? this.now()) - startedAt
+    return `${t(`workflow.status.${status}`)} ${formatTurnDuration(elapsed)}`
   }
 }
 

@@ -155,7 +155,14 @@ const colorSchema = z.boolean().default(true)
 // No default: an unset value auto-detects truecolor from COLORTERM in `apply`.
 const truecolorSchema = z.boolean()
 const DEFAULT_LEFT_PROMPT = '${cwd}${git/worktree}${model}${token_meter/cache_hit_rate}${context}'
-const DEFAULT_RIGHT_PROMPT = '${queued}'
+/**
+ * Both right-hand values are counts that are absent far more often than they
+ * are present — steering queued behind a running turn, and background jobs
+ * still going — so the row is empty in the ordinary case. They carry their own
+ * leading separator rather than a literal between them: either one may be
+ * missing, and a template space would survive the value it was spacing.
+ */
+const DEFAULT_RIGHT_PROMPT = '${queued}${jobs}'
 /**
  * Claude's inline caret, on the editor's first content row rather than a row of
  * its own: one column of `❯` plus its gap, two columns total, so the text starts

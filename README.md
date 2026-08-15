@@ -119,7 +119,7 @@ all three.
 
 | Surface | Keys |
 |---|---|
-| Panel (`/help`, `/hotkeys`, `/palette`, `/status`, `/mcp`, `/doctor`) | Up/Down scroll · PgUp/PgDn page · g/G or Home/End top or bottom · Esc or Ctrl+C close |
+| Panel (`/help`, `/hotkeys`, `/palette`, `/status`, `/mcp`, `/doctor`, `/subagents`, `/jobs`) | Up/Down scroll · PgUp/PgDn page · g/G or Home/End top or bottom · Esc or Ctrl+C close |
 | Question | Up/Down move · 1-9 answer straight away · Space toggle (multi-select) · "Type something." row for a custom answer · PgUp/PgDn page long detail · Enter submit · Esc or Ctrl+C cancel |
 | Permission prompt | Up/Down move · a digit answers the row it numbers · Enter confirm · Esc or Ctrl+C deny. A fifth row appears only when the grant can be remembered (for a shell it opens the command rule to edit) |
 | History search (Ctrl+R) | type to match · Ctrl+R steps to an older match · Tab or Esc accepts into the editor · Enter sends it · Ctrl+C or an emptied query restores the draft |
@@ -162,6 +162,8 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/rewind` | go back to an earlier prompt in this session |
 | `/resume [session]` | list this workspace's resumable sessions; an argument fills the picker's search box |
 | `/skills` | search this session's skills and read one in full |
+| `/subagents` | the subagent tree below this session: label, one-shot or continuable, running or inactive, and the child session id `/resume` takes. Refreshes itself while it is open; says so when the profile mounts no subagent registry |
+| `/jobs` | background jobs: kind, label, state, the producer's own detail, and how long each has been running. Follows the registry while it is open; says so when the profile mounts no job registry |
 | `/status` | session diagnostics, system prompt, registered tools |
 | `/mcp` | the MCP servers this agent's tools come from, with each server's tool list; says how to mount one when the profile has none |
 | `/doctor` | check the Node version, the terminal, the model route, and the services this terminal degrades without |
@@ -190,8 +192,8 @@ service keeps every switch working for the session and simply forgets it at
 exit.
 
 `/lang` switches this terminal's own chrome — the command list, the panels
-(`/help`, `/status`, `/config`, `/search`, `/skills`, `/mcp`, `/doctor`,
-`/plugins`), the prompt and status rows, the dialogs and their buttons, and the
+(`/help`, `/status`, `/config`, `/search`, `/skills`, `/subagents`, `/jobs`,
+`/mcp`, `/doctor`, `/plugins`), the prompt and status rows, the dialogs and their buttons, and the
 notices those surfaces write — between English (the default) and Chinese; the
 conversation itself is never translated. A few command answers are still
 English-only whatever the language is: `/model`, `/preset` and `/resume` print
@@ -346,6 +348,16 @@ its four values, and `/resume` this workspace's recent sessions.
   the newest line of the thinking; `showReasoning: false` keeps that line off
   the row like everywhere else, and the duration — which quotes nothing —
   stays.
+- **Workflow runs** — one `workflow` tool call folds into a run / phase / member
+  block: the run's name and member count, one header per phase, and one row per
+  member with its status and elapsed time. Which levels are on screen follows
+  the run's state rather than a toggle — a phase holding anything that is not
+  completed keeps its member rows, and a run whose members all completed recedes
+  to a single row Ctrl+O opens again. A member with no phase and a member with
+  an empty phase name are two different groups, because they are two different
+  things in the log. A run whose turn ended without a result reads as
+  `interrupted`, together with the members that never settled: nothing is coming
+  for them, and a row still claiming to be running would say the opposite.
 - **Rewind** — `/rewind`, or a double Esc at an empty prompt: go back to an
   earlier prompt. With a host that can fork the session the conversation moves
   with it and the original stays resumable; otherwise the prompt comes back to
@@ -390,7 +402,28 @@ its four values, and `/resume` this workspace's recent sessions.
   `/provider add` walks a route the adapter has never heard of through name,
   endpoint, protocol, credential variable, key, and the models the endpoint
   reports.
+- **Subagents** — `/subagents`: the delegation tree below this session, one row
+  per child — its label, whether it is a one-shot delegation or a continuable
+  conversation, whether its record is live or only in persistence, and the child
+  session id `/resume` takes. The rows come from the subagent directory rather
+  than from the transcript, so children this session delegated in an earlier
+  process are in the tree too; the `subagent/start` and `subagent/end` events
+  only tell the open panel to read the directory again. A child that was just
+  spawned can be one refresh late: the directory lists a child from the moment
+  it has written its own descriptor. `/status` states the same tree in one row.
 - **Status** — `/status`: session diagnostics, system prompt, registered tools.
+- **Background jobs** — `/jobs`: what this session left running in the
+  background. A `bash` call with `run_in_background`, or a delegation that was
+  sent off rather than waited for, returns to the model at once and keeps
+  going; the only place its current state exists is the job registry, so that
+  is where these rows come from. Each one names the producer kind, the label
+  the producer gave it (the command, the delegation description), its
+  lifecycle state with whatever detail came with it (`failed · exit code: 1`),
+  and its elapsed time — running first and oldest first, then finished work,
+  most recently finished first. A live row's clock ticks while the panel is
+  open and stops when nothing is running. The prompt row carries the count
+  alone (`2 jobs running`) so background work is visible without a second
+  stopwatch on screen, and `/status` states the same two numbers in one row.
 - **MCP** — `/mcp`: which MCP server each of this session's tools came from,
   read back out of the `mcp__<server>__<tool>` names the tools are registered
   under, because the harness keeps no registry to ask. It is read-only by
@@ -439,15 +472,15 @@ Values on the bundle row (`tui-runner`), all optional.
 | `theme.color` | `true` | apply the built-in ANSI palette |
 | `theme.truecolor` | detected | 24-bit brand gradient on the banner; unset reads `COLORTERM` |
 | `theme.leftPrompt` | `${cwd}${git/worktree}${model}${token_meter/cache_hit_rate}${context}` | left-aligned template above the editor |
-| `theme.rightPrompt` | `${queued}` | right-aligned template above the editor |
+| `theme.rightPrompt` | `${queued}${jobs}` | right-aligned template above the editor |
 | `theme.inputPrompt` | `❯ ` | the editor's first-line prefix |
 | `theme.inputPlaceholder` | `press enter to steer and esc to cancel` | placeholder in an empty editor while the agent runs |
 | `keybindings` | — | key overrides, keyed by action id |
 
 Prompt templates interpolate `${name}` against the values this bundle registers
 — `cwd`, `git/worktree`, `model`, `context`, `token_meter/cache_hit_rate`,
-`goal`, `queued`, `symbol`, `indicator` — and a separator next to a value that
-is currently unavailable is dropped with it. `context` reports used or
+`goal`, `queued`, `jobs`, `symbol`, `indicator` — and a separator next to a
+value that is currently unavailable is dropped with it. `context` reports used or
 remaining depending on how full the window is; see
 [Context pressure](#context-pressure).
 

@@ -24,6 +24,7 @@ import type {
   ChatNode,
   ToolCallNode,
   UserMessageNode,
+  WorkflowRunNode,
 } from '../core/types.ts'
 import type { StepTimingTracker } from '../chat/timing.ts'
 import { collapseToolGroups, type CollapsedGroup } from '../core/collapse.ts'
@@ -42,9 +43,11 @@ import {
   turnFooterRow,
   TURN_FOOTER_MIN_MS,
   UserMessageComponent,
+  WorkflowRunComponent,
   type MarkdownPolicy,
   type ToolCardVisibility,
 } from './transcript.ts'
+import { workflowRunStatus } from '../core/workflow.ts'
 
 /**
  * Transcript row standing in for one compacted range. The conversation the
@@ -138,6 +141,7 @@ type NodeView =
   | { kind: 'assistant'; version: number; component: StreamingAssistantComponent }
   | { kind: 'tool'; version: number; component: ToolCardComponent; argsRaw: string }
   | { kind: 'group'; signature: string; component: CollapsedGroupComponent }
+  | { kind: 'workflow'; version: number; visibility: ToolCardVisibility; component: WorkflowRunComponent }
   | { kind: 'plain'; version: number; component: Component }
 
 /**
@@ -254,6 +258,11 @@ export class TranscriptReconciler {
    * snapshot is due while the model is thinking between two events.
    */
   private openGroup: CollapsedGroupComponent | undefined
+  /**
+   * The workflow run still live, refreshed on the same tick: its rows count up
+   * while its members work, and no event of its own lands in between.
+   */
+  private openWorkflow: WorkflowRunComponent | undefined
   /** Wall time of every turn in the log, for the per-turn completion row. */
   private readonly turnDurations = new TurnDurationTracker()
   /**
@@ -296,8 +305,10 @@ export class TranscriptReconciler {
     const children: Component[] = []
     let openStep: StreamingAssistantComponent | undefined
     let openGroup: CollapsedGroupComponent | undefined
-    // A step's timing footer waits for the tool cards that step requested, so
-    // it renders at the tail of the step's own output.
+    let openWorkflow: WorkflowRunComponent | undefined
+    // A step's timing footer waits for everything that step produced — its tool
+    // cards and the workflow runs they opened — so it renders at the tail of
+    // the step's own output.
     let footer: { component: Component; calls: readonly string[] } | undefined
     const flushFooter = (): void => {
       if (footer === undefined) return
@@ -366,6 +377,21 @@ export class TranscriptReconciler {
         // A card of the open step renders before that step's footer.
         if (footer?.calls.includes(node.callId) !== true) flushFooter()
         children.push(card)
+        continue
+      }
+      if (node.kind === 'workflow-run') {
+        // A workflow block belongs to the step that called the workflow tool —
+        // the fold pushes it between that step's tool card and the cards the
+        // same step asks for next — so it renders where those cards render:
+        // above the step's timing footer, which stays at the tail of the step's
+        // own output. Flushing here instead would strand the footer in the
+        // middle of the step, with the tool cards that followed the run below
+        // it, on every single workflow call.
+        seen.add(node.key)
+        const run = this.workflowView(node)
+        // A running run counts up between events, exactly like an open step.
+        if (workflowRunStatus(node) === 'running') openWorkflow = run
+        children.push(run)
         continue
       }
       flushFooter()
@@ -476,6 +502,7 @@ export class TranscriptReconciler {
     }
     this.openStep = openStep
     this.openGroup = openGroup
+    this.openWorkflow = openWorkflow
     this.chat.clear()
     for (const child of children) this.chat.addChild(child)
   }
@@ -579,14 +606,16 @@ export class TranscriptReconciler {
   }
 
   /**
-   * Refresh the two rows whose text moves with the clock rather than with the
-   * log — the open step's timing footer and the collapsed row of a group that
-   * is still thinking — for the status animation tick. Only those components
-   * are invalidated, so a long transcript is not re-rendered 20 times a second.
+   * Refresh the rows whose text moves with the clock rather than with the log —
+   * the open step's timing footer, the collapsed row of a group that is still
+   * thinking, and a workflow run still working — for the status animation tick.
+   * Only those components are invalidated, so a long transcript is not
+   * re-rendered 20 times a second.
    */
   invalidateOpenStep(): void {
     this.openStep?.invalidate()
     this.openGroup?.invalidate()
+    this.openWorkflow?.invalidate()
   }
 
   /**
@@ -708,6 +737,39 @@ export class TranscriptReconciler {
       this.deps.now,
     )
     this.views.set(key, { kind: 'group', signature, component })
+    return component
+  }
+
+  /**
+   * Mount or update one workflow run.
+   *
+   * Like {@link groupView} and unlike {@link plainView}, the block is updated in
+   * place rather than remounted: a run gains members and settles them for as
+   * long as it lasts, and the Ctrl+O phase changes what it prints without
+   * changing which run it is. Both are pushed into the same component so its
+   * cached rows survive everything that did not move.
+   */
+  private workflowView(node: WorkflowRunNode): WorkflowRunComponent {
+    const existing = this.views.get(node.key)
+    if (existing !== undefined && existing.kind === 'workflow') {
+      if (existing.version !== node.version) {
+        existing.version = node.version
+        existing.component.setNode(node)
+      }
+      if (existing.visibility !== this.visibility) {
+        existing.visibility = this.visibility
+        existing.component.setVisibility(this.visibility)
+      }
+      return existing.component
+    }
+    const component = new WorkflowRunComponent(
+      node,
+      this.visibility,
+      this.deps.palette,
+      this.deps.expandKey,
+      this.deps.now,
+    )
+    this.views.set(node.key, { kind: 'workflow', version: node.version, visibility: this.visibility, component })
     return component
   }
 

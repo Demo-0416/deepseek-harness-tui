@@ -88,6 +88,12 @@ import {
   type SkillSummary,
   type SkillViewOptions,
 } from '@deepseek-ai/dsh-skill'
+// Type-only: declaration-merges `subagent/start` and `subagent/end` onto
+// `Events`, the two edges `/subagents` re-reads its directory on. The registry
+// itself is a deployment choice this TUI never requires, and its listing is
+// read structurally (see ./chat/subagents.ts), so only the event names are
+// borrowed from the package.
+import type {} from '@deepseek-ai/dsh-subagent'
 // Type import declaration-merges the `userQuestions` service onto `Context`;
 // the ask-user-question queue is registered by ./chat/questions.
 import type {} from '@deepseek-ai/dsh-user-questions'
@@ -191,6 +197,8 @@ import {
   type PluginInventoryReader,
 } from './components/plugins-panel.ts'
 import { SkillsPanel } from './components/skills-panel.ts'
+import { SubagentsPanel } from './components/subagents-panel.ts'
+import { JobsPanel } from './components/jobs-panel.ts'
 import {
   SettingsPanel,
   type SettingsEntry,
@@ -274,6 +282,19 @@ import {
   type SessionFlusher,
 } from './chat/export.ts'
 import { runRenameCommand, type SessionTitleWriter } from './chat/rename.ts'
+import {
+  subagentCounts,
+  subagentDirectory,
+  type SubagentCounts,
+  type SubagentDescendant,
+} from './chat/subagents.ts'
+import {
+  jobCounts,
+  jobsRegistry,
+  sortJobRows,
+  type JobRow,
+  type JobsRegistry,
+} from './chat/jobs.ts'
 import {
   formatGoalPrompt,
   formatSessionStats,
@@ -538,6 +559,24 @@ const PENDING_HINT_MS = 30_000
  * another window is offered by the time the user reaches for it.
  */
 const ARGUMENT_COMPLETION_CACHE_MS = 3_000
+
+/**
+ * How long the open `/subagents` panel waits after a delegation edge before it
+ * re-reads the directory. A fan-out spawns its children in one burst, and each
+ * listing is a persistence pass over the whole tree, so the burst is answered
+ * once — short enough that a single delegation still appears at once.
+ */
+const SUBAGENT_REFRESH_DEBOUNCE_MS = 200
+
+/**
+ * How often the open `/jobs` panel repaints while something is still running.
+ *
+ * The list is the one surface with a clock that has to move while nothing else
+ * on screen does, and a second is the resolution its durations are printed at.
+ * The timer exists only while the panel is open AND a job is live, so a
+ * terminal sitting idle at the prompt schedules nothing.
+ */
+const JOBS_ELAPSED_TICK_MS = 1_000
 
 /**
  * Smallest panel a short terminal still gets: three rows of chrome (the
@@ -1267,6 +1306,28 @@ export function createTuiChat(
    * this channel, and a fresh session starts un-warned.
    */
   const contextAnnouncement = createContextAnnouncementTracker()
+  /**
+   * The job registry the badge and the open `/jobs` panel are subscribed to.
+   *
+   * Re-resolved rather than captured (see `watchJobs` below): both of them are
+   * fed by one subscription, so a registry that arrives after this mount — an
+   * embedder providing `jobs` around `createTuiChat`, or a reload of the
+   * plugin that owns it — would otherwise leave that subscription attached to
+   * an instance nobody reports to, with a badge stuck at zero and an open panel
+   * frozen on the snapshot it opened with.
+   */
+  let jobs = jobsRegistry(ctx)
+  /**
+   * How many background jobs are still live, refolded only when the registry
+   * says the visible set changed.
+   *
+   * `updatePromptValues` runs on every animation frame — 50 ms apart while a
+   * turn is live — and `list()` mints a fresh snapshot object per job per call,
+   * so counting per frame would allocate the whole visible set per frame for a
+   * number that changes when a job starts or ends. The goal fragment beside it
+   * earns its frame budget the same way.
+   */
+  let liveJobs = jobs === undefined ? 0 : jobCounts(jobs.list(agent)).live
   const promptValues: TuiPromptValueHandle[] = [
     ctx.tuiPrompt.register('cwd', palette.bold(palette.accent(formattedCwd))),
     ctx.tuiPrompt.register('git/worktree', branch === undefined ? undefined : palette.dim(` (${displayText(branch)})`)),
@@ -1278,16 +1339,18 @@ export function createTuiChat(
     // `theme.leftPrompt`), while `/status` shows it whether the row does or not.
     ctx.tuiPrompt.register('goal'),
     ctx.tuiPrompt.register('queued'),
+    ctx.tuiPrompt.register('jobs'),
     ctx.tuiPrompt.register('symbol', palette.bold(palette.accent('dsh'))),
     ctx.tuiPrompt.register('indicator', palette.dim('> ')),
   ]
   const [
-    cwdValue, gitValue, tokenValue, modelValue, contextValue, goalValue, queuedValue, symbolValue, indicatorValue,
+    cwdValue, gitValue, tokenValue, modelValue, contextValue, goalValue, queuedValue, jobsValue,
+    symbolValue, indicatorValue,
   ] = promptValues
   /* v8 ignore next -- the fixed built-in registration list always supplies each handle. */
   if (cwdValue === undefined || gitValue === undefined || tokenValue === undefined || modelValue === undefined
     || contextValue === undefined || goalValue === undefined || queuedValue === undefined
-    || symbolValue === undefined || indicatorValue === undefined) {
+    || jobsValue === undefined || symbolValue === undefined || indicatorValue === undefined) {
     throw new Error('TUI prompt built-ins failed to initialize')
   }
   const updatePromptValues = (): void => {
@@ -1315,6 +1378,13 @@ export function createTuiChat(
     goalValue.set(goalFragment === undefined ? undefined : `  ${palette.dim(goalFragment)}`)
     const queued = runningStatus === undefined ? undefined : formatQueuedStatus(pendingSteering.size)
     queuedValue.set(queued === undefined ? undefined : palette.dim(queued))
+    // A count and no stopwatch: the count moves only when the registry says a
+    // job started or settled, so the badge costs nothing between those, while a
+    // ticking one would redraw the prompt row every second of a long build. The
+    // durations are in `/jobs`, which is where a reader who wants them goes.
+    // The fragment carries its own separator, as the left row's do: the right
+    // prompt is `${queued}${jobs}`, so neither value has to know about the other.
+    jobsValue.set(liveJobs === 0 ? undefined : `  ${palette.dim(plural(liveJobs, 'prompt.jobs'))}`)
     symbolValue.set(palette.bold(palette.accent('dsh')))
     // A live compaction owns the row while it runs; a flash only fills it in
     // between, so a transient confirmation can never hide ongoing work. Which
@@ -1441,6 +1511,54 @@ export function createTuiChat(
   // `${custom}` fragment) redraws through the registry's coalesced notification;
   // built-ins are already covered by the state-change callers of requestRender.
   const disposePromptChanges = ctx.tuiPrompt.subscribe(requestRender)
+  /** Set by an open `/jobs` panel, so one re-read serves both it and the badge. */
+  let refreshJobsPanel: ((rows: readonly JobRow[]) => void) | undefined
+  /**
+   * Re-read the visible set for both readers of it.
+   *
+   * The registry reports an owner whose visible set moved rather than the job
+   * that moved — a removal is not expressible per job — so every listener
+   * re-reads the whole set anyway; reading it once here keeps the badge and the
+   * open panel from ever disagreeing about the same edge, and costs one listing
+   * per change instead of one per observer. The owner argument is ignored on
+   * purpose: this terminal's visible set includes every unowned job, so a
+   * change to somebody else's is still a change to ours.
+   */
+  const readJobs = (): void => {
+    if (disposed) return
+    const rows = jobs?.list(agent) ?? []
+    liveJobs = jobCounts(rows).live
+    refreshJobsPanel?.(rows)
+    requestRender()
+  }
+  /** The subscription held on {@link jobs}, dropped when that instance changes. */
+  let disposeJobChanges = jobs?.onJobsChanged(readJobs)
+  /**
+   * Move the one subscription onto whichever registry answers for `jobs` now.
+   *
+   * Only ever called from the service-change edge below, because the row can
+   * move in either direction under a composition this terminal does not
+   * control: `jobs` is not in this plugin's `inject` list (a terminal with no
+   * job producer is a working terminal), so nothing sequences the registry's
+   * mount against this one, and a reload of the plugin that owns it replaces
+   * the instance outright. Re-reading on every attach is what keeps the badge
+   * and an open panel honest across the swap.
+   */
+  const watchJobs = (): void => {
+    const registry = jobsRegistry(ctx)
+    if (registry === jobs) return
+    disposeJobChanges?.()
+    disposeJobChanges = undefined
+    jobs = registry
+    if (registry !== undefined) disposeJobChanges = registry.onJobsChanged(readJobs)
+    readJobs()
+  }
+  // Emitted by cordis whenever a service registration changes; filtering by name
+  // is the whole cost of hearing about every other service in the process.
+  const disposeJobsService = ctx.on('internal/service', (name: string) => {
+    if (disposed) return
+    if (name === 'jobs') watchJobs()
+  })
 
   /**
    * Report a terminal-local outcome (a command result, a failed skill load) in
@@ -3013,6 +3131,204 @@ export function createTuiChat(
   }
 
   /**
+   * `/subagents`: the delegation tree below this session.
+   *
+   * One `listDescendants()` read fills the whole panel — a terminal shows the
+   * tree at once rather than expanding it a level at a time, so there is no
+   * per-parent lazy read to keep track of. The listing merges the live store
+   * with persistence and resolves each child's identity through the `subagent`
+   * projection, which is why the panel says nothing the events alone could not
+   * have proven wrong: `subagent/start` and `subagent/end` carry no label, no
+   * mode, and no parent, so they are used only as the edge that makes the
+   * current listing stale.
+   *
+   * The two edges are debounced together. A workflow that fans out spawns a
+   * burst of starts, and one directory read per child would be one persistence
+   * pass per child for a tree that is going to be re-read anyway.
+   */
+  const showSubagents = (): void => {
+    const directory = subagentDirectory(ctx)
+    if (directory === undefined) {
+      appendNotice(t('subagents.unavailable'), 'warning')
+      return
+    }
+    void panelOverlay?.close()
+    const scan = new AbortController()
+    // The overlay's slot can still be held by a closing predecessor, so `create`
+    // runs late; a listing that settled before then is handed to the constructor
+    // instead of stranding the panel on its loading line.
+    let panel: SubagentsPanel | undefined
+    let scanned: readonly SubagentDescendant[] | undefined
+    /** Reads issued, and the newest one that has already answered the panel. */
+    let issued = 0
+    let answered = 0
+    /**
+     * One directory read, which writes only if it is still the newest answer.
+     *
+     * The debounce below coalesces the *starts* of a burst, not the listings
+     * already in flight: a read outlives its window whenever persistence has a
+     * cold subtree to inspect, so two reads overlap and the slower one settles
+     * last. Without this guard the older listing — enumerated before the child
+     * that triggered the newer read even existed — would overwrite the fresher
+     * tree, and a slow failure would pin an error banner over a tree that was
+     * in fact read successfully. Both states then survive until the next
+     * delegation edge, which for a run whose members have all started may be
+     * the end of the run.
+     */
+    const read = (): void => {
+      issued += 1
+      const seq = issued
+      const current = (): boolean => !disposed && !scan.signal.aborted && seq > answered
+      void directory.listDescendants(agent.session.id, scan.signal).then(
+        (entries) => {
+          if (!current()) return
+          answered = seq
+          scanned = [...entries]
+          panel?.setEntries(scanned)
+          requestRender()
+        },
+        (error: unknown) => {
+          if (!current()) return
+          answered = seq
+          // Reported inside the panel rather than as a notice: a directory that
+          // will not answer is this view's own state, and a refresh that fails
+          // must not close a tree the reader is still looking at.
+          panel?.setError(t('subagents.loadFailed', { error: errorChain(error) }))
+          requestRender()
+        },
+      )
+    }
+    const session = overlayManager.open({
+      create: () => {
+        panel = new SubagentsPanel(scanned, panelRows, palette, () => { void session.close() })
+        return panel
+      },
+      // A tree the user reads, like `/skills`: an arriving permission prompt or
+      // question takes the slot rather than queueing behind it.
+      dismissable: true,
+    }, 'inline')
+    panelOverlay = session
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined
+    const refresh = (): void => {
+      if (refreshTimer !== undefined || scan.signal.aborted) return
+      refreshTimer = setTimeout(() => {
+        refreshTimer = undefined
+        if (disposed || scan.signal.aborted) return
+        read()
+      }, SUBAGENT_REFRESH_DEBOUNCE_MS)
+    }
+    // Registered on the untagged runner context, which hears every delegation in
+    // the process rather than only this agent's own — the same reason the child
+    // route fallback above is registered there.
+    const disposeSubagentStart = ctx.on('subagent/start', refresh)
+    const disposeSubagentEnd = ctx.on('subagent/end', refresh)
+    void session.closed.then(() => {
+      // A closed panel's directory reads are nobody's answer any more, and its
+      // invalidation edges have nothing left to invalidate.
+      scan.abort()
+      disposeSubagentStart()
+      disposeSubagentEnd()
+      if (refreshTimer !== undefined) clearTimeout(refreshTimer)
+      refreshTimer = undefined
+      if (panelOverlay === session) panelOverlay = undefined
+    })
+    requestRender()
+    read()
+  }
+
+  /**
+   * The two counts the `/status` Subagents row states.
+   *
+   * `undefined` on both absences the row must not invent a number for: a
+   * profile that mounts no registry, and a listing that failed. `/status` is a
+   * diagnostic panel, so one unreadable directory drops its row rather than
+   * failing the command that was asked for everything else.
+   * @param signal - the command's own cancellation.
+   * @returns the running and total counts, or `undefined`.
+   */
+  const readSubagentCounts = async (signal: AbortSignal): Promise<SubagentCounts | undefined> => {
+    const directory = subagentDirectory(ctx)
+    if (directory === undefined) return undefined
+    return directory.listDescendants(agent.session.id, signal).then(
+      subagentCounts,
+      () => undefined,
+    )
+  }
+
+  /**
+   * `/jobs`: the background work this session can still see.
+   *
+   * The registry lives in this process, so the panel is filled synchronously
+   * from the first frame — there is no loading line to show and no read that
+   * can fail. What it does own is a clock: a live row's elapsed time has to
+   * move while the rest of the screen holds still, so the panel repaints on a
+   * timer that exists only while it is open and something is actually running.
+   * A settled list schedules nothing.
+   *
+   * The list itself is refreshed from the terminal's one registry subscription
+   * rather than a second one of its own, so the badge on the prompt row and the
+   * rows in the panel are always the same reading.
+   * @param registry - the registry the command resolved before opening.
+   */
+  const showJobs = (registry: JobsRegistry): void => {
+    void panelOverlay?.close()
+    let panel: JobsPanel | undefined
+    let ticker: ReturnType<typeof setInterval> | undefined
+    let rows = sortJobRows(registry.list(agent))
+    const stopTicking = (): void => {
+      if (ticker === undefined) return
+      clearInterval(ticker)
+      ticker = undefined
+    }
+    // Started and stopped by what is on screen, not by what the registry holds:
+    // a list of finished jobs is a still picture, and repainting it once a
+    // second would spend a frame a second saying nothing.
+    const retime = (): void => {
+      const live = rows.some(row => row.status === 'running' || row.status === 'stopping')
+      if (!live) {
+        stopTicking()
+        return
+      }
+      if (ticker !== undefined) return
+      ticker = setInterval(() => {
+        if (disposed) return
+        panel?.invalidate()
+        requestRender()
+      }, JOBS_ELAPSED_TICK_MS)
+      // Never a reason to hold the process open: the clock is only a repaint.
+      ticker.unref()
+    }
+    const session = overlayManager.open({
+      create: () => {
+        panel = new JobsPanel(rows, panelRows, palette, now, () => { void session.close() })
+        return panel
+      },
+      // A list the user reads, like `/skills`: an arriving permission prompt or
+      // question takes the slot rather than queueing behind it.
+      dismissable: true,
+    }, 'inline')
+    panelOverlay = session
+    const refresh = (changed: readonly JobRow[]): void => {
+      rows = sortJobRows(changed)
+      panel?.setJobs(rows)
+      retime()
+    }
+    refreshJobsPanel = refresh
+    void session.closed.then(() => {
+      // A closed panel has no clock to move and no rows to refresh; the
+      // registry subscription itself belongs to the terminal, not to this view.
+      // The hook is cleared by identity, the way the overlay slot is: a second
+      // `/jobs` closes the first one, and that close lands after the second
+      // panel has already registered itself.
+      stopTicking()
+      if (refreshJobsPanel === refresh) refreshJobsPanel = undefined
+      if (panelOverlay === session) panelOverlay = undefined
+    })
+    retime()
+    requestRender()
+  }
+
+  /**
    * The MCP inventory, folded out of the tool names this agent can see.
    *
    * The registry view is read directly rather than through the system prompt
@@ -3066,7 +3382,13 @@ export function createTuiChat(
     // read files or ask a service; on a cold cache that is long enough for the
     // screen to look like `/status` never landed.
     const settleHint = flashPending(t('status.flash.collecting'))
-    const assembly = await ctx.systemPrompt.assemble(assembleContextFor(agent, signal)).finally(settleHint)
+    // Read alongside the prompt rather than after it: the delegation tree is
+    // another session-scoped read under the same signal, and the panel should
+    // wait for the pair once instead of twice in a row.
+    const [assembly, subagents] = await Promise.all([
+      ctx.systemPrompt.assemble(assembleContextFor(agent, signal)),
+      readSubagentCounts(signal),
+    ]).finally(settleHint)
     /* v8 ignore next -- disposal during the awaited assembly is covered by command-owner teardown tests. */
     if (disposed) return
     /* v8 ignore next -- SystemPrompt always emits at least its required base section. */
@@ -3107,6 +3429,11 @@ export function createTuiChat(
     // compaction cannot move them. The unit is a deployment choice, so its row
     // is present only when the projection is.
     const stats = ctx.get('sessionProjections')?.snapshot(agent.session).values.sessionStats
+    // What this session left running in the background. A synchronous read of
+    // an in-process registry, so it needs no place in the awaited pair above;
+    // absent only when the profile mounts no registry, in which case the row is
+    // left out rather than reporting a zero this terminal never looked for.
+    const backgroundJobs = jobsRegistry(ctx)?.list(agent)
     // What every tool call in this session is decided under. Present only when
     // a permission service reports it, so a deployment without one says nothing
     // rather than implying a policy it does not enforce.
@@ -3148,6 +3475,16 @@ export function createTuiChat(
         ...stats === undefined
           ? []
           : [[t('status.row.sessionTotals'), formatSessionStats(stats)] as StatusCardRow],
+        // What this session delegated. Present only when a subagent registry
+        // answered: a profile that mounts none, and a directory that could not
+        // be read, both leave the row out rather than reporting zero children
+        // this terminal never actually looked for.
+        ...subagents === undefined
+          ? []
+          : [[t('status.row.subagents'), t('status.subagentsValue', { ...subagents })] as StatusCardRow],
+        ...backgroundJobs === undefined
+          ? []
+          : [[t('status.row.jobs'), t('status.jobsValue', { ...jobCounts(backgroundJobs) })] as StatusCardRow],
       ],
       [
         [t('status.row.tokens'), t('status.tokensValue', {
@@ -3784,6 +4121,30 @@ export function createTuiChat(
       name: 'skills',
       description: 'Search this session\'s skills and read one in full',
       handler: () => { showSkills(); return { kind: 'success' } },
+    })
+    // Registered whether or not the registry is mounted, like `/compact`: a
+    // command that vanished on a profile without subagents would leave the
+    // user with nothing to ask, and no answer explaining why.
+    commandCtx.commands.register({
+      name: 'subagents',
+      description: 'Show the subagent tree below this session',
+      handler: () => { showSubagents(); return { kind: 'success' } },
+    })
+    // Registered whether or not the registry is mounted, for the same reason
+    // `/subagents` is: the answer "this profile runs no background jobs" is
+    // worth more than a command that is not there to ask.
+    commandCtx.commands.register({
+      name: 'jobs',
+      description: 'Show this session\'s background jobs and their state',
+      handler: () => {
+        const registry = jobsRegistry(ctx)
+        if (registry === undefined) {
+          appendNotice(t('jobs.unavailable'), 'warning')
+          return { kind: 'success' }
+        }
+        showJobs(registry)
+        return { kind: 'success' }
+      },
     })
     commandCtx.commands.register({
       name: 'status',
@@ -4781,6 +5142,8 @@ export function createTuiChat(
     disposeLocaleChanges()
     disposeSkillChanges()
     disposePromptChanges()
+    disposeJobChanges?.()
+    disposeJobsService()
     for (const value of promptValues) value.dispose()
     stopBannerReveal()
     disposeSnapshots()
