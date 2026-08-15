@@ -35,6 +35,7 @@ export interface AppKeybindings {
   'app.message.copy': true
   'app.draft.edit': true
   'app.screen.redraw': true
+  'app.submit.opposite': true
   'app.cancel': true
   'app.exit': true
 }
@@ -97,6 +98,14 @@ export const APP_KEYBINDINGS = {
   // always works, and `keybindings` moves the key.
   'app.draft.edit': { defaultKeys: 'alt+e', description: 'Edit the draft in $EDITOR' },
   'app.screen.redraw': { defaultKeys: 'ctrl+l', description: 'Redraw the screen' },
+  // The one-off inverse of the `/config` busy-Enter choice, the way the
+  // harness's web chat spells it. Safe to bind: pi-tui's own tables hold no
+  // Ctrl+Enter, and its editor recognises Enter, Shift+Enter and Alt+Enter
+  // only. It is also the one binding here that a terminal may be unable to
+  // deliver: without the Kitty keyboard protocol or xterm's modifyOtherKeys,
+  // Ctrl+Enter reaches the process as a bare `\r` that no code can tell from
+  // Enter, so the gesture degrades to a plain send rather than misfiring.
+  'app.submit.opposite': { defaultKeys: 'ctrl+enter', description: 'Send with the opposite busy-Enter behavior' },
   'app.cancel': { defaultKeys: 'escape', description: 'Cancel the turn; twice to clear the draft or rewind' },
   'app.exit': { defaultKeys: 'ctrl+d', description: 'Exit on an empty prompt' },
 } as const satisfies KeybindingDefinitions

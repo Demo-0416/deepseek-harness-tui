@@ -383,6 +383,28 @@ describe('turn completion row', () => {
       `and it closes the turn rather than interrupting it:\n${rows.join('\n')}`)
   })
 
+  it('reports a turn a queued prompt was typed over once, at its own end', () => {
+    // The twin of the case above, for the other way a prompt reaches a running
+    // turn. A queued prompt is echoed between two steps of the turn it was
+    // typed over — that is the whole point of queueing, the turn keeps
+    // streaming below it — and the turn it opens is a later one. Closing turn 1
+    // at the echo printed its row mid-answer and, because the row is memoized
+    // per turn, never at the end where the user is looking for it.
+    const mounted = mount(turnEvents(1, 45_000))
+    const first = assistantNode({ step: 1, text: 'FIRST-STEP' })
+    const second = assistantNode({ step: 2, key: 'assistant:1:2', text: 'SECOND-STEP' })
+    settle(first, START + 45_000)
+    settle(second, START + 45_000)
+    const queued = userNode('QUEUED-PROMPT', 'user:queued', 'queued')
+    mounted.reconciler.reconcile([first, queued, second])
+    const rows = mounted.rows()
+
+    assert.equal(rows.filter(row => row.startsWith(' ✻ ')).length, 1, `one row per turn:\n${rows.join('\n')}`)
+    const row = rows.findIndex(entry => entry.startsWith(' ✻ '))
+    assert.ok(row > rows.findIndex(entry => entry.includes('SECOND-STEP')),
+      `and it closes the turn rather than cutting it in half:\n${rows.join('\n')}`)
+  })
+
   it('keeps its verb through the remount a color-scheme change forces', () => {
     // `reset()` drops every row so the new palette is picked up. The verb is a
     // property of the turn, not of the row mounted for it: re-sampling here

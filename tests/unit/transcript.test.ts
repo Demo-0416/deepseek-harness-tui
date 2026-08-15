@@ -521,7 +521,9 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
       const rows = harness.terminal.text().split('\n').map(row => row.trimEnd())
       const answer = rows.findIndex(row => row.includes('ANSWER-SO-FAR'))
       const prompt = rows.findIndex(row => row.includes('STEER-PROMPT'))
-      const badge = rows.findIndex(row => row.trim() === 'Steering')
+      // Badged as pending while the inbox still holds it: at this point the
+      // prompt is queued work, not something the model has read.
+      const badge = rows.findIndex(row => row.trim() === 'Steering · pending')
       assert.ok(answer >= 0 && prompt > answer, `the submission is on screen at once:\n${rows.join('\n')}`)
       assert.ok(badge >= 0 && badge < prompt, `a mid-run prompt is badged:\n${rows.join('\n')}`)
 
@@ -543,6 +545,16 @@ describe('transcript reconciliation', { skip: skipWithoutEntry }, () => {
         settled.findIndex(row => row.includes('STEER-PROMPT'))
           > settled.findIndex(row => row.includes('ANSWER-SO-FAR')),
         `and keeps the position it was submitted at:\n${after}`,
+      )
+      // The logged message is no longer pending anything, so the marker that
+      // said so settles with it — the row keeps only the steering badge.
+      assert.ok(
+        settled.some(row => row.trim() === 'Steering'),
+        `the claimed prompt drops its pending marker:\n${after}`,
+      )
+      assert.ok(
+        !settled.some(row => row.trim() === 'Steering · pending'),
+        `and nothing still reads as queued:\n${after}`,
       )
     } finally {
       await unmount(harness)

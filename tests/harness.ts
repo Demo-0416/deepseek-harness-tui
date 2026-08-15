@@ -182,6 +182,16 @@ export interface TuiHarnessOptions {
   configureContext?: (ctx: Context) => Promise<void>
   /** Seed the session log before the TUI mounts, so the first frame is a replay. */
   beforeMount?: (session: Session) => void
+  /**
+   * Fill the agent's inbox before the TUI mounts, so the terminal opens onto a
+   * queue it never saw arrive.
+   *
+   * Separate from {@link TuiHarnessOptions.beforeMount}, which runs before the
+   * inbox projection exists: a terminal attaching to an agent that is already
+   * mid-turn inherits pending prompts with no `inserted` notification to tell
+   * it about them, and only what it reads at mount can show them.
+   */
+  beforeChat?: (agent: FakeAgent) => void
   /** Session workspace; `null` creates the session without any `cwd` metadata. */
   cwd?: string | null
   formatCwd?: TuiRuntime['formatCwd']
@@ -456,6 +466,7 @@ export async function createTuiTestHarness<TerminalType extends Terminal, Exit e
     throw new Error('dsh-tui tests: src/index.ts does not export createTuiChat yet')
   }
   const { ctx, session, agent } = await createTuiTestContext(options)
+  options.beforeChat?.(agent)
   const controller = createTuiChat(ctx, Object.assign({
     ...options.omitWelcome === true ? {} : { welcome: 'Coding agent ready.' },
     sessionId: session.id,

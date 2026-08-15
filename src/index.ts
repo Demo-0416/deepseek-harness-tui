@@ -204,7 +204,10 @@ import {
   type SettingsEntry,
 } from './components/settings-panel.ts'
 import {
+  BUSY_ENTER_BEHAVIORS,
   openTuiPreferences,
+  QUEUE_UP_HINT_LIMIT,
+  type BusyEnterBehavior,
   type TuiPreferenceStore,
 } from './chat/preferences.ts'
 import {
@@ -270,6 +273,7 @@ import {
   createLoginController,
   type LoginController,
 } from './chat/login-command.ts'
+import { pendingUserQueue, queueItemPreview } from './chat/queue.ts'
 import { createQuestionQueue } from './chat/questions.ts'
 import { startPrintRun, type PrintIo } from './print.ts'
 import {
@@ -626,6 +630,7 @@ function keyboardShortcuts(manager: KeybindingsManager): string[] {
       redraw: key('app.screen.redraw'),
     }),
     t('hotkeys.externalEditor', { key: key('app.draft.edit') }),
+    t('hotkeys.busyEnter', { key: key('app.submit.opposite') }),
     t('hotkeys.cancel', { cancel: key('app.cancel') }),
     t('hotkeys.exit', { exit: key('app.exit') }),
     t('hotkeys.interrupt'),
@@ -753,6 +758,25 @@ interface PlanModeSeam {
 function startupSelection(ctx: Context): ModelSelection | undefined {
   const route = parseModelSelection(ctx.get('tuiStartup')?.model)
   return route === undefined ? undefined : { provider: route.provider, model: route.model }
+}
+
+/**
+ * Which key sent one prompt.
+ *
+ * `enter` follows the stored busy-Enter preference; `opposite` takes the other
+ * branch for that one send, the way the harness's web chat reads Cmd/Ctrl+Enter.
+ */
+type SubmitGesture = 'enter' | 'opposite'
+
+/** One submission's session-reference snapshot, and where it is right now. */
+interface AttachedSnapshot {
+  /** The context message itself, for delivering or withdrawing it later. */
+  readonly message: UserMessage
+  /**
+   * Whether it is in the inbox already, rather than parked here waiting for the
+   * turn boundary that will claim the prompt it belongs to.
+   */
+  injected: boolean
 }
 
 interface RunningStatus {
@@ -943,6 +967,31 @@ export function createTuiChat(
   // tool cards entirely, collapsed previews, expanded shows full bodies. The
   // session opens on the stored default; the key moves this session alone.
   let toolsVisibility: ToolCardVisibility = storedPreferences.toolCards
+  /**
+   * How often the empty input row has already offered Up as the way to edit a
+   * queued prompt. Counted across sessions, because a hint that starts over on
+   * every launch is an advertisement rather than a lesson.
+   */
+  let queueUpHintSeen = storedPreferences.queueUpHintSeen
+  /** Whether the queue on screen right now has already been counted as taught. */
+  let queueHintCounted = false
+  /**
+   * Whether the queue is one the user actually has to wait through.
+   *
+   * Read off the inbox signals rather than off {@link queueCount} alone: an
+   * ordinary prompt typed at an idle agent is in the inbox for the tick between
+   * the send and the driver's claim, and the status flip to `running` happens
+   * inside that tick. Teaching there would spend the whole three-showing lesson
+   * on the first three ordinary prompts of a user's first session, before a
+   * queue they can edit has ever existed.
+   */
+  let queueTeachable = false
+  /**
+   * What Enter does with a prompt typed while a turn runs — steer it or queue
+   * it — as `/config` last left it. Read on every submission rather than
+   * captured, so the row and the key can never disagree.
+   */
+  let busyEnter: BusyEnterBehavior = storedPreferences.busyEnter
   // One shared accumulator serves every step's timing footer; per-footer
   // replay of the whole log is quadratic on a long resumed session.
   const stepTimingTracker = new StepTimingTracker()
@@ -957,11 +1006,36 @@ export function createTuiChat(
     timer: ReturnType<typeof setInterval>
   } | undefined
   // TUI steering submissions that the inbox has not yet claimed or discarded,
-  // for the prompt's queued badge, keyed by MessageId and carrying the text a
-  // cancel hands back to the editor. The same claimed/discarded signals settle
-  // the optimistic echo in the store (one node per MessageId), so this map
-  // counts pending work and owns no transcript state of its own.
+  // keyed by MessageId and carrying the text a cancel hands back to the editor.
+  // Counting and listing read `agent.inbox` instead (see {@link queueCount}):
+  // that is the queue the driver actually consumes, and it also holds what
+  // other hosts inserted. What is left here is the refund ledger for a cancel,
+  // settled by the same claimed/discarded signals that settle the optimistic
+  // echo in the store (one node per MessageId), so this map owns no transcript
+  // state of its own.
   const pendingSteering = new Map<MessageId, string>()
+  /**
+   * The session-reference snapshot each unclaimed submission was sent with,
+   * keyed by the prompt's MessageId.
+   *
+   * A snapshot is a separate message with its own delivery boundary, so the two
+   * halves of one submission can come apart in both directions: injected
+   * context takes the nearest pre-step, which for a queued prompt belongs to a
+   * turn that has nothing to do with it, and a prompt taken back out of the
+   * queue by Up would leave its snapshot behind as a recall dump with no
+   * question attached. Keeping the pairing here is what lets both be answered.
+   * Entries live exactly as long as the prompt is unclaimed.
+   */
+  const attachedContexts = new Map<MessageId, AttachedSnapshot>()
+  /**
+   * Pending user prompts in the agent's inbox, as of the last inbox or status
+   * signal. Cached rather than derived per frame: `updatePromptValues` runs on
+   * every animation tick, and the badge must not walk the inbox 20 times a
+   * second for a number that only moves when the inbox publishes. Seeded from
+   * the inbox rather than from zero: a terminal that mounts onto a session
+   * whose agent is mid-turn inherits whatever is already queued there.
+   */
+  let queueCount = pendingUserQueue(agent.inbox).length
   let disposed = false
   /**
    * Whether this terminal's agent left the registry while the terminal stayed.
@@ -1376,7 +1450,7 @@ export function createTuiChat(
     if (pressure !== undefined) announceContextPressure(pressure)
     const goalFragment = formatGoalPrompt(goalState.goal)
     goalValue.set(goalFragment === undefined ? undefined : `  ${palette.dim(goalFragment)}`)
-    const queued = runningStatus === undefined ? undefined : formatQueuedStatus(pendingSteering.size)
+    const queued = runningStatus === undefined ? undefined : formatQueuedStatus(queueCount)
     queuedValue.set(queued === undefined ? undefined : palette.dim(queued))
     // A count and no stopwatch: the count moves only when the registry says a
     // job started or settled, so the badge costs nothing between those, while a
@@ -1970,7 +2044,6 @@ export function createTuiChat(
     else if (fadeOutGlyph !== undefined) beginFadeOut(fadeOutGlyph)
     else clearTurnStatus()
     editor.borderColor = status === 'running' ? text => palette.accent(text) : text => palette.dim(text)
-    editor.hint = status === 'running' ? palette.dim(displayInlineText(resolved.theme.inputPlaceholder)) : undefined
     if (status === 'running') {
       const turn = priorTurn ?? openTurn(agent.session.events)
       const running: RunningStatus = {
@@ -1986,11 +2059,96 @@ export function createTuiChat(
       runningStatus = running
       runtime.terminal.setProgress(true)
     }
+    // After `runningStatus`, which is what the hint reads for "a turn is
+    // running" — the placeholder must not describe the state this call left.
+    refreshEditorHint()
     requestRender()
   }
 
   const refreshStatus = (): void => {
     renderStatus()
+  }
+
+  /**
+   * Repaint the placeholder the empty input row shows, and count the lesson it
+   * teaches the first few times it teaches it.
+   *
+   * Three states, most specific first: a queue waiting under a running turn
+   * offers the key that edits it, while the offer is still new to this user; a
+   * running turn keeps the deployment's own placeholder; an idle prompt shows
+   * none. `HintEditor` paints it only while the draft is empty, so a user in
+   * the middle of typing is never told anything — which is also exactly when
+   * the Up key means something else (see the queue branch of the input
+   * listener). The running condition is the same one the queued badge uses: a
+   * queue is a thing a user watches while they wait for a turn, and Up borrows
+   * the key only there.
+   *
+   * The count is written here, where the offer is actually made, rather than
+   * from whichever signal happened to fill the queue — and only for a showing
+   * the user can see: `HintEditor` paints nothing over a draft being typed, so
+   * a queue that arrives mid-sentence would otherwise burn a lesson that was
+   * never on screen. One count per queue: {@link queueHintCounted} latches
+   * until the queue drains, and it also holds the offer up for the showing that
+   * reaches the limit.
+   */
+  const refreshEditorHint = (): void => {
+    const teaching = runningStatus !== undefined
+      && queueTeachable
+      && queueCount > 0
+      && (queueHintCounted || queueUpHintSeen < QUEUE_UP_HINT_LIMIT)
+    if (teaching && !queueHintCounted && editor.getText() === '') {
+      queueHintCounted = true
+      queueUpHintSeen += 1
+      preferences.save({ queueUpHintSeen })
+    }
+    editor.hint = teaching
+      ? palette.dim(t('prompt.queuedEditHint'))
+      : runningStatus !== undefined
+        ? palette.dim(displayInlineText(resolved.theme.inputPlaceholder))
+        : undefined
+  }
+
+  /**
+   * Stop teaching the Up key: this user has just used it.
+   *
+   * A hint is a lesson, and the lesson is over the moment it is acted on —
+   * counting to three would go on telling someone what they already do.
+   */
+  const markQueueHintLearned = (): void => {
+    // Dropped as well as saturated: the latch is what keeps the current queue's
+    // offer up once it has been counted, and leaving it set would go on showing
+    // the hint for the rest of a queue the user is already editing — taking the
+    // deployment's own placeholder with it.
+    queueHintCounted = false
+    if (queueUpHintSeen < QUEUE_UP_HINT_LIMIT) {
+      queueUpHintSeen = QUEUE_UP_HINT_LIMIT
+      preferences.save({ queueUpHintSeen })
+    }
+    // Repaint now rather than at the next inbox signal: the draft this key just
+    // filled hides the hint anyway, and clearing that draft has to reveal the
+    // placeholder the running turn would have shown.
+    refreshEditorHint()
+  }
+
+  /**
+   * Re-read the queue the driver will consume and repaint what counts it.
+   *
+   * Called from every inbox signal rather than from the submitting code paths,
+   * so a prompt another host or a plugin parked in this agent's inbox is
+   * counted exactly like one typed here.
+   */
+  const refreshQueueState = (): void => {
+    queueCount = pendingUserQueue(agent.inbox).length
+    // Judged here, on the signal itself, rather than in the hint: this runs
+    // before `setStatus` on a status change, so a prompt sent to an idle agent
+    // is still seen against the idle status it was typed at, and only a queue
+    // that outlives a turn already running counts as one to teach.
+    queueTeachable = queueCount > 0 && runningStatus !== undefined
+    // A queue that drained is a lesson finished: the next one may be taught
+    // again, up to the limit. A queue that merely grew is still the same queue.
+    if (queueCount === 0) queueHintCounted = false
+    refreshEditorHint()
+    refreshStatus()
   }
 
   /** Plan mode as the last published snapshot folded it out of the session log. */
@@ -2661,6 +2819,21 @@ export function createTuiChat(
     flashStatus(cardPhaseNotice(toolsVisibility))
   }
 
+  /**
+   * Choose what Enter does with a prompt typed while a turn runs.
+   *
+   * Unlike the tool-card phase this has no key of its own to cycle it — the
+   * gesture is Ctrl+Enter, which takes the other branch for one send without
+   * moving the setting — so `persist` is here for symmetry with the rows beside
+   * it rather than because anything sets it without writing.
+   * @param next - the behaviour to adopt.
+   * @param options - `persist` writes it to the settings document as well.
+   */
+  const setBusyEnter = (next: BusyEnterBehavior, options?: { persist?: boolean }): void => {
+    busyEnter = next
+    if (options?.persist === true) preferences.save({ busyEnter })
+  }
+
   const toggleTools = (): void => {
     // The cycle order puts the two common reading modes adjacent: preview ->
     // full detail -> conversation-only, then back to the preview default.
@@ -2868,7 +3041,11 @@ export function createTuiChat(
       // the kind of thing a "the colors are wrong" report never mentions.
       `theme ${themePreference} · painting ${appearance.scheme}${appearance.color ? '' : ' · no color'} · terminal reports ${reportedScheme}`,
       `cards ${toolsVisibility} · thinking ${thinkingStateLabel()} · plan ${todo.isExpanded() ? 'expanded' : 'collapsed'}`,
-      `overlay ${overlayManager.hasActiveOverlay() ? 'active' : 'none'} · pending steering ${String(pendingSteering.size)}`,
+      // Both numbers, because they answer different questions and disagreeing
+      // is itself the bug: the map is what a cancel would hand back, the queue
+      // is what the driver will actually claim (including foreign inserts).
+      `overlay ${overlayManager.hasActiveOverlay() ? 'active' : 'none'} · pending steering ${
+        String(pendingSteering.size)} · inbox queue ${String(queueCount)}`,
       `locale ${currentLocale()} · preference stored in ${localeStore.origin}`,
       '',
       ...Object.keys(APP_KEYBINDINGS).map(action => `${action} → ${keyLabel(keybindings, action as AppKeybinding)}`),
@@ -2995,6 +3172,21 @@ export function createTuiChat(
         /* v8 ignore next -- the options are TOOL_CARD_PHASES, so every value is one. */
         if (next !== 'collapsed' && next !== 'expanded' && next !== 'hidden') return
         setToolsVisibility(next, { persist: true })
+        requestRender()
+      },
+    },
+    {
+      kind: 'choice',
+      label: t('settings.busyEnter'),
+      options: BUSY_ENTER_BEHAVIORS,
+      value: () => busyEnter,
+      // Same reason as the row above: `steer` and `queue` are the ids the
+      // document stores, and the panel is prose.
+      format: behavior => t(`settings.busyEnter.${behavior as BusyEnterBehavior}`),
+      set: (next) => {
+        /* v8 ignore next -- the options are BUSY_ENTER_BEHAVIORS, so every value is one. */
+        if (next !== 'steer' && next !== 'queue') return
+        setBusyEnter(next, { persist: true })
         requestRender()
       },
     },
@@ -3509,11 +3701,23 @@ export function createTuiChat(
         [t('status.row.active'), formatDiagnosticTime(latestActivity)],
       ],
     ]
+    // The queue as it stands when the panel opens: prompts claimed while the
+    // system prompt was being assembled are gone, and listing them would be
+    // listing work the driver already took. Numbered in claim order, one line
+    // each — the transcript above already shows every one of them in full.
+    const queue = pendingUserQueue(agent.inbox)
     // The card renders itself once, at the panel's own content width; the panel
     // scrolls those rows rather than re-deriving them per frame.
     const cardWidth = Math.max(8, runtime.terminal.columns - 2)
     showPanel('/status', [
       ...new StatusCardComponent(groups, palette).render(cardWidth),
+      ...queue.length === 0 ? [] : [
+        '',
+        palette.bold(palette.accent(t('status.queued'))),
+        ...queue.map((item, index) => `${String(index + 1)}. ${
+          palette.dim(`[${t(item.placement === 'steering' ? 'status.queued.steering' : 'status.queued.nextTurn')}]`)
+        } ${displayInlineText(queueItemPreview(item.message))}`),
+      ],
       '',
       palette.bold(palette.accent(t('status.systemPrompt'))),
       ...systemPrompt.split('\n'),
@@ -4222,40 +4426,104 @@ export function createTuiChat(
   }
 
   /**
-   * Deliver a user turn: steer a running driver, otherwise queue a follow-up.
+   * Deliver a user turn: interrupt a running driver, park the prompt for the
+   * turn after it, or — on an idle agent — open a turn with it.
+   *
+   * The middle branch is the `/config` choice: a prompt typed while a turn runs
+   * either steers that turn or queues for the next one, and Ctrl+Enter sends
+   * one prompt the other way without moving the setting. An idle agent has no
+   * turn to interrupt, so both behaviours mean the same thing there and the
+   * choice does not apply.
    *
    * rc.6 removed `Agent.acceptsNextStep` and the `agent/prompt-submit`
    * admission waterfall, so the running check is the public status and an
    * attached reference snapshot rides `agent.inject()` beside the prompt
-   * instead of inside its admission transaction.
+   * instead of inside its admission transaction — for a queued prompt, at the
+   * turn boundary that claims it rather than at this call.
    * @param content - the model-facing blocks of the user's turn.
    * @param attachedContext - optional session-reference snapshot delivered with it.
+   * @param gesture - `opposite` takes the other branch of the busy-Enter choice.
    */
-  const dispatchMessage = (content: ContentBlock[], attachedContext?: UserMessage): void => {
+  const dispatchMessage = (
+    content: ContentBlock[],
+    attachedContext?: UserMessage,
+    gesture: SubmitGesture = 'enter',
+  ): void => {
     if (disposed || agentGone) {
       appendNotice(t('notice.agentDisposed', { id: agent.id, recovery: disposedRecovery() }), 'error')
       return
     }
-    // Queued before the prompt so the nearest pre-step claims both together.
-    if (attachedContext !== undefined) agent.inject(attachedContext)
     const message = createUserMessage({ content, source: { kind: 'user' } })
-    const steering = agent.status === 'running'
-    // Echo the prompt before delivering it. A steered message is recorded only
-    // when the running driver claims it at its next step boundary, so its
-    // `user/message` event lands after the answer it interrupted has already
-    // streamed rows onto the screen: without this the prompt would appear
-    // below the reply it came before. The echo is keyed by MessageId, so the
-    // event lands on this exact node instead of appending a second one.
-    store.appendOptimistic(message, steering ? 'steering' : 'user')
+    const running = agent.status === 'running'
+    // One place decides it: the stored preference, inverted for this one send
+    // when the user asked for the other branch.
+    const behavior = gesture === 'opposite'
+      ? busyEnter === 'steer' ? 'queue' : 'steer'
+      : busyEnter
+    const steering = running && behavior === 'steer'
+    const queued = running && !steering
+    // Echo the prompt before delivering it. A message the driver has not read
+    // yet is recorded only when it claims it — at its next step boundary for
+    // steering, at the next turn for a queued prompt — so its `user/message`
+    // event lands after the answer it was typed over has already streamed rows
+    // onto the screen: without this the prompt would appear below the reply it
+    // came before. The echo is keyed by MessageId, so the event lands on this
+    // exact node instead of appending a second one.
+    store.appendOptimistic(message, steering ? 'steering' : queued ? 'queued' : 'user')
+    if (attachedContext !== undefined) {
+      // Injected context takes the nearest pre-step, which is the boundary a
+      // steered prompt and an idle agent's own turn both take — so for those
+      // two the snapshot goes now, ahead of the prompt, and one claim takes the
+      // pair. A queued prompt's boundary is a later TURN, past every remaining
+      // step of the turn in flight: injecting now would read the snapshot into
+      // an answer it has nothing to do with (the very turn queueing promised to
+      // leave alone) and open the queued prompt's own turn without it. It waits
+      // in {@link attachedContexts} until that turn is next (see the `turn/end`
+      // handler), and travels with the prompt if Up takes the prompt back.
+      const injected = !queued
+      if (injected) agent.inject(attachedContext)
+      attachedContexts.set(message.id, { message: attachedContext, injected })
+    }
     if (steering) {
       // Steering is never subject to prompt admission; a running driver
       // consumes it at its next step boundary.
       agent.steer(message)
       pendingSteering.set(message.id, contentText(content).trim())
-      refreshStatus()
+      // The insertion this call publishes has already refreshed the count;
+      // asking again costs one list walk and keeps the badge right on a host
+      // that routes steering without publishing.
+      refreshQueueState()
       return
     }
+    // The idle path and the queued one are the same call: a follow-up is a
+    // next-turn message, which an idle agent starts a turn for immediately and
+    // a busy one gets to when the turn in flight is done.
     agent.followup(message)
+    if (queued) {
+      // Booked into the refund ledger exactly like a steered prompt: it is
+      // still text this terminal typed and has not seen answered, so Esc and
+      // Ctrl+C owe it back, and the same claimed/discarded signals settle both.
+      pendingSteering.set(message.id, contentText(content).trim())
+      refreshQueueState()
+    }
+  }
+
+  /**
+   * Drop the pairing for a prompt the inbox has settled.
+   *
+   * A parked snapshot outlives the claim on purpose: the step that claimed the
+   * prompt is the one that has to carry it, and the pre-step waterfall below
+   * runs after this notification, inside that same claim.
+   * @param id - the settled prompt's identity.
+   * @param claimed - whether it was claimed rather than discarded.
+   */
+  const settleAttachedContext = (id: MessageId, claimed: boolean): void => {
+    const attached = attachedContexts.get(id)
+    if (attached === undefined) return
+    // A claim leaves a parked snapshot exactly where it is: the pre-step
+    // waterfall runs inside this same claim, and it is what delivers it.
+    if (claimed && !attached.injected) return
+    attachedContexts.delete(id)
   }
 
   /**
@@ -4394,7 +4662,23 @@ export function createTuiChat(
   /** Prompts submitted during that window, in the order they were typed. */
   const queuedSubmissions: string[] = []
 
+  /**
+   * Which key sent the line the editor is about to hand back.
+   *
+   * Set by the Ctrl+Enter branch just before it asks the editor to submit, read
+   * and reset by the submission it caused — and disarmed by that same branch
+   * for the presses the editor answers with something other than a submission.
+   * A one-shot slot rather than a parameter because pi-tui's `onSubmit` carries
+   * only the text: the editor owns paste expansion and buffer clearing, so the
+   * gesture has to travel beside that call rather than through it.
+   */
+  let pendingSubmitGesture: SubmitGesture = 'enter'
+
   const submitLine = (raw: string): void => {
+    // Consumed here, on the way in, so no later return path can leave the
+    // inverse armed for the next Enter.
+    const gesture = pendingSubmitGesture
+    pendingSubmitGesture = 'enter'
     const trimmed = raw.trim()
     if (trimmed === '') return
     // The one place a prompt's length is decided. It has to be here rather than
@@ -4467,7 +4751,7 @@ export function createTuiChat(
     if (parsed.references.length === 0) {
       editor.addToHistory(text)
       editor.setText('')
-      dispatchMessage([{ type: 'text', text: parsed.text }])
+      dispatchMessage([{ type: 'text', text: parsed.text }], undefined, gesture)
       return
     }
     const sessionReferences = ctx.get('sessionReferenceResolver')
@@ -4489,8 +4773,11 @@ export function createTuiChat(
       editor.addToHistory(text)
       if (editor.getText() === value) editor.setText('')
       // The snapshot travels with the prompt so the nearest pre-step claims
-      // them together — see dispatchMessage's attached-context path.
-      dispatchMessage(prepared.content, prepared.additionalContext)
+      // them together — see dispatchMessage's attached-context path. The
+      // gesture travels with it too, captured before the await: a reference
+      // that took a second to resolve still goes where the key that sent it
+      // said it should.
+      dispatchMessage(prepared.content, prepared.additionalContext, gesture)
     }, (error: unknown) => {
       if (!disposed && !controller.signal.aborted) {
         restoreSubmittedInput()
@@ -4571,10 +4858,59 @@ export function createTuiChat(
     if (pendingSteering.size === 0) return
     const queued = [...pendingSteering.values()].filter(text => text !== '')
     if (queued.length === 0) return
-    const draft = editor.getText()
+    // Expanded, because `setText` empties the editor's paste map: a draft that
+    // still holds a `[paste #1 +40 lines]` marker would keep the marker and
+    // lose the forty lines it pointed at, and the literal marker is what the
+    // next Enter would send to the model.
+    const draft = editor.getExpandedText()
     editor.setText(draft === '' ? queued.join('\n') : `${queued.join('\n')}\n${draft}`)
     // `Editor.setText` mutates the buffer without asking for a redraw.
     requestRender()
+  }
+
+  /**
+   * Take the newest unclaimed prompt out of the queue and into the editor.
+   *
+   * The Up key's queue meaning, and the whole of it: one prompt comes back as
+   * an ordinary draft, and from there every key means what it always means —
+   * Enter sends it again (to the back of the queue, since the copy in the inbox
+   * is gone), Esc throws it away into the prompt history, and Up itself goes
+   * back to being the editor's. Editing an older prompt is sending this one
+   * back and pressing Up again, which walks the whole queue.
+   *
+   * The newest is the one taken because it is furthest from being claimed:
+   * pulling it back disturbs the running turn least, and it is also the prompt
+   * a user who just typed one too many is reaching for. The removal is the
+   * inbox's own, not a shadow copy, so the discard it publishes withdraws the
+   * optimistic echo and settles the refund ledger without any of that being
+   * repeated here — the prompt now exists only as the draft on screen.
+   * @returns whether a prompt was taken; `false` leaves Up to the editor.
+   */
+  const popQueuedForEdit = (): boolean => {
+    const item = pendingUserQueue(agent.inbox).at(-1)
+    if (item === undefined) return false
+    // The ledger holds what this terminal submitted, already trimmed; a prompt
+    // inserted from elsewhere is flattened out of its own blocks.
+    const text = pendingSteering.get(item.message.id) ?? contentText(item.message.content).trim()
+    // Read before the removal below, whose discard notification settles this
+    // very entry.
+    const attached = attachedContexts.get(item.message.id)
+    // Racing the driver: it claimed the prompt between the projection and here,
+    // so the prompt is being answered and there is nothing to edit.
+    if (!agent.inbox.remove(item.message.id)) return false
+    // The snapshot the prompt was sent with comes back with it. Left behind, an
+    // injected session recall is claimed on its own by the running turn — a dump
+    // of another session with no question attached — and the prompt in the
+    // editor would be re-sent against material the model no longer has.
+    if (attached !== undefined) {
+      attachedContexts.delete(item.message.id)
+      if (attached.injected) agent.inbox.remove(attached.message.id)
+    }
+    editor.setText(text)
+    // `Editor.setText` mutates the buffer without asking for a redraw.
+    requestRender()
+    markQueueHintLearned()
+    return true
   }
 
   /** Drop the armed first Esc, so the next one asks again instead of acting. */
@@ -4886,6 +5222,8 @@ export function createTuiChat(
     showRewind()
   }
 
+  /** Whether the last Up press was taken by the queue, so its tail is too. */
+  let upClaimed = false
   const removeInputListener = ui.addInputListener((data) => {
     if (overlayManager.hasActiveOverlay()) return undefined
     // `matchesKey` reports the key, not the transition: under the Kitty
@@ -4940,6 +5278,72 @@ export function createTuiChat(
       }
       return { consume: true }
     }
+    // Up belongs to the editor; the queue only borrows it, and only when
+    // borrowing costs nothing. Claude Code's three gates, adapted: an open
+    // completion popup owns its own arrows, a draft in progress is never
+    // overwritten, and an empty queue leaves prompt history exactly as it was.
+    // An empty draft is this terminal's reading of Claude Code's "cursor on the
+    // first row" — pi-tui keeps visual-line arithmetic private, and an empty
+    // draft is on the first row by definition, so the gate is the stricter one
+    // and taking a prompt into the editor can never lose typing.
+    //
+    // Plus one gate a terminal needs that a browser tab does not: only while a
+    // turn runs. That is when a queue is a thing the user is watching (the
+    // badge counts it and the placeholder offers this key), and it keeps Up on
+    // an idle prompt meaning what it has always meant — the prompt history —
+    // rather than briefly handing back a prompt the driver is about to claim.
+    //
+    // Bound by matching the editor's own action rather than by declaring an
+    // `app.*` binding on `up`: an app binding would shadow `tui.editor.cursorUp`
+    // outright, and `/hotkeys` would be right to report it as a collision.
+    if (keybindings.matches(data, 'tui.editor.cursorUp')) {
+      // The press that empties the queue closes the gate behind itself, so
+      // under the Kitty protocol its own release and repeats would fall through
+      // to the editor and recall history over the prompt just taken. A claimed
+      // press owns every event of its key.
+      if (!press) return upClaimed ? { consume: true } : undefined
+      upClaimed = runningStatus !== undefined
+        && inlineFocusTarget === undefined
+        // A question or permission dialog draws in the inline slot rather than
+        // over the screen, and Up is how its own rows are chosen. The manager's
+        // own modals are already refused above, whichever slot they drew in;
+        // this reads the focus the slot holds, so a dialog whose focus outlives
+        // its overlay session by a frame still keeps its arrows.
+        && !editor.isShowingAutocomplete()
+        && editor.getText() === ''
+        && popQueuedForEdit()
+      return upClaimed ? { consume: true } : undefined
+    }
+    // Send this one prompt the other way: queue it when Enter would steer, and
+    // steer with it when Enter would queue. Answered before `app.cancel` for
+    // the same reason `app.draft.edit` is — a legacy Alt is an ESC prefix — and
+    // it has to be answered before the editor sees the key at all, because the
+    // editor's own Enter would submit with the preference unchanged.
+    if (keybindings.matches(data, 'app.submit.opposite')) {
+      // A completion popup takes Enter to accept the highlighted entry, and a
+      // key that accepted a completion and sent the line in one press would
+      // make the popup dangerous to open. Same rule Esc follows below.
+      if (editor.isShowingAutocomplete()) return undefined
+      // An empty draft sends nothing, which is where the web chat's "steer
+      // everything queued" gesture would go if this terminal grew one.
+      if (press && !editor.disableSubmit && editor.getText() !== '') {
+        pendingSubmitGesture = 'opposite'
+        // Handed to the editor rather than read out of it: `submitValue()`
+        // expands paste markers, clears the buffer and drives history, and a
+        // second path into `submitLine` would have to reimplement all three.
+        editor.handleInput('\r')
+        // Disarmed the moment the editor is done with the key, because Enter
+        // does not always submit: a draft ending in a backslash turns it into a
+        // newline (pi-tui's workaround for terminals with no Shift+Enter), and
+        // a paste in progress buffers it. Either way `submitLine` never runs,
+        // and an inverse left armed would flip the NEXT plain Enter — steering
+        // a turn the user meant to queue behind, or interrupting one they meant
+        // to leave alone, with nothing on screen saying so. A submission that
+        // did happen has already read the slot on its way in.
+        pendingSubmitGesture = 'enter'
+      }
+      return { consume: true }
+    }
     if (keybindings.matches(data, 'app.cancel')) {
       // An open completion popup owns Esc first: the editor closes it, and a
       // key that dismissed the popup and cancelled the turn in one press would
@@ -4961,10 +5365,17 @@ export function createTuiChat(
           // check the flag only at its next boundary) and arms the escape hatch,
           // and the third leaves without the turn — the only exit available when
           // the turn is what is stuck.
+          // Cancelling empties the inbox either way, so the queued prompts come
+          // back to the editor here exactly as they do under Esc: the two keys
+          // mean the same thing about the turn, and typed text that no path
+          // ever hands back is text the user simply loses. Idempotent on an
+          // already-empty ledger, so the repeat rung can call it too.
           if (!cancelRequested) {
+            popQueuedSteering()
             cancelActiveTurn()
             disarmExit()
           } else if (exitArmed === undefined) {
+            popQueuedSteering()
             cancelActiveTurn()
             armExit(t('status.flash.exitWithoutTurn'))
           } else {
@@ -4972,6 +5383,13 @@ export function createTuiChat(
             void shutdown(true)
           }
         } else if (editor.getText() !== '') {
+          // Stored before it is dropped, for Esc's reason and one of this
+          // ladder's own: the rung above hands the cancelled turn's queue back
+          // into this draft, and a cancel that settles fast turns the "press it
+          // again" this ladder invites into a single press that erases what the
+          // press before it just returned. Expanded, so a `[paste #1 …]` marker
+          // recalls the pasted text rather than the marker (see `handleEscape`).
+          editor.addToHistory(editor.getExpandedText())
           editor.setText('')
           disarmExit()
           // `Editor.setText` mutates the buffer without asking for a redraw, so
@@ -5000,6 +5418,32 @@ export function createTuiChat(
       return { consume: true }
     }
     return undefined
+  })
+
+  /**
+   * Deliver a queued prompt's parked snapshot with the step that claims it.
+   *
+   * The pre-step batch is the one place both halves of such a submission can be
+   * put back together. `agent.inject()` cannot do it: injected context takes the
+   * NEAREST step boundary, which for a prompt queued behind a running turn
+   * belongs to that turn — the answer the user chose not to disturb — and the
+   * prompt's own turn would then open without the material it asked about. So
+   * the snapshot waits in {@link attachedContexts} and joins the batch here,
+   * ahead of the prompt, which is where injecting it would have put it. The
+   * loop logs every message of the batch, so it lands in the transcript as the
+   * same context card either way.
+   */
+  const disposeAttachedContext = ctx.on('agent/pre-step', async (payload, next) => {
+    const decision = await next()
+    if (payload.agent !== agent || attachedContexts.size === 0 || decision.kind === 'reject') return decision
+    const parked: UserMessage[] = []
+    for (const message of payload.messages) {
+      const attached = attachedContexts.get(message.id)
+      if (attached === undefined || attached.injected) continue
+      attachedContexts.delete(message.id)
+      parked.push(attached.message)
+    }
+    return parked.length === 0 ? decision : { ...decision, messages: [...parked, ...decision.messages] }
   })
 
   // Transcript rows are the store's business. This listener owns only what the
@@ -5080,25 +5524,42 @@ export function createTuiChat(
     requestRender()
   })
   const settlePendingSteering = (id: MessageId): void => {
-    if (pendingSteering.delete(id)) refreshStatus()
+    pendingSteering.delete(id)
   }
+  // Every insertion, including the ones this terminal did not make: a prompt a
+  // second host steered into this session is queued work the user is waiting
+  // on, and the badge that says how much work is queued has to know about it.
+  const disposeInserted = ctx.on('agent/inbox/inserted', (payload) => {
+    if (payload.agent === agent) refreshQueueState()
+  })
   const disposeClaimed = ctx.on('agent/inbox/claimed', (payload) => {
-    if (payload.agent === agent) settlePendingSteering(payload.message.id)
+    if (payload.agent !== agent) return
+    settlePendingSteering(payload.message.id)
+    settleAttachedContext(payload.message.id, true)
+    refreshQueueState()
   })
   const disposeDiscarded = ctx.on('agent/inbox/discarded', (payload) => {
     if (payload.agent !== agent) return
+    settleAttachedContext(payload.message.id, false)
     // Discarded means no `user/message` will ever land for it (cancelling a
     // turn clears the whole inbox), so the echo has to go with it: the model
     // never saw this prompt, and a transcript that keeps showing it is lying.
     store.withdrawOptimistic(payload.message.id)
     settlePendingSteering(payload.message.id)
+    refreshQueueState()
   })
   const disposeStatus = ctx.on('agent/status', (payload) => {
     if (payload.agent !== agent) return
-    // Leaving 'running' ends the turn's status line; clear any badge so the
-    // next running turn starts from zero (and a cancellation, which discards
-    // the queue without logging drains, cannot strand a stale count).
-    if (payload.status !== 'running') pendingSteering.clear()
+    // Leaving 'running' reconciles the refund ledger against the inbox rather
+    // than emptying it: a cancellation can discard the queue without every
+    // discard reaching this terminal, and those entries have to go — but the
+    // ones the inbox still holds are still refundable, and dropping their text
+    // would lose prompts the user can still get back.
+    if (payload.status !== 'running') {
+      const pending = new Set(pendingUserQueue(agent.inbox).map(item => item.message.id))
+      for (const id of [...pendingSteering.keys()]) if (!pending.has(id)) pendingSteering.delete(id)
+    }
+    refreshQueueState()
     setStatus(payload.status)
   })
   // The transcript's failure row is the folded `turn/end` notice, so the live
@@ -5149,6 +5610,8 @@ export function createTuiChat(
     disposeSnapshots()
     store.dispose()
     disposeSessionEvents()
+    disposeAttachedContext()
+    disposeInserted()
     disposeClaimed()
     disposeDiscarded()
     disposeStatus()

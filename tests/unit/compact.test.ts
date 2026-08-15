@@ -262,12 +262,21 @@ describe('TUI /compact', { skip: skipWithoutEntry }, () => {
   it('registers into the same list /help and autocomplete read', async () => {
     // Tall enough for the whole `/help` page: the command table sits below the
     // shortcut table, and a scrolled panel would make this a scrolling test.
+    // A tall terminal is not enough on its own — a panel stops at
+    // `questionDialogMaxHeight` whatever the terminal has — so the page height
+    // is raised here rather than left to the number of shortcut rows above the
+    // table, which is not this test's subject.
     const terminal = new HeadlessTerminal(120, 80)
     const before = terminal.frames
     const harness = await createTuiTestHarness(terminal, () => {}, {
       cwd: '/workspace/project',
       services: { compaction: fakeEngine(() => Promise.resolve(OUTCOME)) },
-      config: { title: 'DSH compact', welcome: 'ready.', theme: { color: false, inputPrompt: INPUT_PROMPT } },
+      config: {
+        title: 'DSH compact',
+        welcome: 'ready.',
+        questionDialogMaxHeight: 60,
+        theme: { color: false, inputPrompt: INPUT_PROMPT },
+      },
     })
     await terminal.waitForFrame(before)
     try {
@@ -281,6 +290,42 @@ describe('TUI /compact', { skip: skipWithoutEntry }, () => {
       const frame = terminal.text()
       assert.match(frame, /\/compact/u, frame)
       assert.match(frame, /把更早的对话历史压缩成一段摘要/u, frame)
+    } finally {
+      await disposeTuiTestHarness(harness)
+      await terminal.dispose()
+    }
+  })
+
+  it('is one page down the /help panel at the shipped panel height', async () => {
+    // The same registration seen the way a deployment that configures nothing
+    // sees it: on an ordinary terminal the shortcut table owns the panel's
+    // first screen and the command table starts on the second. The case above
+    // raises the page height to read both at once, which leaves nobody
+    // watching this budget — and a shortcut row added without one would push
+    // the command list a page further down with every test still green.
+    const terminal = new HeadlessTerminal(96, 32)
+    const before = terminal.frames
+    const harness = await createTuiTestHarness(terminal, () => {}, {
+      cwd: '/workspace/project',
+      services: { compaction: fakeEngine(() => Promise.resolve(OUTCOME)) },
+      config: {
+        title: 'DSH compact',
+        welcome: 'ready.',
+        theme: { color: false, inputPrompt: INPUT_PROMPT },
+      },
+    })
+    await terminal.waitForFrame(before)
+    try {
+      ;(harness.controller as unknown as SubmitHandle).submit('/help')
+      await delay(SETTLE_MS)
+      const opened = terminal.text()
+      assert.match(opened, /Enter send/u, `the panel opens on the shortcut table:\n${opened}`)
+      assert.doesNotMatch(opened, /\/compact/u, 'which fills the first screen on its own')
+
+      const paged = terminal.frames
+      terminal.send('\x1b[6~')
+      await terminal.waitForFrame(paged)
+      assert.match(terminal.text(), /\/compact/u, `and the command table is the next screen:\n${terminal.text()}`)
     } finally {
       await disposeTuiTestHarness(harness)
       await terminal.dispose()
