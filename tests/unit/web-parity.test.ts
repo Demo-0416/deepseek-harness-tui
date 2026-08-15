@@ -708,16 +708,20 @@ describe('TUI /export over an existing file', { skip: skipWithoutEntry }, () => 
 })
 
 describe('session rename and fork', { skip: skipWithoutEntry }, () => {
-  it('has no command to bind: they exist only as ApiProxy RPC methods', async () => {
+  it('binds rename to the title service and leaves fork to the ApiProxy', async () => {
     const harness = await mount()
     try {
       await delay(SETTLE_MS)
       const names = harness.ctx.commands.list(harness.agent).map(command => command.name)
-      // `sessions.rename` and `sessions.fork` live in
-      // @deepseek-ai/dsh-host-apiproxy as Remote methods the Web client calls;
-      // no package registers them on `ctx.commands`. A TUI binding would have
-      // to reach the ApiProxy, which a terminal profile does not mount.
-      assert.ok(!names.includes('rename'), `nothing registers /rename: ${names.join(', ')}`)
+      // `sessions.rename` is an ApiProxy Remote method, but its implementation
+      // is only a wrapper over `ctx.sessionTitle.rename()`, and that service is
+      // a line in the base bundle — the terminal calls it directly rather than
+      // through a webserver it does not mount.
+      assert.ok(names.includes('rename'), `/rename is registered: ${names.join(', ')}`)
+      // `sessions.fork` is different: it reads the source log, builds a seed,
+      // and re-parents a workspace, all of which only
+      // @deepseek-ai/dsh-host-apiproxy carries. A terminal profile mounts none
+      // of it.
       assert.ok(!names.includes('fork'), `nothing registers /fork: ${names.join(', ')}`)
     } finally {
       await unmount(harness)

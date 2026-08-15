@@ -10,7 +10,9 @@
  * @module dsh-tui/tests/harness
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import type { Terminal } from '@earendil-works/pi-tui'
@@ -50,6 +52,20 @@ import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import TuiPromptService from '../src/prompt.ts'
 import type { Config } from '../src/config.ts'
 import type { TuiRuntime } from '../src/runtime.ts'
+
+/**
+ * A `$DSH_HOME` of this test process's own, thrown away when it ends.
+ *
+ * A mounted terminal writes its prompt history to `$DSH_HOME/history.jsonl`;
+ * without this the whole end-to-end suite would read and write the developer's
+ * real `~/.dsh`, and the history assertions (`keys.test.ts`'s "nothing to
+ * search") would depend on whichever machine ran them. `node --test` gives each
+ * test file its own process, so each file gets its own empty home; a single
+ * case can still point the variable somewhere else and put it back.
+ */
+export const TEST_DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-tui-test-home-'))
+process.env['DSH_HOME'] = TEST_DSH_HOME
+process.on('exit', () => { rmSync(TEST_DSH_HOME, { recursive: true, force: true }) })
 
 /** Lifecycle handle a mounted interactive terminal channel returns. */
 export interface TuiControllerHandle {

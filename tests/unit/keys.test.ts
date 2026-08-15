@@ -11,6 +11,9 @@
  */
 
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
@@ -306,12 +309,21 @@ describe('prompt history search', { skip: skipWithoutEntry }, () => {
     }
   })
 
-  it('says there is nothing to search before the session has any history', async () => {
+  it('says there is nothing to search when nothing has ever been typed here', async () => {
+    // A home of this case's own: the history outlives the process now, so a
+    // "no history" assertion made against the home the rest of this file has
+    // been writing to would be answered by the prompts those cases submitted.
+    const home = await mkdtemp(join(tmpdir(), 'dsh-tui-empty-home-'))
+    const previousHome = process.env['DSH_HOME']
+    process.env['DSH_HOME'] = home
     const harness = await mount()
     try {
-      assert.match(unwrapped(await press(harness, CTRL_R)), /No prompt history in this session yet\./u)
+      assert.match(unwrapped(await press(harness, CTRL_R)), /No prompt history yet\./u)
     } finally {
       await unmount(harness)
+      if (previousHome === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previousHome
+      await rm(home, { recursive: true, force: true })
     }
   })
 })

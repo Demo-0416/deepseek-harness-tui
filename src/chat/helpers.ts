@@ -28,7 +28,7 @@ const EDITOR_FRAME_GLYPH = '─'
  * Entries pi-tui's own editor history keeps ({@link Editor.addToHistory} pops
  * past it), mirrored here so the two never disagree on which prompt is oldest.
  */
-const HISTORY_LIMIT = 100
+export const HISTORY_LIMIT = 100
 
 /**
  * Editor that carries its prompt inside the frame and shows a placeholder
@@ -68,6 +68,32 @@ export class HintEditor extends Editor {
   private readonly entries: string[] = []
 
   /**
+   * Called with each newly recorded prompt, already trimmed and already past
+   * pi-tui's duplicate rule.
+   *
+   * The mount hangs the cross-session file on this. A seeded replay passes
+   * `{ persist: false }` and never reaches it, so resuming a session does not
+   * write its whole history back out.
+   */
+  onHistoryAdd?: (text: string) => void
+
+  /**
+   * Lay a stored history in, newest first.
+   *
+   * pi-tui offers `addToHistory` alone — an unshift, with no clear and no way
+   * to append at the far end — so the only way to seat a list is to feed it
+   * backwards and let the newest entry go in last.
+   * @param newestFirst - the history, already deduplicated and already ordered.
+   */
+  seedHistory(newestFirst: readonly string[]): void {
+    for (let index = newestFirst.length - 1; index >= 0; index--) {
+      const text = newestFirst[index]
+      if (text === undefined) continue
+      this.addToHistory(text, { persist: false })
+    }
+  }
+
+  /**
    * The prompt history, newest first.
    *
    * Named around the parent's private `history` field rather than after it: an
@@ -87,13 +113,16 @@ export class HintEditor extends Editor {
    * newest entry is not stored twice. A mirror that kept an entry the parent
    * dropped would make Ctrl+R offer a prompt the up arrow cannot reach.
    * @param text - The submitted prompt.
+   * @param options - `persist: false` marks an entry that came from a replay or
+   *   from disk, so it is not written back out.
    */
-  override addToHistory(text: string): void {
+  override addToHistory(text: string, options?: { readonly persist?: boolean }): void {
     super.addToHistory(text)
     const trimmed = text.trim()
     if (trimmed === '' || this.entries[0] === trimmed) return
     this.entries.unshift(trimmed)
     if (this.entries.length > HISTORY_LIMIT) this.entries.pop()
+    if (options?.persist !== false) this.onHistoryAdd?.(trimmed)
   }
 
   override render(width: number): string[] {

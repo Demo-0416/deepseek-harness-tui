@@ -108,6 +108,7 @@ all three.
 | Ctrl+O | cycle tool cards: preview, full, hidden |
 | Ctrl+T | show or hide thinking blocks — off, thinking streams and goes with the step that wrote it; on, every step keeps it, history included. The model reasons either way; `showReasoning: false` turns the key off with it |
 | Ctrl+X | copy the last answer |
+| Alt+E | edit the draft in `$EDITOR` and take back what you save; `$VISUAL` first, then `$EDITOR`, then nano/vim/vi on `PATH`. `/editor` does the same for terminals that cannot send Alt |
 | Ctrl+L | redraw |
 | Esc | cancel the turn (and hand back what was queued behind it); again on a draft clears it; again on an empty prompt opens Rewind |
 | Ctrl+C | cancel while running, clear the draft while typing, twice to exit while idle; a third press leaves a turn that will not cancel |
@@ -147,12 +148,15 @@ left. Every other binding is configurable — see `keybindings` below.
 | `/theme [auto\|light\|dark\|no-color]` | the palette this terminal paints with; without an argument it opens the picker |
 | `/login [provider]` | give a provider an API key: pick a configured route or one the adapter offers, paste the key, and it is checked against the endpoint before being stored. The key goes to the credential store; settings record only the variable name |
 | `/provider [add]` | list configured providers and the ones `/login` can configure; `add` walks through name, endpoint, protocol, key, and the models the endpoint reports |
-| `/copy` | copy the last answer to the system clipboard |
+| `/copy [N]` | copy an answer to the system clipboard; without an argument the last one, `/copy 2` the one before it |
+| `/editor` | edit the current prompt in `$EDITOR`; the terminal is released while the editor runs and repainted when it exits |
 | `/new` | start a blank session in this workspace; the current one keeps its history and stays resumable |
 | `/clear` | clear the transcript view; the session log is unchanged |
+| `/rename [name]` | name this session yourself; the name is pinned and stops the automatic titler. Without an argument the title is regenerated and stays automatic |
+| `/compact` | compact older conversation history into one summary; the conversation stays on screen and the model keeps the summary. Takes no arguments |
 | `/lang [en\|zh]` | show or switch the interface language; the choice is remembered for the next session |
 | `/palette` | every color and attribute role this terminal renders |
-| `/export [path]` | write this session's log to a file and report the path; an existing file is replaced only after you confirm |
+| `/export [path \| clipboard]` | write this session's log to a file and report the path (an existing file is replaced only after you confirm); `clipboard` puts the session on the system clipboard as Markdown instead |
 | `/plugins` | search and inspect the Loader's plugin entries |
 | `/search [query]` | search this session's messages; an argument fills the panel's query box |
 | `/rewind` | go back to an earlier prompt in this session |
@@ -312,6 +316,7 @@ Values on the bundle row (`tui-runner`), all optional.
 | `markdownRenderer` | `claude` | `claude` (this bundle's renderer) or `pi` (pi-tui's `Markdown`); a `claude` render that throws falls back to `pi` for the rest of the process |
 | `maxToolOutputLines` | `6` | body lines kept in a collapsed tool card's head/tail preview |
 | `maxDiffEditLength` | `1000` | added and removed lines explored while deriving an exact line diff |
+| `maxPromptChars` | `10000` | characters one submitted prompt may carry; the middle of a longer one is dropped with a `... [N characters truncated] ...` marker and a notice, `0` sends every prompt whole |
 | `maxQuestionOptions` | `8` | options visible at once in a question panel |
 | `maxModelOptions` | `8` | models visible at once in the model selector |
 | `maxResumeOptions` | `8` | sessions visible at once in the resume selector |
@@ -325,6 +330,7 @@ Values on the bundle row (`tui-runner`), all optional.
 | `fileSearchMaxEntries` | `10000` | paths retained in one `@` workspace index |
 | `fileSearchExcludedDirectories` | see above | directory basenames the walker skips |
 | `fileSearchCommand` | — | `fd` path or name; unset discovers it on `PATH`, `""` disables it |
+| `externalEditor` | — | editor `Alt+E` and `/editor` hand the draft to; unset reads `$VISUAL`/`$EDITOR` then discovers one on `PATH`, `""` disables it. A GUI editor needs its wait flag (`code -w`); the known ones get it added |
 | `showHardwareCursor` | `false` | show the terminal's hardware cursor at the editor's IME marker |
 | `title` | `DeepSeek Harness` | terminal window title while the UI is mounted |
 | `theme.color` | `true` | apply the built-in ANSI palette |

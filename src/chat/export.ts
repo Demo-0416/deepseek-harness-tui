@@ -18,6 +18,11 @@
  * The archive is a single file rather than the Web ZIP because the two things
  * the ZIP bundles — descendant sessions and image attachments — come from
  * `sessionQuery` and `attachments`, neither of which a TUI profile mounts.
+ *
+ * `/export clipboard` is the second delivery this module renders for: the file
+ * carries the log, which is written for a machine, while the clipboard carries
+ * a Markdown transcript, which is written to be pasted into another window for
+ * a person to read.
  * @module @deepseek-ai/dsh-tui/chat/export
  */
 
@@ -26,7 +31,9 @@ import { isAbsolute, resolve as resolvePath } from 'node:path'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { errorChain } from '@deepseek-ai/dsh-llm'
-import { displayInlineText } from '../components/text.ts'
+import { displayInlineText, displayText } from '../components/text.ts'
+import { t } from '../i18n/index.ts'
+import type { TranscriptEntry } from './transcript-search.ts'
 
 /** Extension of the written artifact: one JSON record per line. */
 const LOG_EXTENSION = '.jsonl'
@@ -190,4 +197,103 @@ export async function exportSessionLog(
   } catch (error: unknown) {
     return { kind: 'error', text: `Session log export failed: ${displayInlineText(errorChain(error))}` }
   }
+}
+
+/** The keyword that sends `/export` to the clipboard instead of to a file. */
+const CLIPBOARD_TARGET = 'clipboard'
+
+/**
+ * Whether this `/export` asks for the clipboard rather than for a file.
+ *
+ * Only the bare word counts, so a file actually named `clipboard` is still
+ * exportable as `./clipboard`. Matched case-insensitively because the keyword
+ * is a word the user says, not a path the filesystem owns.
+ * @param rawInput - the text after the command name.
+ * @returns true when this export goes to the clipboard.
+ */
+export function isClipboardExportTarget(rawInput: string): boolean {
+  return rawInput.trim().toLowerCase() === CLIPBOARD_TARGET
+}
+
+/** The header facts of a Markdown export, read by the entry point from the snapshot and the header. */
+export interface SessionMarkdownMeta {
+  /** The session's durable id. */
+  readonly sessionId: string
+  /** The folded session title, when one was written. */
+  readonly title?: string
+  /** The session's workspace. */
+  readonly cwd?: string
+  /** The model label from the latest request context. */
+  readonly model?: string
+  /** When the export ran, in milliseconds, from the entry point's own clock. */
+  readonly exportedAt: number
+}
+
+/** How much of a tool entry survives into the Markdown. */
+const TOOL_BODY_MAX = 400
+
+/**
+ * Clip and mark: the OSC 52 payload is written to the terminal in one go, and a
+ * single five-megabyte file read must not stretch the export until the terminal
+ * drops it.
+ * @param text - the body to clip.
+ * @param max - the maximum number of characters kept.
+ * @returns the body, ellipsized when it had to be cut.
+ */
+function clipBody(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
+}
+
+/**
+ * The fence for one body: one backtick longer than the longest run inside it,
+ * and never shorter than three.
+ * @param text - the body the fence has to close over.
+ * @returns the fence string.
+ */
+function fenceFor(text: string): string {
+  let longest = 0
+  for (const run of text.match(/`+/gu) ?? []) longest = Math.max(longest, run.length)
+  return '`'.repeat(Math.max(3, longest + 1))
+}
+
+/**
+ * Render this session as a Markdown transcript.
+ *
+ * The entries come from `transcriptEntries`, so order, emptiness, and "a
+ * rewound echo is not a message" are decided exactly as `/search` decides them
+ * — the exported session and the searchable one are the same session. Headings
+ * use each entry's own localized label, and the fact list reuses the `/status`
+ * card's row names.
+ * @param entries - the flattened session entries, in log order.
+ * @param meta - the session identity and export time for the header.
+ * @returns a Markdown document ending in exactly one newline.
+ */
+export function renderSessionMarkdown(
+  entries: readonly TranscriptEntry[],
+  meta: SessionMarkdownMeta,
+): string {
+  const heading = meta.title === undefined || meta.title.trim() === ''
+    ? `${t('status.row.session')} ${meta.sessionId}`
+    : meta.title
+  const blocks: string[] = [`# ${displayInlineText(heading)}`]
+  const facts: string[] = [`- ${t('status.row.session')}: ${displayInlineText(meta.sessionId)}`]
+  if (meta.cwd !== undefined) facts.push(`- ${t('status.row.directory')}: ${displayInlineText(meta.cwd)}`)
+  if (meta.model !== undefined) facts.push(`- ${t('status.row.model')}: ${displayInlineText(meta.model)}`)
+  facts.push(`- ${t('export.markdown.exported')}: ${new Date(meta.exportedAt).toISOString()}`)
+  blocks.push(facts.join('\n'))
+  for (const entry of entries) {
+    blocks.push(`## ${displayInlineText(entry.label)}`)
+    if (entry.role === 'tool') {
+      const body = clipBody(displayText(entry.text), TOOL_BODY_MAX)
+      const fence = fenceFor(body)
+      blocks.push(`${fence}\n${body}\n${fence}`)
+      continue
+    }
+    if (entry.role === 'reference') {
+      blocks.push(entry.text.split('\n').map(label => `- ${displayInlineText(label)}`).join('\n'))
+      continue
+    }
+    blocks.push(displayText(entry.text))
+  }
+  return `${blocks.join('\n\n')}\n`
 }

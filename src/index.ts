@@ -135,6 +135,16 @@ import {
   sessionTokens,
 } from './chat/tokens.ts'
 import {
+  contextPressure,
+  createContextAnnouncementTracker,
+  nextContextAnnouncement,
+  type ContextPressure,
+} from './chat/context-pressure.ts'
+import {
+  runCompactCommand,
+  type ManualCompactionEngine,
+} from './chat/compact.ts'
+import {
   fadeGlyph,
   formatQueuedStatus,
   formatStatusDuration,
@@ -208,17 +218,24 @@ import {
   SKILL_COMMAND_PREFIX,
 } from './chat/skill-invocation.ts'
 import { ReferenceAutocompleteProvider } from './chat/autocomplete.ts'
-import { clipboardPath, copyToClipboard } from './chat/clipboard.ts'
+import { clipboardPath, copyToClipboard, type ClipboardPath } from './chat/clipboard.ts'
+import { collectAnswerTexts, parseCopyArgument, type CopyRequest } from './chat/copy.ts'
+import { truncatePrompt } from './chat/prompt-truncation.ts'
 import {
   BANNER_REVEAL_INTERVAL_MS,
   bannerRevealWidth,
   formatCwd,
   gitBranch,
   HintEditor,
+  HISTORY_LIMIT,
   packageVersion,
   resumeCommandLine,
   shortSessionId,
 } from './chat/helpers.ts'
+import {
+  openPromptHistory,
+  PROMPT_HISTORY_FLUSH_TIMEOUT_MS,
+} from './chat/prompt-history.ts'
 import {
   createModelController,
   type ModelController,
@@ -236,9 +253,12 @@ import { createQuestionQueue } from './chat/questions.ts'
 import { startPrintRun, type PrintIo } from './print.ts'
 import {
   exportSessionLog,
+  isClipboardExportTarget,
+  renderSessionMarkdown,
   type SessionArtifactReader,
   type SessionFlusher,
 } from './chat/export.ts'
+import { runRenameCommand, type SessionTitleWriter } from './chat/rename.ts'
 import {
   formatGoalPrompt,
   formatSessionStats,
@@ -251,6 +271,13 @@ import type { TuiForkRequest, TuiResumeHost, TuiRuntime } from './runtime.ts'
 import { toolCallTouchesFiles, WorkspaceFileSearch } from './chat/file-autocomplete.ts'
 import { resolveFileSearchCommand } from './chat/fd.ts'
 import {
+  editTextExternally,
+  resolveExternalEditor,
+  type ExternalEditorResolution,
+} from './chat/external-editor.ts'
+import {
+  copyArgumentCompletions,
+  exportArgumentCompletions,
   langArgumentCompletions,
   loginArgumentCompletions,
   memoizeListing,
@@ -273,6 +300,7 @@ import {
   currentLocale,
   localeName,
   onLocaleChange,
+  plural,
   setLocale,
   t,
   type MessageKey,
@@ -441,6 +469,14 @@ function lastActivityTime(session: Session): number | undefined {
 const STATUS_FLASH_MS = 1_500
 
 /**
+ * How long the "there is an editor for this" hint holds the status row the
+ * first time a draft grows a second line. Claude Code's own `timeoutMs`
+ * (`Notifications.tsx:146-160`), and long enough to be read once without
+ * becoming a thing that keeps happening.
+ */
+const EXTERNAL_EDITOR_HINT_MS = 5_000
+
+/**
  * How long a first Esc stays armed for the second one that clears the draft or
  * opens Rewind. Claude Code's own double-press window, and short enough that
  * two unrelated cancels are never mistaken for one gesture.
@@ -535,6 +571,7 @@ function keyboardShortcuts(manager: KeybindingsManager): string[] {
       copy: key('app.message.copy'),
       redraw: key('app.screen.redraw'),
     }),
+    t('hotkeys.externalEditor', { key: key('app.draft.edit') }),
     t('hotkeys.cancel', { cancel: key('app.cancel') }),
     t('hotkeys.exit', { exit: key('app.exit') }),
     t('hotkeys.interrupt'),
@@ -768,6 +805,17 @@ export function createTuiChat(
   const todoContainer = new Container()
   const questionContainer = new Container()
   /**
+   * The component holding the inline modal slot, while one holds it.
+   *
+   * Inline dialogs (permission prompts, agent questions) are children of
+   * {@link questionContainer} rather than pi-tui overlays, so they are not on
+   * the overlay stack and pi-tui's "focus fell off a visible overlay, put it
+   * back" self-heal never covers them. Anything that reclaims focus for the
+   * prompt has to ask this first, or a dialog that arrived while the prompt was
+   * away is left on screen and unanswerable — the turn behind it blocks forever.
+   */
+  let inlineFocusTarget: Component | undefined
+  /**
    * Holds the mode badges — plan mode, auto-accept — while either is on, and
    * nothing at all otherwise: an empty container costs no row, which is what
    * keeps the prompt in the same place in the ordinary case.
@@ -901,7 +949,37 @@ export function createTuiChat(
    * scan that a `/preset` switch later re-runs.
    */
   const skillsAvailable = skillRegistry() !== undefined
+  /**
+   * The compaction engine serving THIS agent, resolved on every use.
+   *
+   * Addressed through the preset roster for the same reason plan mode is: the
+   * shipped `standard` preset mounts compaction behind `isolate: { compaction }`,
+   * a realm no host context can see, and the host lookup is the fallback for a
+   * profile that mounts it on the host plane instead. Re-resolved per call
+   * because `/preset` re-links a blank session to another composition — one
+   * that may compose no compaction at all.
+   * @returns the engine serving this agent now, or `undefined` when none is mounted.
+   */
+  const compactionEngine = (): ManualCompactionEngine | undefined => (
+    typeof presetRoster?.serviceFor === 'function'
+      ? presetRoster.serviceFor(agent, 'compaction') as ManualCompactionEngine | undefined
+      : undefined
+  ) ?? ctx.get('compaction') as ManualCompactionEngine | undefined
   const cwd = agent.session.header.cwd ?? process.cwd()
+  /**
+   * The prompts this workspace has been given, across sessions
+   * (`$DSH_HOME/history.jsonl`).
+   *
+   * Failures go to the log and no further: losing one history entry is not
+   * worth interrupting a session over, and it is not something the user can act
+   * on — the same call Claude Code makes (`history.ts:131-134 / 319-321`).
+   */
+  const promptHistory = openPromptHistory({
+    cwd,
+    sessionId: agent.session.id,
+    reportError: (message) => { ctx.logger.warn(`dsh-tui: ${message}`) },
+  })
+  editor.onHistoryAdd = (text) => { promptHistory.append(text) }
   /**
    * `fd` if this host has it, which is what makes `@` respect `.gitignore`:
    * pi's own provider shells out to it, and `fd` reads the ignore files the
@@ -909,6 +987,14 @@ export function createTuiChat(
    * on `PATH` mid-session is not worth a `PATH` walk per keystroke.
    */
   const fileSearchCommand = resolveFileSearchCommand(resolved.fileSearchCommand)
+  /**
+   * Which editor `Alt+E` hands the draft to, answered per press rather than
+   * once: a user who exports `$EDITOR` in another pane and comes back to this
+   * one gets the editor they just set, and a refusal names the reason it found
+   * now rather than the reason it found at mount.
+   * @returns the editor, or why there is none.
+   */
+  const externalEditor = (): ExternalEditorResolution => resolveExternalEditor(resolved.externalEditor)
   /**
    * Where `/lang` keeps its answer for the next process. Resolved once: the
    * choice between the Host's settings document and this bundle's own file is a
@@ -948,6 +1034,14 @@ export function createTuiChat(
   const skillAbort = new AbortController()
   const tokens = sessionTokens(agent.session)
   const commandControllers = new Set<AbortController>()
+  /**
+   * The controller of a `/compact` this terminal started, so Esc can stop it.
+   *
+   * Separate from {@link compacting} — the stopwatch — which is derived from
+   * session events and also lights up for a compaction the automatic policy or
+   * another process ran. Only what this terminal started is ours to cancel.
+   */
+  let activeCompaction: AbortController | undefined
   const referenceControllers = new Set<AbortController>()
   let tuiServiceFiber: Fiber | undefined
   // The route the next step runs under, resolved on EVERY read rather than
@@ -1125,6 +1219,14 @@ export function createTuiChat(
     }
     return measuredContext.totalTokens
   }
+  /**
+   * The highest pressure band this terminal has already put a row in the
+   * transcript for.
+   *
+   * Per-mount state on purpose: `/new`, `/resume`, and every handoff rebuild
+   * this channel, and a fresh session starts un-warned.
+   */
+  const contextAnnouncement = createContextAnnouncementTracker()
   const promptValues: TuiPromptValueHandle[] = [
     ctx.tuiPrompt.register('cwd', palette.bold(palette.accent(formattedCwd))),
     ctx.tuiPrompt.register('git/worktree', branch === undefined ? undefined : palette.dim(` (${displayText(branch)})`)),
@@ -1158,10 +1260,17 @@ export function createTuiChat(
       ? t('prompt.modelUnset')
       : compactTargetLabel(target.current)))}`)
     tokenValue.set(`  ${palette.dim(rate === undefined ? usage : `${usage}  ${t('prompt.cache', { rate })}`)}`)
-    const contextWindow = modelController.contextWindow()
-    contextValue.set(contextWindow === undefined ? undefined : `  ${palette.dim(
-      t('prompt.context', { percent: Math.min(100, Math.round(contextTokens() / contextWindow * 100)) }),
-    )}`)
+    // One measurement feeds both the row's colour and the escalation check, so
+    // a warning can never disagree with the percentage printed beside it.
+    const pressure = contextPressure(contextTokens(), modelController.contextWindow())
+    contextValue.set(pressure === undefined ? undefined : `  ${
+      pressure.level === 'normal'
+        ? palette.dim(t('prompt.context', { percent: pressure.percentUsed }))
+        : (pressure.level === 'critical' ? palette.error : palette.warning)(
+          t('prompt.contextLow', { remaining: pressure.percentRemaining }),
+        )
+    }`)
+    if (pressure !== undefined) announceContextPressure(pressure)
     const goalFragment = formatGoalPrompt(goalState.goal)
     goalValue.set(goalFragment === undefined ? undefined : `  ${palette.dim(goalFragment)}`)
     const queued = runningStatus === undefined ? undefined : formatQueuedStatus(pendingSteering.size)
@@ -1307,6 +1416,56 @@ export function createTuiChat(
   }
 
   /**
+   * Whether telling the user to run `/compact` would get them anywhere.
+   *
+   * The command itself is always registered — `/help` and the README table have
+   * to be stable — so its presence answers nothing; what varies is whether this
+   * session's preset composes a compaction service behind it. Read when the
+   * warning is written rather than at mount, because `/preset` can move the
+   * session onto a composition that mounts none.
+   * @returns true when this agent has something to compact with.
+   */
+  const canCompact = (): boolean => compactionEngine() !== undefined
+
+  /**
+   * Put ONE row in the transcript the first time the window gets tight, and one
+   * more the first time it gets critical.
+   *
+   * The prompt row already carries the live percentage; this exists because a
+   * user reading a long answer is not looking at the prompt row, and because
+   * `/compact` is an instruction, not a colour. `nextContextAnnouncement` owns
+   * the "once per band" rule and re-arms itself when a compaction drops the
+   * band, so this runs every frame and writes at most twice per cycle.
+   *
+   * A live standalone compaction is already the answer to this warning, so the
+   * check is skipped while one runs rather than announcing a problem that is
+   * being fixed — and skipped WITHOUT touching the tracker, so the drop the
+   * compaction produces is what re-arms it.
+   * @param pressure - the reading the prompt row was just painted from.
+   */
+  const announceContextPressure = (pressure: ContextPressure): void => {
+    if (compacting !== undefined) return
+    const announce = nextContextAnnouncement(contextAnnouncement, pressure.level)
+    if (announce === undefined) return
+    const remaining = pressure.percentRemaining
+    const used = formatDiagnosticNumber(Math.round(pressure.used))
+    const capacity = formatDiagnosticNumber(pressure.window)
+    // Deferred for the reason `notice.markdownDegraded` is: this runs inside
+    // `requestRender`, and appending a row there would mutate the container the
+    // frame is walking. The tracker was already updated synchronously above, so
+    // a re-entrant frame cannot queue the same row twice.
+    queueMicrotask(() => {
+      if (disposed) return
+      const action = t(canCompact() ? 'notice.contextCompactAction' : 'notice.contextNoCompactAction')
+      appendNotice(
+        t(announce === 'critical' ? 'notice.contextCritical' : 'notice.contextLow',
+          { remaining, used, capacity, action }),
+        announce === 'critical' ? 'error' : 'warning',
+      )
+    })
+  }
+
+  /**
    * The two ways out of a session whose agent is gone, named by every refusal
    * that mentions it.
    *
@@ -1382,52 +1541,67 @@ export function createTuiChat(
   }
 
   /**
-   * The last answer this session produced, as plain text.
-   *
-   * Read from the store's own snapshot rather than the rendered rows: what the
-   * user wants on their clipboard is the model's text, not the markdown the
-   * terminal painted from it. Steps that produced only tool calls carry no
-   * text, so the search walks back to the last one that did.
-   * @returns the answer, or `undefined` before this session has one.
+   * The confirmation for one clipboard write, worded for the path it actually
+   * took: on a remote host "copied" and "loaded into the tmux buffer" are
+   * different things to the person reading it.
+   * @param path - the route the clipboard port took this time.
+   * @param count - how many characters went out.
+   * @returns the line for the status row.
    */
-  const lastAnswerText = (): string | undefined => {
-    const { nodes } = store.getSnapshot()
-    for (let index = nodes.length - 1; index >= 0; index -= 1) {
-      const node = nodes[index]
-      if (node?.kind !== 'assistant' || node.text.trim() === '') continue
-      return displayText(node.text)
-    }
-    return undefined
-  }
+  const clipboardConfirmation = (path: ClipboardPath, count: number): string =>
+    path === 'native'
+      ? t('status.flash.copied', { count })
+      : t(path === 'tmux-buffer' ? 'status.flash.copiedTmux' : 'status.flash.copiedOsc52')
 
   /**
-   * Put the last answer on the system clipboard (`/copy`, Ctrl+X).
+   * Put one answer on the system clipboard (`/copy`, `/copy N`, Ctrl+X).
    *
    * The escape sequence the clipboard port returns is written straight to the
    * terminal, outside the frame: it is an instruction to the terminal
    * emulator, not a cell the renderer owns, and a synchronized update would
-   * make it part of a frame that pi-tui may redraw. The confirmation names the
-   * path the copy actually took, because on a remote host "copied" and "loaded
-   * into the tmux buffer" are different things to the person reading it.
+   * make it part of a frame that pi-tui may redraw.
+   *
+   * Without an argument "nothing to copy" is a fact about the screen and is
+   * flashed on the status row; with one it is a command result and stays as a
+   * transcript line — a refused argument is something the user comes back to
+   * read, and a flash is gone before they look.
+   * @param request - which answer this invocation asks for.
+   * @returns the command result; the Ctrl+X path ignores it.
    */
-  const copyLastAnswer = (): void => {
-    const text = lastAnswerText()
-    if (text === undefined) {
-      flashStatus(t('status.flash.nothingToCopy'))
-      return
+  const copyAnswer = (request: CopyRequest): CommandResult => {
+    if (request.kind === 'invalid') {
+      return { kind: 'error', text: t('copy.usage', { input: displayInlineText(request.input) }) }
     }
+    const answers = collectAnswerTexts(store.getSnapshot().nodes)
+    if (answers.length === 0) {
+      if (request.kind === 'latest') {
+        flashStatus(t('status.flash.nothingToCopy'))
+        return { kind: 'success' }
+      }
+      return { kind: 'error', text: t('status.flash.nothingToCopy') }
+    }
+    const index = request.kind === 'latest' ? 0 : request.n - 1
+    if (index >= answers.length) {
+      return { kind: 'error', text: plural(answers.length, 'copy.outOfRange') }
+    }
+    const text = answers[index]!
     const path = clipboardPath()
     void copyToClipboard(text).then((sequence) => {
       if (disposed) return
       runtime.terminal.write(sequence)
-      flashStatus(path === 'native'
-        ? t('status.flash.copied', { count: text.length })
-        : t(path === 'tmux-buffer' ? 'status.flash.copiedTmux' : 'status.flash.copiedOsc52'))
+      const detail = clipboardConfirmation(path, text.length)
+      flashStatus(request.kind === 'latest'
+        ? detail
+        : t('status.flash.copiedNth', { n: index + 1, total: answers.length, detail }))
     }, (error: unknown) => {
       /* v8 ignore next 2 -- the clipboard port collapses every subprocess failure into an exit code. */
       if (!disposed) appendNotice(t('notice.copyFailed', { error: errorChain(error) }), 'error')
     })
+    return { kind: 'success' }
   }
+
+  /** The Ctrl+X entry: no argument, and no command result to report. */
+  const copyLastAnswer = (): void => { void copyAnswer({ kind: 'latest' }) }
 
   const extensionTheme: TuiTheme = Object.freeze({
     text: (value: string) => palette.text(value),
@@ -1470,10 +1644,12 @@ export function createTuiChat(
       )
       questionContainer.clear()
       questionContainer.addChild(modal)
+      inlineFocusTarget = component
       ui.setFocus(component)
       return {
         hide(): void {
           questionContainer.clear()
+          if (inlineFocusTarget === component) inlineFocusTarget = undefined
           ui.setFocus(editor)
         },
       }
@@ -2001,6 +2177,9 @@ export function createTuiChat(
       loginController.clearOverlay()
       questions.unregister()
       await runtime.terminal.drainInput(100, 20)
+      // The last prompt may still be in the history's write queue; wait for it,
+      // but never let one stuck disk write hold the exit.
+      await whenIdleOrTimeout(promptHistory.flush(), PROMPT_HISTORY_FLUSH_TIMEOUT_MS)
       ui.stop()
       if (exitProcess) {
         if (runtime.goodbyeMessage !== undefined) {
@@ -2717,14 +2896,16 @@ export function createTuiChat(
     const latestActivity = lastActivityTime(agent.session) ?? agent.session.header.createdAt
     const usedContext = Math.max(0, Math.round(contextTokens()))
     let context = t('status.contextUnknown', { used: formatDiagnosticNumber(usedContext) })
-    const contextWindow = modelController.contextWindow()
-    if (contextWindow !== undefined) {
-      const contextPercent = Math.round(usedContext / contextWindow * 100)
+    // The same reading the prompt row is painted from, so the panel and the row
+    // can never disagree about how full the window is. The meter keeps its own
+    // neutral colouring: it also serves the cache-hit row, where high is good.
+    const pressure = contextPressure(usedContext, modelController.contextWindow())
+    if (pressure !== undefined) {
       context = t('status.contextValue', {
-        meter: diagnosticMeter(contextPercent, palette),
-        percent: contextPercent,
-        used: formatDiagnosticNumber(usedContext),
-        capacity: formatDiagnosticNumber(contextWindow),
+        meter: diagnosticMeter(pressure.percentUsed, palette),
+        percent: pressure.percentUsed,
+        used: formatDiagnosticNumber(pressure.used),
+        capacity: formatDiagnosticNumber(pressure.window),
       })
     }
     const rate = cacheHitRate(tokens)
@@ -2865,8 +3046,9 @@ export function createTuiChat(
    * command whose argument is free text (or that takes none).
    *
    * `argumentHint` describes the shape of an argument; these say which values
-   * exist in THIS session, so `/model `, `/preset `, `/theme `, `/login `, and
-   * `/resume ` offer the same rows their pickers would. Optional services are
+   * exist in THIS session, so `/model `, `/preset `, `/theme `, `/login `,
+   * `/copy `, and `/resume ` offer the same rows their pickers would — and
+   * `/export ` names the one value of its own that is not a path. Optional services are
    * read inside the closure, not captured: the roster and the session store
    * mount independently of the command registry, so a source resolved when the
    * provider was built could be stale by the time a user types.
@@ -2906,6 +3088,16 @@ export function createTuiChat(
         )
       case 'provider':
         return providerArgumentCompletions
+      case 'copy':
+        // The snapshot is read per keystroke: an answer that just landed has to
+        // be countable immediately.
+        return prefix => copyArgumentCompletions(
+          collectAnswerTexts(store.getSnapshot().nodes),
+          prefix,
+          resolved.maxModelOptions,
+        )
+      case 'export':
+        return exportArgumentCompletions
       case 'resume':
         return prefix => resumeArgumentCompletions(
           {
@@ -3084,6 +3276,48 @@ export function createTuiChat(
   }
 
   /**
+   * Put this session on the clipboard as Markdown (`/export clipboard`).
+   *
+   * The content comes from the store's snapshot rather than the JSONL on disk:
+   * the log is written for a machine to read back, while what goes on the
+   * clipboard is pasted into another window for a person. The entries are
+   * `/search`'s own, so "what was exported" and "what is findable" are always
+   * the same session.
+   * @param signal - cancellation owned by the dispatching UI.
+   * @returns a success result naming how many entries went out and which
+   *   clipboard path carried them.
+   */
+  const exportSessionMarkdown = async (signal: AbortSignal): Promise<CommandResult> => {
+    const snapshot = store.getSnapshot()
+    const entries = transcriptEntries(snapshot.nodes)
+    if (entries.length === 0) return { kind: 'error', text: t('export.clipboard.empty') }
+    const markdown = renderSessionMarkdown(entries, {
+      sessionId: agent.session.id,
+      ...snapshot.title === undefined ? {} : { title: snapshot.title },
+      ...agent.session.header.cwd === undefined ? {} : { cwd: agent.session.header.cwd },
+      ...snapshot.model === undefined ? {} : { model: snapshot.model },
+      exportedAt: now(),
+    })
+    const path = clipboardPath()
+    try {
+      // Checked once, before the write: the clipboard port's subprocess has a
+      // deadline of its own and no cancellation entry, so a signal threaded
+      // into it would only be decoration.
+      signal.throwIfAborted()
+      const sequence = await copyToClipboard(markdown)
+      if (!disposed) runtime.terminal.write(sequence)
+      return {
+        kind: 'success',
+        text: plural(entries.length, 'export.clipboard.done', {
+          detail: clipboardConfirmation(path, markdown.length),
+        }),
+      }
+    } catch (error: unknown) {
+      return { kind: 'error', text: t('notice.copyFailed', { error: errorChain(error) }) }
+    }
+  }
+
+  /**
    * Start over in a blank session (`/new`), leaving this one resumable.
    *
    * Deliberately not called "clear": nothing below this UI can truncate a
@@ -3171,8 +3405,17 @@ export function createTuiChat(
     })
     commandCtx.commands.register({
       name: 'copy',
-      description: 'Copy the last answer to the system clipboard',
-      handler: () => { copyLastAnswer(); return { kind: 'success' } },
+      // Numbered from the last answer backwards: `/copy` and `/copy 1` are the
+      // same answer, `/copy 2` is the one before it.
+      description: 'Copy an answer to the system clipboard (the last one, or /copy N for the Nth-latest)',
+      input: { hint: '[N]' },
+      handler: ({ rawInput }) => copyAnswer(parseCopyArgument(rawInput)),
+    })
+    commandCtx.commands.register({
+      name: 'editor',
+      // The entry that does not depend on a terminal being able to send Alt.
+      description: 'Edit the current prompt in $EDITOR',
+      handler: () => { void openExternalEditor(); return { kind: 'success' } },
     })
     commandCtx.commands.register({
       name: 'new',
@@ -3183,6 +3426,62 @@ export function createTuiChat(
       name: 'clear',
       description: 'Clear the transcript view (session history is unchanged)',
       handler: () => { transcript.clearTranscript(); requestRender(); return { kind: 'success' } },
+    })
+    commandCtx.commands.register({
+      name: 'rename',
+      description: 'Name this session yourself, or regenerate the title with no argument',
+      input: { hint: '[name]' },
+      handler: ({ rawInput, signal }) => runRenameCommand(
+        {
+          // Read per call rather than captured at mount: the title service is a
+          // line in the base bundle, and a deployment that disables it deserves
+          // the explanation rather than a crash here.
+          titles: ctx.get('sessionTitle') as SessionTitleWriter | undefined,
+          announceGenerating: () => { appendNotice(t('rename.generating')) },
+        },
+        agent.session,
+        rawInput,
+        signal,
+      ),
+    })
+    commandCtx.commands.register({
+      name: 'compact',
+      // Registered unconditionally, exactly like `/skills`: whether this
+      // session's preset composes a compaction service is a runtime fact the
+      // handler reports, and a command list that changed shape per preset would
+      // make `/help` and the README table disagree. Registered on the agent's
+      // own context, which shadows the preset realm's English `/compact` — the
+      // rationale is in `chat/compact.ts`.
+      description: 'Compact older conversation history into one summary',
+      // No `input` hint: advertising an argument the handler refuses would be
+      // the slash menu contradicting the command.
+      handler: async (invocation) => {
+        // Only one `/compact` may be in flight from this terminal. The backend
+        // refuses a second with `busy` anyway, but a local refusal writes no
+        // log line and claims no maintenance slot.
+        if (activeCompaction !== undefined) return { kind: 'error', text: t('compact.inFlight') }
+        const controller = new AbortController()
+        // The dispatching UI's signal still owns teardown; this one adds Esc,
+        // so both reasons to stop reach the same backend request.
+        const relay = (): void => { controller.abort(new Error('compaction cancelled by the user')) }
+        invocation.signal.addEventListener('abort', relay, { once: true })
+        activeCompaction = controller
+        try {
+          return await runCompactCommand(
+            {
+              engine: compactionEngine,
+              agent,
+              expandKey: () => keyLabel(keybindings, 'app.tools.cycle'),
+            },
+            invocation.rawInput,
+            controller.signal,
+            invocation.commandId,
+          )
+        } finally {
+          invocation.signal.removeEventListener('abort', relay)
+          activeCompaction = undefined
+        }
+      },
     })
     commandCtx.commands.register({
       name: 'config',
@@ -3213,22 +3512,27 @@ export function createTuiChat(
     })
     commandCtx.commands.register({
       name: 'export',
-      description: 'Write this session\'s log to a file and report the path',
-      input: { hint: '[path]' },
-      handler: ({ rawInput, signal }) => exportSessionLog({
-        // Both services are optional: without persistence the export
-        // re-serializes the in-memory log, which is the same conversation.
-        persistence: ctx.get('sessionPersistence') as SessionArtifactReader | undefined,
-        sessions: ctx.get('sessions') as SessionFlusher | undefined,
-        cwd,
-        // The default destination is one path per session, so exporting the
-        // same session twice lands on the first file. Asked, not assumed.
-        confirmOverwrite: destination => askConfirmation(
-          t('export.overwrite.question', { path: displayInlineText(destination) }),
-          t('export.overwrite.replace'),
-          t('export.overwrite.keep'),
-        ),
-      }, agent.session, rawInput, signal),
+      description: 'Write this session\'s log to a file, or copy it to the clipboard as Markdown',
+      // `clipboard` is a bare keyword rather than a dialog option: this
+      // terminal's argument-less `/export` already writes the default file, and
+      // a file really called `clipboard` is still reachable as `./clipboard`.
+      input: { hint: '[path | clipboard]' },
+      handler: ({ rawInput, signal }) => isClipboardExportTarget(rawInput)
+        ? exportSessionMarkdown(signal)
+        : exportSessionLog({
+          // Both services are optional: without persistence the export
+          // re-serializes the in-memory log, which is the same conversation.
+          persistence: ctx.get('sessionPersistence') as SessionArtifactReader | undefined,
+          sessions: ctx.get('sessions') as SessionFlusher | undefined,
+          cwd,
+          // The default destination is one path per session, so exporting the
+          // same session twice lands on the first file. Asked, not assumed.
+          confirmOverwrite: destination => askConfirmation(
+            t('export.overwrite.question', { path: displayInlineText(destination) }),
+            t('export.overwrite.replace'),
+            t('export.overwrite.keep'),
+          ),
+        }, agent.session, rawInput, signal),
     })
     commandCtx.commands.register({
       name: 'plugins',
@@ -3522,9 +3826,28 @@ export function createTuiChat(
   /** Prompts submitted during that window, in the order they were typed. */
   const queuedSubmissions: string[] = []
 
-  const submitLine = (value: string): void => {
-    const text = value.trim()
-    if (text === '') return
+  const submitLine = (raw: string): void => {
+    const trimmed = raw.trim()
+    if (trimmed === '') return
+    // The one place a prompt's length is decided. It has to be here rather than
+    // in the editor: pi-tui's `submitValue()` expands every paste marker,
+    // clears the buffer and drops the paste map before it calls back, so this
+    // string is both the first and the last sight of the full text. Nothing
+    // downstream can put it back, which is why the notice reports the original
+    // length — the user's only remaining copy is the one they pasted from.
+    const limited = truncatePrompt(trimmed, resolved.maxPromptChars)
+    if (limited.removed > 0) {
+      appendNotice(t('notice.promptTruncated', {
+        original: limited.original,
+        limit: resolved.maxPromptChars,
+        removed: limited.removed,
+      }), 'warning')
+    }
+    // Every routing decision, the history entry, the restored draft and the
+    // model-facing turn all read this one value, so the transcript, the history
+    // and the request body can never disagree about what was sent.
+    const value = limited.text
+    const text = value
     const restoreSubmittedInput = (): void => {
       if (editor.getText() === '') editor.setText(value)
     }
@@ -3620,10 +3943,26 @@ export function createTuiChat(
    * draft — a `?` typed inside a sentence is a question mark, not a keystroke.
    */
   editor.onChange = (text: string): void => {
-    if (text !== '?') return
-    editor.setText('')
-    showHotkeys()
-    requestRender()
+    if (text === '?') {
+      editor.setText('')
+      showHotkeys()
+      requestRender()
+      return
+    }
+    // Claude Code raises this the moment the input wraps
+    // (`Notifications.tsx:146`); this raises it on the first hard newline,
+    // because `onChange` runs per keystroke and measuring the wrap would mean
+    // re-rendering the editor to find out. Once per session, and never over a
+    // row that is saying something else.
+    if (externalEditorHinted || !text.includes('\n')) return
+    if (flashingStatus !== undefined || compacting !== undefined) return
+    const resolution = externalEditor()
+    externalEditorHinted = true
+    if (resolution.kind !== 'editor') return
+    flashStatus(t('status.flash.externalEditorHint', {
+      key: keyLabel(keybindings, 'app.draft.edit'),
+      editor: resolution.editor.name,
+    }), EXTERNAL_EDITOR_HINT_MS)
   }
 
   /**
@@ -3788,6 +4127,120 @@ export function createTuiChat(
   }
 
   /**
+   * Guard against a second entry. No key can reach this terminal while the
+   * child owns it, but `/editor` is a second front door and a controller can
+   * drive it.
+   */
+  let externalEditActive = false
+  /**
+   * Whether the multi-line hint has already been spent. Claude Code raises its
+   * version on every wrap; once a session is enough here, because a hint that
+   * keeps coming back is a hint the user has already declined.
+   */
+  let externalEditorHinted = false
+
+  /**
+   * Give the keyboard back to whoever owns it after the terminal was released.
+   *
+   * Not always the prompt: an approval request or an agent question can arrive
+   * while `$EDITOR` holds the tty, and the dialog it opens took focus for
+   * itself. Focusing the editor over it strands a decision the turn is blocked
+   * on — the panel keeps drawing, its keys go into the draft instead, and Esc
+   * and Ctrl+C never reach it either, because the input listener steps aside
+   * while an overlay is active. A pi-tui overlay repairs its own focus on the
+   * next key; the inline slot has no such owner, so it is repaired here.
+   */
+  const reclaimFocus = (): void => {
+    if (inlineFocusTarget !== undefined) {
+      ui.setFocus(inlineFocusTarget)
+      return
+    }
+    // A stacked overlay keeps the focus pi-tui gave it; taking it away here
+    // would only be undone on the next key.
+    if (overlayManager.hasActiveOverlay()) return
+    ui.setFocus(editor)
+  }
+
+  /**
+   * Hand the draft to `$EDITOR` and take back what was saved.
+   *
+   * The terminal is released the way `/resume` releases it (`chat/resume.ts`):
+   * stdin is drained first so a Kitty release event cannot leak into the child,
+   * `ui.stop()` restores raw mode and parks the frame, and the child inherits
+   * the tty. Nothing renders while it runs — pi-tui short-circuits every render
+   * path once stopped — so the repaint on the way back is forced rather than
+   * diffed: the editor has scribbled over rows the differ still believes in.
+   */
+  const openExternalEditor = async (): Promise<void> => {
+    if (externalEditActive || disposed) return
+    const resolution = externalEditor()
+    if (resolution.kind === 'disabled') {
+      appendNotice(t('notice.externalEditorDisabled'), 'warning')
+      return
+    }
+    if (resolution.kind === 'unset') {
+      appendNotice(t('notice.externalEditorUnset'), 'warning')
+      return
+    }
+    if (resolution.kind === 'unresolved') {
+      appendNotice(t('notice.externalEditorUnresolved', { command: resolution.command }), 'warning')
+      return
+    }
+    const editorSpec = resolution.editor
+    // Expanded, because that is what pi-tui says this reader is for: `getText()`
+    // would write `[paste #1 +40 lines]` into the file as a literal.
+    const draft = editor.getExpandedText()
+    externalEditActive = true
+    externalEditorHinted = true
+    clearFlash()
+    let released = false
+    try {
+      await runtime.terminal.drainInput(100, 20)
+      if (disposed) return
+      ui.stop()
+      released = true
+      const result = await editTextExternally(draft, editorSpec, { cwd })
+      // Teardown can run while the child does: a `ui.start()` here would take
+      // back a terminal `shutdown` has already handed over.
+      if (disposed) return
+      ui.start()
+      reclaimFocus()
+      ui.invalidate()
+      ui.requestRender(true)
+      released = false
+      if (result.kind === 'failed') {
+        appendNotice(t('notice.externalEditorFailed', { error: result.error }), 'error')
+        return
+      }
+      if (result.kind === 'exit') {
+        // `vim :cq`, a crash, a signal: the user said no, so the draft stands.
+        appendNotice(t('notice.externalEditorExit', { editor: editorSpec.name, code: result.code }), 'warning')
+        return
+      }
+      // Unchanged is silent, and does not touch the buffer: `setText` would
+      // push an undo snapshot that undoes nothing.
+      if (result.text === draft) return
+      // `setText` pushes the undo snapshot itself, so Ctrl+- still reaches the
+      // draft as it was before the edit; it does not ask for a redraw.
+      editor.setText(result.text)
+      requestRender()
+    } catch (error: unknown) {
+      /* v8 ignore next 5 -- only a spawn that fails after the terminal was released reaches here. */
+      if (!disposed) {
+        if (released) {
+          ui.start()
+          reclaimFocus()
+          ui.invalidate()
+          ui.requestRender(true)
+        }
+        appendNotice(t('notice.externalEditorFailed', { error: errorChain(error) }), 'error')
+      }
+    } finally {
+      externalEditActive = false
+    }
+  }
+
+  /**
    * Esc, in Claude Code's own order.
    *
    * Running: cancel, and hand back whatever was queued behind the turn. Idle
@@ -3804,6 +4257,16 @@ export function createTuiChat(
       cancelActiveTurn()
       return
     }
+    // A manual compaction only runs while the agent is idle, so this rung can
+    // never race the turn cancel above. Claude Code answers Esc during a
+    // compaction the same way: the compaction stops, the conversation is
+    // untouched. One press, not two — nothing is lost by stopping it.
+    if (activeCompaction !== undefined) {
+      disarmEscape()
+      activeCompaction.abort(new Error('compaction cancelled by the user'))
+      flashStatus(t('status.flash.compactCancelling'))
+      return
+    }
     const draft = editor.getText()
     if (draft !== '') {
       if (escapeArmed === undefined) {
@@ -3814,7 +4277,13 @@ export function createTuiChat(
       // Stored before it is dropped, exactly as Claude Code does: a draft the
       // user threw away is still something they typed, and Ctrl+R is how they
       // get it back.
-      editor.addToHistory(draft)
+      //
+      // Expanded, for the same reason `submitLine` stores expanded text: a
+      // `[paste #1 +40 lines]` marker is a handle on THIS editor's paste map,
+      // which `setText('')` below empties and the next process never had. A
+      // history entry has to be the prompt itself, or the recall it promises
+      // sends a literal marker to the model with the pasted text gone.
+      editor.addToHistory(editor.getExpandedText())
       editor.setText('')
       requestRender()
       return
@@ -3866,6 +4335,13 @@ export function createTuiChat(
     }
     if (keybindings.matches(data, 'app.message.copy')) {
       if (press) copyLastAnswer()
+      return { consume: true }
+    }
+    // Before `app.cancel`: legacy Alt is an ESC prefix, and while pi-tui's
+    // `escape` only matches a bare `\x1b`, the specific key answering before
+    // the general one is the order that stays correct if that ever changes.
+    if (keybindings.matches(data, 'app.draft.edit')) {
+      if (press) void openExternalEditor()
       return { consume: true }
     }
     if (keybindings.matches(data, 'app.screen.redraw')) {
@@ -4121,12 +4597,26 @@ export function createTuiChat(
 
   // First paint: the seeded log is already folded, so the transcript is on
   // screen before `ui.start()`. Replayed prompts also seed the editor's history,
-  // which live submissions add for themselves.
+  // with the workspace's stored history laid in underneath them; live
+  // submissions add for themselves.
   const initial = store.getSnapshot()
   applySnapshot(initial, { repaint: true })
+  // This session's own (replayed) prompts come before every other session's,
+  // both groups newest first — Claude Code's own order (`history.ts:190-217`).
+  // The replayed ones were written to disk by the process that took them, so
+  // they go in with `persist: false`; without that every resume would rewrite
+  // the whole history. `load()` is synchronous because it has to be: pi-tui
+  // only unshifts, so the stored entries must be seated before the replayed
+  // ones, and an asynchronous read would arrive after there was any way to put
+  // them underneath.
+  const replayed: string[] = []
   for (const node of initial.nodes) {
-    if (node.kind === 'user-message' && node.source === 'user') editor.addToHistory(node.text)
+    if (node.kind === 'user-message' && node.source === 'user') replayed.push(node.text.trim())
   }
+  const fromSession = [...replayed].reverse().filter(text => text !== '')
+  const seenInSession = new Set(fromSession)
+  const fromDisk = promptHistory.load().filter(text => !seenInSession.has(text))
+  editor.seedHistory([...fromSession, ...fromDisk].slice(0, HISTORY_LIMIT))
   // A rewind handoff opens its forked chat with the prompt it went back to
   // already in the editor, unsent: the point of going back is to say it
   // differently, and sending it unread would take that choice away.

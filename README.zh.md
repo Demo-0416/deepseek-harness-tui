@@ -100,6 +100,7 @@ stdin 和 stdout 都必须是 TTY，否则拒绝启动。`--print` 是唯一例�
 | Ctrl+O | 循环工具卡片：预览、完整、隐藏 |
 | Ctrl+T | 显示/隐藏思考块——关闭时思考随所在 step 流式出现并消失；开启时每个 step 都保留，含历史。模型无论如何都在推理；`showReasoning: false` 连同此键一起关闭 |
 | Ctrl+X | 复制最后一条回答 |
+| Alt+E | 用 `$EDITOR` 编辑草稿，保存后取回；先看 `$VISUAL`，再看 `$EDITOR`，最后在 `PATH` 上找 nano/vim/vi。发不出 Alt 的终端用 `/editor` |
 | Ctrl+L | 重绘 |
 | Esc | 取消 turn（并退还排队的输入）；有草稿时再按清空草稿；空输入框再按打开 Rewind |
 | Ctrl+C | 运行中取消，输入中清空草稿，空闲时连按两次退出；第三次按下直接离开无法取消的 turn |
@@ -139,12 +140,15 @@ Ctrl+C 是唯一永不可重绑的键：它是离开终端的最后手段。其�
 | `/theme [auto\|light\|dark\|no-color]` | 本终端的配色；不带参数打开选择器 |
 | `/login [provider]` | 给 provider 配 API key：选一条已配置的或适配器提供的路由，粘贴 key，先对端点校验再存储。key 进凭据存储；settings 只记录变量名 |
 | `/provider [add]` | 列出已配置的 provider 和 `/login` 可配置的；`add` 依次填写名称、端点、协议、key 和端点报告的模型 |
-| `/copy` | 复制最后一条回答到系统剪贴板 |
+| `/copy [N]` | 复制一条回答到系统剪贴板；不带参数是最后一条，`/copy 2` 是上一条 |
+| `/editor` | 在 `$EDITOR` 里编辑当前输入；编辑器运行期间终端交给它，退出后整屏重绘 |
 | `/new` | 在本工作区开一个空白会话；当前会话保留全部历史、仍可恢复 |
 | `/clear` | 清空对话视图；会话日志不变 |
+| `/rename [名字]` | 给本会话起个名字；起了名字就固定住，自动命名不再改它。不带参数则重新生成标题，并继续交给自动命名维护 |
+| `/compact` | 把更早的对话历史压缩成一段摘要；屏幕上的对话保留，模型侧只留摘要。不接受参数 |
 | `/lang [en\|zh]` | 查看或切换界面语言；选择会记住到下次会话 |
 | `/palette` | 本终端渲染的全部颜色与属性角色 |
-| `/export [path]` | 把本会话日志写入文件并报告路径；覆盖已有文件前会先确认 |
+| `/export [path \| clipboard]` | 把本会话日志写入文件并报告路径（覆盖已有文件前会先确认）；写 `clipboard` 则把会话以 Markdown 放到系统剪贴板 |
 | `/plugins` | 搜索并查看 Loader 的插件条目 |
 | `/search [query]` | 搜索本会话消息；参数会预填面板查询框 |
 | `/rewind` | 回到本会话更早的 prompt |
@@ -266,6 +270,7 @@ bundle 行（`tui-runner`）上的值，全部可选。
 | `markdownRenderer` | `claude` | `claude`（本 bundle 的渲染器）或 `pi`（pi-tui 的 `Markdown`）；`claude` 渲染抛错后本进程余下时间回退到 `pi` |
 | `maxToolOutputLines` | `6` | 折叠工具卡片头/尾预览保留的正文行数 |
 | `maxDiffEditLength` | `1000` | 推导精确行级 diff 时探索的增删行数上限 |
+| `maxPromptChars` | `10000` | 单条提交输入的字符上限；超出的中段会被丢弃并留下 `... [N characters truncated] ...` 标记与一条提示，`0` 表示不截断 |
 | `maxQuestionOptions` | `8` | 提问面板一次可见的选项数 |
 | `maxModelOptions` | `8` | 模型选择器一次可见的模型数 |
 | `maxResumeOptions` | `8` | 恢复选择器一次可见的会话数 |
@@ -279,6 +284,7 @@ bundle 行（`tui-runner`）上的值，全部可选。
 | `fileSearchMaxEntries` | `10000` | 一个 `@` 工作区索引保留的路径数 |
 | `fileSearchExcludedDirectories` | 见上文 | 遍历器跳过的目录名 |
 | `fileSearchCommand` | — | `fd` 的路径或名称；不设则在 `PATH` 上发现，`""` 禁用 |
+| `externalEditor` | — | `Alt+E` 与 `/editor` 交给哪个编辑器；不设则依次读 `$VISUAL`/`$EDITOR` 再在 `PATH` 上发现，`""` 关闭该功能。GUI 编辑器需要自带等待参数（`code -w`），已知的那些会自动补上 |
 | `showHardwareCursor` | `false` | 在编辑器 IME 标记处显示终端硬件光标 |
 | `title` | `DeepSeek Harness` | UI 挂载期间的终端窗口标题 |
 | `theme.color` | `true` | 应用内置 ANSI 配色 |

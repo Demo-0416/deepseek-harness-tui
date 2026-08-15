@@ -342,6 +342,59 @@ export function providerArgumentCompletions(argumentPrefix: string): Autocomplet
     : null
 }
 
+/** How much of an answer's first line a `/copy` row shows. */
+const COPY_EXCERPT_MAX = 60
+
+/**
+ * Complete `/copy [N]` with the answers this session actually has.
+ *
+ * The argument is an ordinal, and a bare `[N]` hint leaves the user counting
+ * rows on the screen. Each row's description is that answer's first non-empty
+ * line, so the menu itself is the answer to "which one is number two".
+ * @param answers - answer texts, newest first, as `collectAnswerTexts` returns them.
+ * @param argumentPrefix - argument text typed so far.
+ * @param limit - maximum rows offered.
+ * @returns the ordinals still matching, or `null` for no menu.
+ */
+export function copyArgumentCompletions(
+  answers: readonly string[],
+  argumentPrefix: string,
+  limit: number,
+): AutocompleteItem[] | null {
+  const typed = argumentPrefix.trim()
+  const items: AutocompleteItem[] = []
+  for (const [offset, answer] of answers.entries()) {
+    const n = offset + 1
+    if (!matches(String(n), typed)) continue
+    const lead = answer.split('\n').find(line => line.trim() !== '') ?? ''
+    items.push({
+      value: String(n),
+      label: String(n),
+      description: t('copy.arg.answer', {
+        n,
+        total: answers.length,
+        excerpt: displayInlineText(lead.trim().slice(0, COPY_EXCERPT_MAX)),
+      }),
+    })
+    if (items.length >= limit) break
+  }
+  return menu(items)
+}
+
+/**
+ * Complete `/export [path | clipboard]` by naming the one value that is not a
+ * path.
+ * @param argumentPrefix - argument text typed so far.
+ * @returns the `clipboard` row while it still matches, or `null`: paths are the
+ *   file completer's business.
+ */
+export function exportArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
+  const typed = argumentPrefix.trim()
+  return matches('clipboard', typed)
+    ? [{ value: 'clipboard', label: 'clipboard', description: t('export.arg.clipboard') }]
+    : null
+}
+
 /**
  * Complete `/resume [session]` with this workspace's resumable sessions.
  *

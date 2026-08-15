@@ -33,6 +33,7 @@ export interface AppKeybindings {
   'app.todos.toggle': true
   'app.thinking.toggle': true
   'app.message.copy': true
+  'app.draft.edit': true
   'app.screen.redraw': true
   'app.cancel': true
   'app.exit': true
@@ -84,6 +85,17 @@ export const APP_KEYBINDINGS = {
   'app.todos.toggle': { defaultKeys: 'ctrl+n', description: 'Expand or collapse the plan' },
   'app.thinking.toggle': { defaultKeys: 'ctrl+t', description: 'Show or hide thinking blocks' },
   'app.message.copy': { defaultKeys: 'ctrl+x', description: 'Copy the last answer' },
+  // Claude Code puts this on Ctrl+G and on the readline chord Ctrl+X Ctrl+E
+  // (`keybindings/defaultBindings.ts:83-84`). Neither is available here: Ctrl+G
+  // is this terminal's session search, Ctrl+X is `app.message.copy` — and a
+  // chord is not expressible at all, because pi-tui's `KeyId` is one key
+  // combination and `matches()` is answered from a single input chunk, so a
+  // prefix key would have to stall the copy it already performs. Alt+E is free
+  // in both tables, reads as "editor", and sits in the family pi-tui already
+  // uses for editing (alt+b/f/d/y). A terminal that sends Option as a composed
+  // character rather than Meta cannot deliver it; `/editor` is the entry that
+  // always works, and `keybindings` moves the key.
+  'app.draft.edit': { defaultKeys: 'alt+e', description: 'Edit the draft in $EDITOR' },
   'app.screen.redraw': { defaultKeys: 'ctrl+l', description: 'Redraw the screen' },
   'app.cancel': { defaultKeys: 'escape', description: 'Cancel the turn; twice to clear the draft or rewind' },
   'app.exit': { defaultKeys: 'ctrl+d', description: 'Exit on an empty prompt' },

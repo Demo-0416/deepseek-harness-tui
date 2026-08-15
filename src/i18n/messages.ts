@@ -32,13 +32,15 @@ export const EN_MESSAGES = {
   'command.hotkeys.description': 'Show the keyboard shortcuts alone',
   'command.model.description': 'Switch the model and save it as your default',
   'command.preset.description': 'Show, switch, or copy this session\'s agent preset',
-  'command.copy.description': 'Copy the last answer to the system clipboard',
+  'command.copy.description': 'Copy an answer to the system clipboard (the last one, or /copy N for the Nth-latest)',
+  'command.editor.description': 'Edit the current prompt in $EDITOR',
   'command.new.description': 'Start a blank session in this workspace (this one stays resumable)',
   'command.clear.description': 'Clear the transcript view (session history is unchanged)',
+  'command.compact.description': 'Compact older conversation history into one summary',
   'command.config.description': 'Change this terminal\'s settings, saved for your next session',
   'command.theme.description': 'Pick the palette this terminal paints with',
   'command.palette.description': 'Show every color and attribute role this terminal renders',
-  'command.export.description': 'Write this session\'s log to a file and report the path',
+  'command.export.description': 'Write this session\'s log to a file, or copy it to the clipboard as Markdown',
   'command.plugins.description': 'Search and inspect the Loader\'s plugin entries',
   'command.reload.description': 'EXPERIMENTAL (dev): re-read loader config files and apply the diff (idle only)',
   'command.rewind.description': 'Go back to an earlier prompt in this session (files are never restored)',
@@ -51,6 +53,7 @@ export const EN_MESSAGES = {
   'command.mcp.description': 'Show the MCP servers this agent\'s tools come from',
   'command.doctor.description': 'Check the runtime, terminal, model route, and mounted services',
   'command.search.description': 'Search this session\'s messages',
+  'command.rename.description': 'Name this session yourself, or regenerate the title with no argument',
   'command.login.description': 'Give a provider an API key and store it',
   'command.provider.description': 'List configured providers, or add one /login does not offer',
 
@@ -71,6 +74,8 @@ export const EN_MESSAGES = {
   'hotkeys.cards': '{cycle} cycle tool cards (preview/full/hidden) • {thinking} show or hide thinking blocks',
   'hotkeys.modes': '{mode} cycle mode: normal → auto-accept → plan (danger-full-access stays a /permission switch)',
   'hotkeys.copy': '{todos} expand or collapse the plan • {copy} copy the last answer • {redraw} redraw',
+  'hotkeys.externalEditor':
+    '{key} edit the draft in $EDITOR — $VISUAL, then $EDITOR, then a terminal editor on PATH',
   'hotkeys.cancel': '{cancel} cancel the turn; again on a draft clears it; again on an empty prompt opens Rewind',
   'hotkeys.exit': '{exit} exit on an empty prompt • Shift+Ctrl+D session debug panel',
   'hotkeys.interrupt': 'Ctrl+C cancel while running; clear input while typing; twice to exit while idle',
@@ -342,6 +347,10 @@ export const EN_MESSAGES = {
   'prompt.modelUnset': 'model unset',
   'prompt.cache': 'cache {rate}%',
   'prompt.context': '{percent}% context',
+  // Once the window is tight the row counts DOWN, the way Claude Code's does:
+  // "how much is left" is the number a user acts on, "how much is used" is the
+  // number they monitor.
+  'prompt.contextLow': '{remaining}% context left',
   'prompt.compacting': 'Context being compacted {duration}',
   'prompt.queued': '{count} queued',
 
@@ -410,6 +419,7 @@ export const EN_MESSAGES = {
   // for rather than claiming nothing is mounted.
   'status.flash.modeUnavailable': 'Nothing to cycle in this deployment: no auto-accept preset, and no plan mode.',
   'status.flash.modeFailed': 'Mode switch failed: {error}',
+  'status.flash.compactCancelling': 'Cancelling the compaction…',
   'status.flash.escDraft': 'Press esc again to clear the draft.',
   'status.flash.escRewind': 'Press esc again to rewind to an earlier prompt.',
   'status.flash.exitAgain': 'Press ctrl+c again to exit.',
@@ -418,12 +428,17 @@ export const EN_MESSAGES = {
   'status.flash.cancellingBeforeExit': 'Cancelling the active turn before exit…',
   'status.flash.collecting': 'Collecting session status…',
   'status.flash.draftBlocksExit': 'Draft in the editor — clear it with ctrl+c to exit.',
-  'status.flash.historyEmpty': 'No prompt history in this session yet.',
+  'status.flash.historyEmpty': 'No prompt history yet.',
+  'status.flash.externalEditorHint': '{key} to edit this prompt in {editor}',
   'status.flash.queuedForSkill': 'Queued until the startup skill has been sent.',
   'status.flash.nothingToCopy': 'Nothing to copy yet.',
   'status.flash.copied': 'Copied {count} chars to clipboard.',
   'status.flash.copiedTmux': 'Copied to tmux buffer (prefix+] to paste).',
   'status.flash.copiedOsc52': 'Sent to clipboard via OSC 52.',
+  // Only a `/copy N` says which answer it took: a bare `/copy` already means
+  // "the last one", and a position on it would be answering a question nobody
+  // asked.
+  'status.flash.copiedNth': 'Answer {n} of {total} — {detail}',
 
   // The `/status` card.
   'status.card.title': 'Session status',
@@ -442,7 +457,7 @@ export const EN_MESSAGES = {
   'status.row.context': 'Context',
   'status.row.created': 'Created',
   'status.row.active': 'Active',
-  'status.untitled': 'untitled',
+  'status.untitled': 'untitled · /rename to name it',
   'status.modelDetail': '(effort {effort}; thinking blocks {thinking})',
   'status.tokensValue': '{input} input + {output} output',
   'status.cacheValue': '{meter} {rate}% hit ({read} read + {write} write)',
@@ -496,6 +511,14 @@ export const EN_MESSAGES = {
   'notice.referenceInvalid': 'Invalid session reference: {error}',
   'notice.referenceUnavailable': 'Session reference capability unavailable.',
   'notice.referenceFailed': 'Session reference failed: {error}',
+  'notice.promptTruncated':
+    'That prompt was {original} characters; the limit is {limit}, so {removed} characters were dropped from its middle before it was sent. Attach long files with @path instead of pasting them, or raise maxPromptChars.',
+  'notice.externalEditorUnset':
+    'No external editor found: set $EDITOR or $VISUAL, or configure externalEditor.',
+  'notice.externalEditorDisabled': 'The external editor is off in this configuration (externalEditor: "").',
+  'notice.externalEditorUnresolved': 'External editor "{command}" is not on PATH.',
+  'notice.externalEditorExit': '{editor} exited with code {code}; the draft is unchanged.',
+  'notice.externalEditorFailed': 'External editor failed: {error}',
   'notice.newSessionUnsupported':
     'This runtime cannot open a new session in place. Exit and start dsh again for a blank session.',
   'notice.newSessionBusy': 'A new session needs an idle agent (status: {status}).',
@@ -514,9 +537,51 @@ export const EN_MESSAGES = {
   // Rendered by the transcript reconciler rather than by a command, but the
   // same kind of chrome: a label over names the session carries.
   'notice.referencedSessions': 'Referenced sessions · {labels}',
+  // The two window-pressure rows, and the action clause each of them ends with.
+  // The clause is a separate key because which one applies is a runtime fact:
+  // `/compact` is always registered, but a preset that composes no compaction
+  // service leaves it with nothing to do, and a warning that named it anyway
+  // would be sending the user to a refusal.
+  'notice.contextLow':
+    'Context low — {remaining}% of the window left ({used} / {capacity} tokens). {action}',
+  'notice.contextCritical':
+    'Context nearly full — only {remaining}% of the window left ({used} / {capacity} tokens). {action}',
+  'notice.contextCompactAction': 'Run /compact to summarize the history and keep going.',
+  'notice.contextNoCompactAction':
+    'This session composes no compaction service; start a fresh session with /new before the window fills.',
+
+  // 手动压缩 /compact — every outcome of one explicit compaction, including the
+  // six failure classes `ManualCompactionError` declares.
+  'compact.usage':
+    '/compact takes no arguments. The summary\'s instructions come from the compaction backend, '
+    + 'so there is nothing here to steer.',
+  'compact.unavailable':
+    'This session\'s agent preset mounts no compaction service, so there is nothing to compact with.',
+  'compact.busy': 'Compaction needs an idle session; this one is {status}.',
+  'compact.inFlight': 'A compaction started from this terminal is still running.',
+  'compact.nothing':
+    'Nothing to compact yet: this session has no history the model can safely stop seeing.',
+  'compact.done.one': 'Compacted {items} history item (~{tokens} tokens) · {key} shows the summary',
+  'compact.done.other': 'Compacted {items} history items (~{tokens} tokens) · {key} shows the summary',
+  'compact.cancelled': 'Compaction cancelled. The conversation is unchanged.',
+  'compact.error.busy':
+    'Compaction is unavailable: this process already has one running, or the agent is not idle.',
+  'compact.error.changed':
+    'The history selected for compaction changed before it could be replaced. '
+    + 'The conversation is unchanged; the attempt is in the session log.',
+  'compact.error.summary':
+    'Compaction could not produce a useful summary. '
+    + 'The conversation is unchanged; the attempt is in the session log.',
+  'compact.error.commit':
+    'Compaction did not finish cleanly; some session history may have changed. '
+    + 'Check the session before retrying.',
+  'compact.error.persistence': 'Compaction finished, but the session could not be saved.',
+  'compact.failed': 'Compaction failed: {error}',
+
   // The rest of the transcript's own chrome — rows the terminal writes about
   // the conversation, not rows the model or a tool produced.
   'transcript.compactionMarker': '… earlier context was compacted …',
+  'transcript.compactionSummaryHeader': 'Compaction summary',
   'transcript.steeringBadge': 'Steering',
   // The two mode badges above the prompt, and the hint that names the key which
   // moves between them. `{key}` is filled from the installed keybinding manager,
@@ -534,10 +599,36 @@ export const EN_MESSAGES = {
   'transcript.xmlOmitted.one': '… +{count} line ({key} to expand)',
   'transcript.xmlOmitted.other': '… +{count} lines ({key} to expand)',
   'banner.resumed': 'resumed {id}',
+  // `/copy N` refusing an argument. Both refusals are command results rather
+  // than status flashes: a mistyped argument is something the user comes back
+  // to read, and a flash is gone before they look.
+  'copy.usage': '/copy takes a whole number: 1 is the latest answer, 2 the one before it. Got: {input}',
+  'copy.outOfRange.one': 'This session has only {count} answer to copy.',
+  'copy.outOfRange.other': 'This session has only {count} answers to copy.',
+  'copy.arg.answer': 'answer {n} of {total} · {excerpt}',
   // `/export` asking before it replaces a file, and the two answers it offers.
   'export.overwrite.question': '{path} already exists. Replace it?',
   'export.overwrite.replace': 'Replace the file',
   'export.overwrite.keep': 'Keep it',
+  // `/export clipboard`: the one argument that is not a path, and what it says
+  // when it is done. The `Exported` row heads the Markdown document itself.
+  'export.arg.clipboard': 'Copy this session to the clipboard as Markdown',
+  'export.clipboard.empty': 'Nothing to export yet: this session has no messages.',
+  'export.clipboard.done.one': 'Exported 1 message as Markdown. {detail}',
+  'export.clipboard.done.other': 'Exported {count} messages as Markdown. {detail}',
+  'export.markdown.exported': 'Exported',
+
+  // `/rename`: a title the user pins, or a regenerated one that stays
+  // automatic. The service normalizes what it accepts, so every confirmation
+  // names the stored title rather than the typed one.
+  'rename.done': 'Session renamed to: {title}',
+  'rename.generating': 'Generating a session title…',
+  'rename.generated': 'Session title regenerated: {title}. It stays automatic — pass a name to make it yours.',
+  'rename.noContext': 'Nothing to name yet: this session has no message a title could come from. Usage: /rename <name>',
+  'rename.invalid': 'That name has no visible characters left after control codes are stripped. Usage: /rename <name>',
+  'rename.unavailable': 'Renaming is unavailable: this deployment mounts no session-title service.',
+  'rename.failed': 'Session rename failed: {error}',
+  'rename.generateFailed': 'Could not generate a title: {error}',
 
   // The three tool-card phases as the `/config` value column shows them. Unlike
   // the four theme ids two rows down, these are not the argument of any
@@ -667,13 +758,15 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'command.hotkeys.description': '只显示快捷键',
   'command.model.description': '切换模型，并保存为默认模型',
   'command.preset.description': '查看、切换或复制本会话的 agent preset',
-  'command.copy.description': '把最后一条回答复制到系统剪贴板',
+  'command.copy.description': '把某条回答复制到系统剪贴板（默认最后一条，/copy N 取倒数第 N 条）',
+  'command.editor.description': '在 $EDITOR 里编辑当前输入',
   'command.new.description': '在当前工作区开一个空会话（当前会话仍可 resume）',
   'command.clear.description': '清空 transcript 视图（不影响会话历史）',
+  'command.compact.description': '把更早的对话历史压缩成一段摘要',
   'command.config.description': '修改本终端自己的设置，下次启动仍然生效',
   'command.theme.description': '选择本终端使用的配色',
   'command.palette.description': '展示本终端渲染的全部配色与文字属性',
-  'command.export.description': '把本会话日志写入文件并给出路径',
+  'command.export.description': '把本会话日志写入文件，或以 Markdown 复制到剪贴板',
   'command.plugins.description': '搜索并查看 Loader 的 plugin 条目',
   'command.reload.description': 'EXPERIMENTAL（开发用）：重读 loader 配置并应用差异（仅空闲时）',
   'command.rewind.description': '回到本会话更早的一次提问（不会恢复文件）',
@@ -686,6 +779,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'command.mcp.description': '显示本 agent 的工具分别来自哪些 MCP server',
   'command.doctor.description': '检查运行时、终端、模型路由与已挂载的服务',
   'command.search.description': '搜索本会话的消息',
+  'command.rename.description': '给本会话起个名字；不带参数则重新生成标题',
 
   'lang.name.en': 'English',
   'lang.name.zh': '中文',
@@ -702,6 +796,8 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'hotkeys.cards': '{cycle} 切换工具卡片（预览/完整/隐藏） • {thinking} 显示或隐藏思考块',
   'hotkeys.modes': '{mode} 循环切换模式：normal → auto-accept → plan（danger-full-access 只能用 /permission 切）',
   'hotkeys.copy': '{todos} 展开或收起计划 • {copy} 复制最后一条回答 • {redraw} 重绘屏幕',
+  'hotkeys.externalEditor':
+    '{key} 用 $EDITOR 编辑草稿——先看 $VISUAL，再看 $EDITOR，最后在 PATH 上找终端编辑器',
   'hotkeys.cancel': '{cancel} 取消当前轮次；草稿状态下再按一次清空草稿；空输入时再按一次打开 Rewind',
   'hotkeys.exit': '{exit} 空输入时退出 • Shift+Ctrl+D 打开会话调试面板',
   'hotkeys.interrupt': 'Ctrl+C 运行中取消；输入中清空输入；空闲时连按两次退出',
@@ -917,6 +1013,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'prompt.modelUnset': '未设置模型',
   'prompt.cache': '缓存 {rate}%',
   'prompt.context': '已用 {percent}% 上下文',
+  'prompt.contextLow': '上下文剩 {remaining}%',
   'prompt.compacting': '正在压缩上下文 {duration}',
   'prompt.queued': '{count} 条排队中',
 
@@ -959,6 +1056,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.flash.modePlanOff': '已退出 plan 模式；权限 preset 保持不变。',
   'status.flash.modeUnavailable': '当前部署没有可切换的模式：既没有 auto-accept preset，也没有 plan 模式。',
   'status.flash.modeFailed': '切换模式失败：{error}',
+  'status.flash.compactCancelling': '正在取消压缩…',
   'status.flash.escDraft': '再按一次 esc 清空草稿。',
   'status.flash.escRewind': '再按一次 esc 回退到更早的提问。',
   'status.flash.exitAgain': '再按一次 ctrl+c 退出。',
@@ -967,12 +1065,14 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.flash.cancellingBeforeExit': '正在取消当前轮次，之后退出…',
   'status.flash.collecting': '正在收集会话状态…',
   'status.flash.draftBlocksExit': '输入框里还有草稿 —— 先按 ctrl+c 清空再退出。',
-  'status.flash.historyEmpty': '本会话还没有历史提问。',
+  'status.flash.historyEmpty': '还没有历史提问。',
+  'status.flash.externalEditorHint': '{key} 可以在 {editor} 里编辑这段输入',
   'status.flash.queuedForSkill': '已排队，等启动 skill 发送后再处理。',
   'status.flash.nothingToCopy': '还没有可复制的内容。',
   'status.flash.copied': '已复制 {count} 个字符到剪贴板。',
   'status.flash.copiedTmux': '已复制到 tmux 缓冲区（prefix+] 粘贴）。',
   'status.flash.copiedOsc52': '已通过 OSC 52 发送到剪贴板。',
+  'status.flash.copiedNth': '倒数第 {n} 条（共 {total} 条）——{detail}',
 
   'status.card.title': '会话状态',
   'status.row.session': '会话',
@@ -990,7 +1090,7 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'status.row.context': '上下文',
   'status.row.created': '创建于',
   'status.row.active': '最近活动',
-  'status.untitled': '未命名',
+  'status.untitled': '未命名 · 用 /rename 起个名字',
   'status.modelDetail': '（推理强度 {effort}；思考块 {thinking}）',
   'status.tokensValue': '输入 {input} + 输出 {output}',
   'status.cacheValue': '{meter} 命中 {rate}%（读 {read} + 写 {write}）',
@@ -1030,6 +1130,13 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'notice.referenceInvalid': '会话引用不合法：{error}',
   'notice.referenceUnavailable': '当前环境不提供会话引用能力。',
   'notice.referenceFailed': '会话引用失败：{error}',
+  'notice.promptTruncated':
+    '这条输入有 {original} 字符，上限是 {limit}，发送前已丢弃中间 {removed} 字符。长文件请用 @路径 附带，不要直接粘贴；也可以调大 maxPromptChars。',
+  'notice.externalEditorUnset': '没找到外部编辑器：设置 $EDITOR 或 $VISUAL，或在配置里写 externalEditor。',
+  'notice.externalEditorDisabled': '本配置关闭了外部编辑器（externalEditor: ""）。',
+  'notice.externalEditorUnresolved': '外部编辑器 "{command}" 不在 PATH 上。',
+  'notice.externalEditorExit': '{editor} 以退出码 {code} 结束，草稿保持不变。',
+  'notice.externalEditorFailed': '外部编辑器执行失败：{error}',
   'notice.newSessionUnsupported': '当前运行时不能就地开新会话。退出后重新启动 dsh 即可得到一个空会话。',
   'notice.newSessionBusy': '开新会话需要 agent 处于空闲状态（当前：{status}）。',
   'notice.rewindNoFork': '那条提问已经放回编辑器。当前运行时不能分叉会话，所以它上面的对话没有变化。',
@@ -1043,7 +1150,28 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'notice.reloadDone': '配置重载完成。未改动的文件已跳过；不合法的文件保持原来的运行态（详见日志）。',
   'notice.reloadFailed': '配置重载失败：{error}',
   'notice.referencedSessions': '引用的会话 · {labels}',
+  'notice.contextLow': '上下文快满了——窗口还剩 {remaining}%（{used} / {capacity} tokens）。{action}',
+  'notice.contextCritical': '上下文几乎用尽——窗口只剩 {remaining}%（{used} / {capacity} tokens）。{action}',
+  'notice.contextCompactAction': '执行 /compact 把历史压成摘要，然后继续。',
+  'notice.contextNoCompactAction': '本会话没有挂压缩服务；在窗口填满前用 /new 开一个新会话。',
+
+  'compact.usage': '/compact 不接受参数。摘要的写法由压缩后端固定，这里没有可传的指令。',
+  'compact.unavailable': '本会话的 agent preset 没有挂压缩服务，因此没有可用的压缩能力。',
+  'compact.busy': '压缩需要会话空闲，当前状态是 {status}。',
+  'compact.inFlight': '这个终端已经有一次压缩在跑了。',
+  'compact.nothing': '暂时没有可压缩的内容：这个会话还没有可以安全让模型不再看到的历史。',
+  'compact.done.one': '已压缩 {items} 条历史（约 {tokens} tokens）· 按 {key} 查看摘要',
+  'compact.done.other': '已压缩 {items} 条历史（约 {tokens} tokens）· 按 {key} 查看摘要',
+  'compact.cancelled': '已取消压缩，对话内容没有变化。',
+  'compact.error.busy': '当前无法压缩：本进程已有一次压缩在跑，或者 agent 不空闲。',
+  'compact.error.changed': '选中的那段历史在被替换前发生了变化。对话没有变化，这次尝试已记入会话日志。',
+  'compact.error.summary': '压缩没能产出有用的摘要。对话没有变化，这次尝试已记入会话日志。',
+  'compact.error.commit': '压缩没有干净收尾，部分会话历史可能已经变了。重试前先确认一下会话状态。',
+  'compact.error.persistence': '压缩完成了，但会话没能保存。',
+  'compact.failed': '压缩失败：{error}',
+
   'transcript.compactionMarker': '… 更早的上下文已被压缩 …',
+  'transcript.compactionSummaryHeader': '压缩摘要',
   'transcript.steeringBadge': '插入指令',
   'transcript.planModeBadge': 'plan 模式已开启',
   'transcript.planModeBadgePending': 'plan 模式已开启（下一步生效）',
@@ -1052,9 +1180,27 @@ export const ZH_MESSAGES: Partial<Record<keyof typeof EN_MESSAGES, string>> = {
   'transcript.xmlOmitted.one': '… 还有 {count} 行（{key} 展开）',
   'transcript.xmlOmitted.other': '… 还有 {count} 行（{key} 展开）',
   'banner.resumed': '已恢复 {id}',
+  'copy.usage': '/copy 的参数要是整数：1 是最后一条回答，2 是上一条。收到的是：{input}',
+  'copy.outOfRange.one': '本会话只有 {count} 条回答可复制。',
+  'copy.outOfRange.other': '本会话只有 {count} 条回答可复制。',
+  'copy.arg.answer': '倒数第 {n} 条（共 {total} 条） · {excerpt}',
   'export.overwrite.question': '{path} 已存在，要覆盖吗？',
   'export.overwrite.replace': '覆盖这个文件',
   'export.overwrite.keep': '保留原文件',
+  'export.arg.clipboard': '把本会话以 Markdown 复制到剪贴板',
+  'export.clipboard.empty': '本会话还没有消息可导出。',
+  'export.clipboard.done.one': '已把 1 条消息导出为 Markdown。{detail}',
+  'export.clipboard.done.other': '已把 {count} 条消息导出为 Markdown。{detail}',
+  'export.markdown.exported': '导出时间',
+
+  'rename.done': '会话已重命名为：{title}',
+  'rename.generating': '正在生成会话标题…',
+  'rename.generated': '已重新生成会话标题：{title}。标题仍然由自动生成维护——带上名字才会固定成你自己的。',
+  'rename.noContext': '还没有可以命名的东西：本会话还没有能拿来生成标题的消息。用法：/rename <名字>',
+  'rename.invalid': '这个名字剥掉控制字符后没有可见字符了。用法：/rename <名字>',
+  'rename.unavailable': '无法重命名：当前部署没有挂载 session-title 服务。',
+  'rename.failed': '重命名会话失败：{error}',
+  'rename.generateFailed': '生成标题失败：{error}',
 
   'settings.toolCards.collapsed': '折叠',
   'settings.toolCards.expanded': '展开',

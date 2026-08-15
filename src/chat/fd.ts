@@ -35,7 +35,7 @@ export const FILE_SEARCH_COMMAND_NAMES = ['fd', 'fdfind'] as const
  * @param candidate - absolute path to test.
  * @returns true when the path can be spawned.
  */
-function isExecutableFile(candidate: string): boolean {
+export function isExecutableFile(candidate: string): boolean {
   try {
     if (!statSync(candidate).isFile()) return false
     accessSync(candidate, constants.X_OK)
@@ -51,7 +51,7 @@ function isExecutableFile(candidate: string): boolean {
  * @param env - environment whose `PATH` is searched.
  * @returns the absolute path of the first executable match, or `undefined`.
  */
-function lookupOnPath(name: string, env: NodeJS.ProcessEnv): string | undefined {
+export function lookupOnPath(name: string, env: NodeJS.ProcessEnv): string | undefined {
   const search = env['PATH'] ?? ''
   for (const directory of search.split(delimiter)) {
     // An empty `PATH` entry means the working directory on POSIX shells. This
