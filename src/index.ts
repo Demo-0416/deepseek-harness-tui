@@ -97,6 +97,9 @@ import type {} from '@deepseek-ai/dsh-subagent'
 // Type import declaration-merges the `userQuestions` service onto `Context`;
 // the ask-user-question queue is registered by ./chat/questions.
 import type {} from '@deepseek-ai/dsh-user-questions'
+// Type import declaration-merges the `workspaceRegistry` service onto `Context`;
+// the session creation path attaches new sessions to workspaces through it.
+import type {} from '@deepseek-ai/dsh-workspace'
 // Declaration-merges the `approval/request` waterfall onto `Events`; the
 // terminal answerer below is registered for this TUI's own agent only.
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
@@ -6008,6 +6011,32 @@ async function composeResumedPreset(ctx: Context, sessionId: SessionId): Promise
 }
 
 /**
+ * Attach a newly-created session to the workspace matching the current working
+ * directory. The workspace registry resolves or creates a workspace for
+ * `process.cwd()`, then attaches the session so it appears in the Web GUI's
+ * workspace panel rather than as "Ungrouped". Failures are non-fatal: the
+ * session is already created and usable; workspace accounting is a nicety.
+ * @param ctx - the runner context carrying the workspace registry.
+ * @param sessionId - the session to attach.
+ */
+async function attachSessionToWorkspace(ctx: Context, sessionId: SessionId): Promise<void> {
+  const registry = ctx.workspaceRegistry
+  if (registry === undefined) return
+  try {
+    const cwd = process.cwd()
+    let workspace = await registry.resolveByPath(cwd)
+    if (workspace === undefined) {
+      workspace = await registry.create(cwd)
+    }
+    await workspace.attachSession(sessionId)
+  } catch {
+    // Non-fatal: the session is created and usable even if workspace attachment
+    // fails. The Web GUI will show it as "Ungrouped" rather than under a
+    // workspace, but the user can still interact with it normally.
+  }
+}
+
+/**
  * Create or resume the single agent this terminal drives.
  *
  * Exported for the same reason {@link startupFailureMessage} is: the boot path
@@ -6057,11 +6086,17 @@ export async function openStartupAgent(
   // A launcher may still fix the identity through `ctx.provide('mainSessionId', …)`.
   const identity = ctx.get('mainSessionId')
   if (identity !== undefined) {
-    return identity.resume
-      ? ctx.agents.resume(await resumeOptions(identity.id))
-      : ctx.agents.create(await createOptions(identity.id))
+    if (identity.resume) {
+      return ctx.agents.resume(await resumeOptions(identity.id))
+    }
+    const handle = await ctx.agents.create(await createOptions(identity.id))
+    await attachSessionToWorkspace(ctx, identity.id)
+    return handle
   }
-  return ctx.agents.create(await createOptions(SessionId(`session-${randomUUID()}`)))
+  const sessionId = SessionId(`session-${randomUUID()}`)
+  const handle = await ctx.agents.create(await createOptions(sessionId))
+  await attachSessionToWorkspace(ctx, sessionId)
+  return handle
 }
 
 /**
@@ -6280,10 +6315,11 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
     await teardown()
     resetScreen()
     let created: AgentHandle
+    const sessionId = SessionId(`session-${randomUUID()}`)
     try {
       const composition = await composeAgentPreset(ctx, startup.preset)
       created = await ctx.agents.create({
-        sessionId: SessionId(`session-${randomUUID()}`),
+        sessionId,
         meta: {
           cwd: process.cwd(),
           ...composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset },
@@ -6291,6 +6327,7 @@ async function runTui(ctx: Context, config: Config): Promise<void> {
         ...agentOptions === undefined ? {} : { agentOptions },
         ...composition.setup === undefined ? {} : { setup: composition.setup },
       })
+      await attachSessionToWorkspace(ctx, sessionId)
     } catch (error: unknown) {
       terminal.write(`dsh-tui: failed to start a new session: ${errorChain(error)}\n`)
       exit(1)

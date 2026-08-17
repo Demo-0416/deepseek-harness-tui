@@ -51,6 +51,13 @@
     - id: cordis-host-runner
       name: '@deepseek-ai/dsh-cordis-host-runner'
 
+    # Workspace registry: durable workspace records and session-to-workspace
+    # accounting. The TUI creates sessions in the current working directory;
+    # this service lets it attach those sessions to registered workspaces so
+    # they appear in the Web GUI's workspace panels rather than as "Ungrouped".
+    - id: workspace-registry
+      name: '@deepseek-ai/dsh-workspace'
+
     # The preset roster, configured exactly as the web-app bundle configures it.
     # The agent-plane disables BELOW are the other half of this row: without
     # them the base's process-global tools stack under every preset and the
